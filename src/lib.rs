@@ -1,6 +1,14 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+#![allow(non_ascii_idents)]
+#![allow(non_snake_case)]
+
+mod init;
+mod validation;
+mod output;
+mod core;
+mod algos;
+mod time;
+mod input;
+mod poisson;
 
 #[cfg(test)]
 mod tests {
@@ -8,7 +16,6 @@ mod tests {
 
     #[test]
     fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+
     }
 }

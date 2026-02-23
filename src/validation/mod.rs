@@ -1,0 +1,9 @@
+mod free;
+mod uniform;
+mod instability;
+mod stability;
+mod plummer;
+mod landau;
+mod spherical;
+mod zeldovich;
+mod conservation;
