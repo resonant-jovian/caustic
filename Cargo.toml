@@ -2,7 +2,11 @@
 name = "caustic"
 version = "0.1.0"
 edition = "2024"
+description = "A General-Purpose 6D Collisionless Gravitational Dynamics Solver"
+authors = ["Albin <albin@sjoegren.se>"]
+license = "GPL-3"
 
 [dependencies]
 rust_decimal = "1.40.0"
 anyhow = "1.0.102"
+thiserror = "2"

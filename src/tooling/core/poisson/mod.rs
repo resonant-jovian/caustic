@@ -1,4 +1,4 @@
-mod fft;
-mod multigrid;
-mod spherical;
-mod tree;
+pub(crate) mod fft;
+pub(crate) mod multigrid;
+pub(crate) mod spherical;
+pub(crate) mod tree;
