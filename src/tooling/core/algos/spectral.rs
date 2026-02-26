@@ -36,7 +36,7 @@ impl PhaseSpaceRepr for SpectralV {
         todo!("spectral: semi-Lagrangian advection of Hermite coefficient grid")
     }
     fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
-        todo!("spectral: g couples Hermite modes: da_n/dt = g*(n*a_{n-1} + a_{n+1}/2)")
+        todo!("spectral: g couples Hermite modes: da_n/dt = g*(n*a_{{n-1}} + a_{{n+1}}/2)")
     }
     fn moment(&self, position: &[f64; 3], order: usize) -> Tensor {
         todo!("spectral: moments from Hermite coefficients analytically")
