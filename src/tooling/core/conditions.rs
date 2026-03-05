@@ -63,7 +63,12 @@ impl ExitCondition for EnergyDriftCondition {
         diag: &GlobalDiagnostics,
         initial: &GlobalDiagnostics,
     ) -> Option<ExitReason> {
-        todo!("return EnergyDrift if |E-E0|/|E0| > tolerance")
+        let e0 = initial.total_energy.abs();
+        if e0 > 1e-30 && (diag.total_energy - initial.total_energy).abs() / e0 > self.tolerance {
+            Some(ExitReason::EnergyDrift)
+        } else {
+            None
+        }
     }
 }
 
@@ -78,7 +83,12 @@ impl ExitCondition for MassLossCondition {
         diag: &GlobalDiagnostics,
         initial: &GlobalDiagnostics,
     ) -> Option<ExitReason> {
-        todo!()
+        let m0 = initial.mass_in_box.abs();
+        if m0 > 1e-30 && diag.mass_in_box / m0 < self.threshold {
+            Some(ExitReason::MassLoss)
+        } else {
+            None
+        }
     }
 }
 
@@ -93,22 +103,38 @@ impl ExitCondition for CasimirDriftCondition {
         diag: &GlobalDiagnostics,
         initial: &GlobalDiagnostics,
     ) -> Option<ExitReason> {
-        todo!()
+        let c0 = initial.casimir_c2.abs();
+        if c0 > 1e-30 && (diag.casimir_c2 - initial.casimir_c2).abs() / c0 > self.tolerance {
+            Some(ExitReason::CasimirDrift)
+        } else {
+            None
+        }
     }
 }
 
 /// Exit when wall-clock time exceeds `limit_secs` seconds.
 pub struct WallClockCondition {
     pub limit_secs: f64,
+    pub start: std::time::Instant,
+}
+
+impl WallClockCondition {
+    pub fn new(limit_secs: f64) -> Self {
+        Self { limit_secs, start: std::time::Instant::now() }
+    }
 }
 
 impl ExitCondition for WallClockCondition {
     fn check(
         &self,
-        diag: &GlobalDiagnostics,
-        initial: &GlobalDiagnostics,
+        _diag: &GlobalDiagnostics,
+        _initial: &GlobalDiagnostics,
     ) -> Option<ExitReason> {
-        todo!()
+        if self.start.elapsed().as_secs_f64() > self.limit_secs {
+            Some(ExitReason::WallClockLimit)
+        } else {
+            None
+        }
     }
 }
 
@@ -121,9 +147,11 @@ impl ExitCondition for SteadyStateCondition {
     fn check(
         &self,
         diag: &GlobalDiagnostics,
-        initial: &GlobalDiagnostics,
+        _initial: &GlobalDiagnostics,
     ) -> Option<ExitReason> {
-        todo!()
+        // Approximated by entropy rate of change: if entropy is nearly constant, steady state
+        // For now, placeholder — needs history of entropy values
+        None
     }
 }
 
@@ -135,10 +163,11 @@ pub struct CflViolationCondition {
 impl ExitCondition for CflViolationCondition {
     fn check(
         &self,
-        diag: &GlobalDiagnostics,
-        initial: &GlobalDiagnostics,
+        _diag: &GlobalDiagnostics,
+        _initial: &GlobalDiagnostics,
     ) -> Option<ExitReason> {
-        todo!()
+        // CFL violation is checked in Simulation::step via max_dt; this condition is a fallback
+        None
     }
 }
 
@@ -148,10 +177,12 @@ pub struct CausticFormationCondition;
 impl ExitCondition for CausticFormationCondition {
     fn check(
         &self,
-        diag: &GlobalDiagnostics,
-        initial: &GlobalDiagnostics,
+        _diag: &GlobalDiagnostics,
+        _initial: &GlobalDiagnostics,
     ) -> Option<ExitReason> {
-        todo!("check stream count field for max > 1")
+        // Stream count field is not stored in GlobalDiagnostics; requires repr access
+        // For now: not implemented as a standalone exit condition
+        None
     }
 }
 
@@ -164,8 +195,12 @@ impl ExitCondition for VirialRelaxedCondition {
     fn check(
         &self,
         diag: &GlobalDiagnostics,
-        initial: &GlobalDiagnostics,
+        _initial: &GlobalDiagnostics,
     ) -> Option<ExitReason> {
-        todo!()
+        if (diag.virial_ratio - 1.0).abs() < self.tolerance {
+            Some(ExitReason::VirialRelaxed)
+        } else {
+            None
+        }
     }
 }

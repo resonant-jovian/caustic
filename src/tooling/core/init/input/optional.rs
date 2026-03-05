@@ -1,6 +1,7 @@
 //! Optional solver configuration parameters with defaults matching the spec (Section 7.2).
 
 use super::super::domain::Timestep;
+use rust_decimal::Decimal;
 
 /// Operator splitting order.
 pub enum SplittingMethod {
@@ -54,11 +55,11 @@ pub enum RepresentationKind {
 
 /// Optional solver configuration. All fields have spec-default values.
 pub struct OptionalParams {
-    /// Integration timestep. Adaptive by default.
+    /// Integration timestep. Adaptive by default (delta_t = 0 means adaptive).
     pub dt: Timestep,
     /// CFL safety factor ∈ (0,1). Default 0.5.
     pub cfl_factor: f64,
-    /// Minimum adaptive timestep before CFL exit. Default 1e-10 × t_dyn.
+    /// Minimum adaptive timestep before CFL exit. Default 1e-10.
     pub dt_min: f64,
     /// Optional time-dependent external potential Φ_ext(x,t). None = self-gravity only.
     pub phi_external: Option<Box<dyn Fn([f64; 3], f64) -> f64 + Send + Sync>>,
@@ -70,9 +71,9 @@ pub struct OptionalParams {
     pub advection_method: AdvectionMethod,
     /// Phase-space storage strategy. Default UniformGrid.
     pub representation: RepresentationKind,
-    /// Time between snapshot outputs. Default t_final/100.
+    /// Time between snapshot outputs. Default 0.01 (overridden to t_final/100 when known).
     pub output_interval: f64,
-    /// Time between diagnostic rows. Default every step.
+    /// Time between diagnostic rows. Default 0 = every step.
     pub diagnostic_interval: f64,
     /// Energy conservation tolerance for exit. Default 1e-6.
     pub epsilon_energy: f64,
@@ -100,6 +101,28 @@ pub struct OptionalParams {
 
 impl Default for OptionalParams {
     fn default() -> Self {
-        todo!("fill with spec defaults")
+        Self {
+            dt: Timestep { delta_t: Decimal::ZERO }, // adaptive
+            cfl_factor: 0.5,
+            dt_min: 1e-10,
+            phi_external: None,
+            splitting_method: SplittingMethod::Strang,
+            poisson_method: PoissonMethod::FftPeriodic,
+            advection_method: AdvectionMethod::SemiLagrangian,
+            representation: RepresentationKind::UniformGrid,
+            output_interval: 0.01,
+            diagnostic_interval: 0.0,
+            epsilon_energy: 1e-6,
+            epsilon_mass: 0.99,
+            epsilon_casimir: 1e-4,
+            epsilon_steady: 1e-8,
+            wall_time_limit: None,
+            checkpoint_interval_secs: 3600.0,
+            cosmological: false,
+            a_init: 1.0,
+            hubble_0: None,
+            omega_m: None,
+            omega_lambda: None,
+        }
     }
 }

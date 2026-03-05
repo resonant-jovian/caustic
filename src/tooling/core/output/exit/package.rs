@@ -5,7 +5,7 @@ use super::super::super::{
     conditions::ExitReason,
     diagnostics::GlobalDiagnostics,
     io::IOManager,
-    output::global::ConservationSummary,
+    output::global::{ConservationSummary, conservation_summary},
 };
 
 /// Complete output produced upon simulation exit, as specified in Section 4.3 of the spec.
@@ -31,7 +31,17 @@ impl ExitPackage {
         total_steps: u64,
         peak_memory_bytes: usize,
     ) -> Self {
-        todo!()
+        let summary = conservation_summary(&history);
+        Self {
+            final_snapshot: snapshot,
+            diagnostics_history: history,
+            exit_reason: reason,
+            exit_message: message,
+            wall_clock_seconds,
+            total_steps,
+            peak_memory_bytes,
+            conservation_summary: summary,
+        }
     }
 
     /// Write all fields: snapshot HDF5, diagnostics CSV, exit metadata JSON.
@@ -41,6 +51,9 @@ impl ExitPackage {
 
     /// Print human-readable conservation errors and performance statistics.
     pub fn print_summary(&self) {
-        todo!("print conservation errors and performance stats")
+        println!("Exit: {:?}", self.exit_reason);
+        println!("Steps: {}, Wall clock: {:.2}s", self.total_steps, self.wall_clock_seconds);
+        println!("Max energy drift: {:.2e}", self.conservation_summary.max_energy_drift);
+        println!("Max Casimir drift: {:.2e}", self.conservation_summary.max_casimir_drift);
     }
 }

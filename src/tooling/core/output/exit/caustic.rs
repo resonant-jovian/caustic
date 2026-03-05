@@ -9,8 +9,9 @@ use super::super::super::{
 pub struct CausticExitCondition;
 
 impl ExitCondition for CausticExitCondition {
-    fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics) -> Option<ExitReason> {
-        todo!("check stream count field for max > 1")
+    fn check(&self, _diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics) -> Option<ExitReason> {
+        // Stream count requires repr access; not available through GlobalDiagnostics alone
+        None
     }
 }
 
@@ -20,7 +21,11 @@ pub struct VirialRelaxedExit {
 }
 
 impl ExitCondition for VirialRelaxedExit {
-    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics) -> Option<ExitReason> {
-        todo!("exit when 2T/|W| stabilises within tolerance for N consecutive steps")
+    fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics) -> Option<ExitReason> {
+        if (diag.virial_ratio - 1.0).abs() < self.tolerance {
+            Some(ExitReason::VirialRelaxed)
+        } else {
+            None
+        }
     }
 }

@@ -1,7 +1,8 @@
 //! The `PhaseSpaceRepr` trait — the central abstraction of the library.
 //! All phase-space storage strategies implement this.
 
-use super::types::{AccelerationField, DensityField, DisplacementField, StreamCountField, Tensor};
+use super::types::{AccelerationField, DensityField, DisplacementField, PhaseSpaceSnapshot,
+                   StreamCountField, Tensor};
 
 /// Central trait for all phase-space storage and manipulation strategies.
 ///
@@ -44,4 +45,14 @@ pub trait PhaseSpaceRepr: Send + Sync {
     /// Extract the local velocity distribution f(v|x) at a given spatial position.
     /// Used for dark matter detection predictions.
     fn velocity_distribution(&self, position: &[f64; 3]) -> Vec<f64>;
+
+    /// Total kinetic energy T = ½∫fv² dx³dv³.
+    fn total_kinetic_energy(&self) -> f64 {
+        todo!("total_kinetic_energy not implemented for this PhaseSpaceRepr")
+    }
+
+    /// Extract a full 6D snapshot of the current state.
+    fn to_snapshot(&self, time: f64) -> PhaseSpaceSnapshot {
+        todo!("to_snapshot not implemented for this PhaseSpaceRepr")
+    }
 }

@@ -10,11 +10,13 @@ use super::super::{
 };
 
 /// Strang splitting: drift(Δt/2) → kick(Δt) → drift(Δt/2).
-pub struct StrangSplitting;
+pub struct StrangSplitting {
+    pub g: f64,
+}
 
 impl StrangSplitting {
-    pub fn new() -> Self {
-        todo!()
+    pub fn new(g: f64) -> Self {
+        Self { g }
     }
 }
 
@@ -26,10 +28,21 @@ impl TimeIntegrator for StrangSplitting {
         advector: &dyn Advector,
         dt: f64,
     ) {
-        todo!("1. drift(dt/2); 2. compute density; 3. solve Poisson; 4. compute accel; 5. kick(dt); 6. drift(dt/2)")
+        advector.drift(repr, dt / 2.0);
+        let density = repr.compute_density();
+        let potential = solver.solve(&density, self.g);
+        let accel = solver.compute_acceleration(&potential);
+        advector.kick(repr, &accel, dt);
+        advector.drift(repr, dt / 2.0);
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
-        todo!("t_dyn = 1/sqrt(G*rho_max); return cfl_factor * t_dyn")
+        let density = repr.compute_density();
+        let rho_max = density.data.iter().cloned().fold(0.0_f64, f64::max);
+        if rho_max <= 0.0 || self.g <= 0.0 {
+            return 1e10;
+        }
+        let t_dyn = 1.0 / (self.g * rho_max).sqrt();
+        cfl_factor * t_dyn
     }
 }
