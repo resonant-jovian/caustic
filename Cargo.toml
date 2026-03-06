@@ -4,7 +4,7 @@ version = "0.0.1"
 edition = "2024"
 description = "A General-Purpose 6D Collisionless Gravitational Dynamics Solver"
 authors = ["Albin <albin@sjoegren.se>"]
-license-file = "LICENSE"
+license = "GPL-3.0"
 repository = "https://github.com/resonant-jovian/caustic"
 
 [dependencies]
