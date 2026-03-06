@@ -1,7 +1,7 @@
 //! Tensor-train (TT) decomposition of f. Memory O(N³r³) where r is the TT rank.
 //! Exploits low-rank structure of smooth distribution functions.
 
-use super::super::{types::*, phasespace::PhaseSpaceRepr, init::domain::Domain};
+use super::super::{init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
 
 /// Low-rank tensor-train: f ≈ G₁ ×₁ G₂ ×₂ G₃ ×₃ G₄ ×₄ G₅ ×₅ G₆.
 pub struct TensorTrain {

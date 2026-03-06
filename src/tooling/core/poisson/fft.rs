@@ -1,8 +1,8 @@
 //! FFT-based Poisson solvers. Periodic (FftPoisson) and isolated (FftIsolated via
 //! James zero-padding method). Both O(N³ log N).
 
+use super::super::{init::domain::Domain, solver::PoissonSolver, types::*};
 use rustfft::{FftPlanner, num_complex::Complex};
-use super::super::{types::*, solver::PoissonSolver, init::domain::Domain};
 
 /// Periodic-BC Poisson solver. O(N³ log N). For cosmological boxes.
 pub struct FftPoisson {
@@ -24,7 +24,11 @@ impl FftPoisson {
 
     fn wavenumber(i: usize, n: usize, cell_size: f64) -> f64 {
         use std::f64::consts::PI;
-        let j = if i < n / 2 { i as i64 } else { i as i64 - n as i64 };
+        let j = if i < n / 2 {
+            i as i64
+        } else {
+            i as i64 - n as i64
+        };
         2.0 * PI * j as f64 / (n as f64 * cell_size)
     }
 
@@ -91,9 +95,8 @@ impl PoissonSolver for FftPoisson {
         let [nx, ny, nz] = self.shape;
         let n_total = nx * ny * nz;
 
-        let mut buf: Vec<Complex<f64>> = density.data.iter()
-            .map(|&r| Complex::new(r, 0.0))
-            .collect();
+        let mut buf: Vec<Complex<f64>> =
+            density.data.iter().map(|&r| Complex::new(r, 0.0)).collect();
 
         Self::fft_3d(&mut buf, self.shape, false);
 
@@ -128,7 +131,9 @@ impl PoissonSolver for FftPoisson {
         let [nx, ny, nz] = self.shape;
         let n_total = nx * ny * nz;
 
-        let mut phi_hat: Vec<Complex<f64>> = potential.data.iter()
+        let mut phi_hat: Vec<Complex<f64>> = potential
+            .data
+            .iter()
             .map(|&p| Complex::new(p, 0.0))
             .collect();
         Self::fft_3d(&mut phi_hat, self.shape, false);

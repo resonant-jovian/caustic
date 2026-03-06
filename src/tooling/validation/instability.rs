@@ -3,18 +3,18 @@
 
 #[test]
 fn jeans_instability() {
-    use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
-    use crate::tooling::core::algos::uniform::UniformGrid6D;
     use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::algos::uniform::UniformGrid6D;
+    use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
+    use crate::tooling::core::integrator::TimeIntegrator as _;
+    use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
     use crate::tooling::core::poisson::fft::FftPoisson;
     use crate::tooling::core::time::strang::StrangSplitting;
-    use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
-    use crate::tooling::core::integrator::TimeIntegrator as _;
 
     // Parameters: G=1, sigma=1, spatial_extent=pi → k_fund=1 < k_J≈3.54 → unstable
     // Growth rate γ = sqrt(4πGρ0 − k²σ²) ≈ sqrt(12.57 − 1.0) ≈ 3.4
     // After 5 steps of dt=0.05 (t=0.25): amplitude grows by exp(3.4*0.25) ≈ 2.3x
-    let lx = std::f64::consts::PI;  // domain half-width → k_fundamental = pi/lx = 1
+    let lx = std::f64::consts::PI; // domain half-width → k_fundamental = pi/lx = 1
     let lv = 3.0f64;
     let sigma = 1.0f64;
     let g = 1.0f64;
@@ -91,7 +91,10 @@ fn jeans_instability() {
     }
 
     let rho_final = grid.compute_density();
-    assert!(!rho_final.data.iter().any(|x| x.is_nan()), "Density contains NaN");
+    assert!(
+        !rho_final.data.iter().any(|x| x.is_nan()),
+        "Density contains NaN"
+    );
 
     let rho_max_final = rho_final.data.iter().cloned().fold(0.0f64, f64::max);
     let rho_min_final = rho_final.data.iter().cloned().fold(f64::MAX, f64::min);
@@ -101,11 +104,15 @@ fn jeans_instability() {
     assert!(
         amp_final > amp_init,
         "Jeans instability: amplitude should grow. init={:.4}, final={:.4}",
-        amp_init, amp_final
+        amp_init,
+        amp_final
     );
     println!(
         "Jeans instability: k={:.3}, k_J≈{:.3}, amp_init={:.4}, amp_final={:.4}, ratio={:.2}",
-        k, (4.0 * std::f64::consts::PI * g).sqrt() / sigma,
-        amp_init, amp_final, amp_final / amp_init
+        k,
+        (4.0 * std::f64::consts::PI * g).sqrt() / sigma,
+        amp_init,
+        amp_final,
+        amp_final / amp_init
     );
 }

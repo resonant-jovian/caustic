@@ -13,7 +13,10 @@ pub struct ExitEvaluator {
 
 impl ExitEvaluator {
     pub fn new(initial: GlobalDiagnostics) -> Self {
-        Self { conditions: vec![], initial }
+        Self {
+            conditions: vec![],
+            initial,
+        }
     }
 
     pub fn add_condition(&mut self, cond: Box<dyn ExitCondition>) {
@@ -22,6 +25,8 @@ impl ExitEvaluator {
 
     /// Evaluate all conditions and return the first triggered reason.
     pub fn check(&self, current: &GlobalDiagnostics) -> Option<ExitReason> {
-        self.conditions.iter().find_map(|c| c.check(current, &self.initial))
+        self.conditions
+            .iter()
+            .find_map(|c| c.check(current, &self.initial))
     }
 }

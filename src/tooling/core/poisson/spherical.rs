@@ -1,7 +1,7 @@
 //! Spherical-harmonics Poisson solver. Natural for nearly-spherical halos.
 //! O(N² l_max²).
 
-use super::super::{types::*, solver::PoissonSolver};
+use super::super::{solver::PoissonSolver, types::*};
 
 /// Spherical-harmonics expansion Poisson solver.
 pub struct SphericalHarmonicsPoisson {

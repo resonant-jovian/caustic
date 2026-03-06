@@ -1,6 +1,6 @@
 //! Velocity CFL constraint: Δt < Δv / |g|_max. Applies to Eulerian velocity advection only.
 
-use super::super::super::{types::*, init::domain::Domain};
+use super::super::super::{init::domain::Domain, types::*};
 
 /// Velocity CFL timestep constraint.
 pub struct VelocityCfl {

@@ -1,6 +1,10 @@
 //! Geometric multigrid solver for ∇²Φ = 4πGρ. Supports arbitrary BC. O(N³) per V-cycle.
 
-use super::super::{types::*, solver::PoissonSolver, init::domain::{Domain, SpatialBoundType}};
+use super::super::{
+    init::domain::{Domain, SpatialBoundType},
+    solver::PoissonSolver,
+    types::*,
+};
 
 /// Geometric multigrid Poisson solver.
 pub struct Multigrid {
@@ -18,7 +22,9 @@ impl Multigrid {
 
 impl PoissonSolver for Multigrid {
     fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
-        todo!("V-cycle: pre-smooth (Gauss-Seidel), restrict residual, coarse solve, prolongate, post-smooth")
+        todo!(
+            "V-cycle: pre-smooth (Gauss-Seidel), restrict residual, coarse solve, prolongate, post-smooth"
+        )
     }
     fn compute_acceleration(&self, potential: &PotentialField) -> AccelerationField {
         todo!("FD gradient: gx = (Phi[i+1]-Phi[i-1]) / (2*dx)")

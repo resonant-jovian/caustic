@@ -2,23 +2,23 @@
 
 #[test]
 fn conservation_laws() {
+    use crate::sim::Simulation;
+    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::init::{
         domain::{Domain, SpatialBoundType, VelocityBoundType},
         isolated::{PlummerIC, sample_on_grid},
     };
-    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::poisson::fft::FftPoisson;
     use crate::tooling::core::time::strang::StrangSplitting;
-    use crate::sim::Simulation;
 
     // Plummer sphere on a coarse grid. The Strang splitting conserves a shadow Hamiltonian,
     // so total energy (computed from the same potential) should drift slowly.
     let domain = Domain::builder()
-        .spatial_extent(8.0)    // [−8, 8]³, 8 cells → dx=2
-        .velocity_extent(2.5)   // [−2.5, 2.5]³, 8 cells → dv=0.625 (needs cells near v=0)
+        .spatial_extent(8.0) // [−8, 8]³, 8 cells → dx=2
+        .velocity_extent(2.5) // [−2.5, 2.5]³, 8 cells → dv=0.625 (needs cells near v=0)
         .spatial_resolution(8)
         .velocity_resolution(8)
-        .t_final(4.0)           // ~2 dynamical times
+        .t_final(4.0) // ~2 dynamical times
         .spatial_bc(SpatialBoundType::Periodic)
         .velocity_bc(VelocityBoundType::Truncated) // Preserve mass; no particles escape velocity box
         .build()
@@ -47,10 +47,12 @@ fn conservation_laws() {
     let c2_0 = history[0].casimir_c2;
 
     // Compute max relative drifts over the run
-    let max_e_drift = history.iter()
+    let max_e_drift = history
+        .iter()
         .map(|d| (d.total_energy - e0).abs() / e0.abs().max(1e-30))
         .fold(0.0f64, f64::max);
-    let max_c2_drift = history.iter()
+    let max_c2_drift = history
+        .iter()
         .map(|d| (d.casimir_c2 - c2_0).abs() / c2_0.abs().max(1e-30))
         .fold(0.0f64, f64::max);
 
@@ -69,6 +71,7 @@ fn conservation_laws() {
     assert!(
         max_e_drift < 0.5,
         "Energy drift {:.2e} exceeds 50% threshold over {} steps",
-        max_e_drift, pkg.total_steps
+        max_e_drift,
+        pkg.total_steps
     );
 }

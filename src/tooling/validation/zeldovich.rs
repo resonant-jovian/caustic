@@ -4,13 +4,13 @@
 
 #[test]
 fn zeldovich_pancake() {
-    use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
-    use crate::tooling::core::algos::uniform::UniformGrid6D;
     use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::algos::uniform::UniformGrid6D;
+    use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
+    use crate::tooling::core::integrator::TimeIntegrator as _;
+    use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
     use crate::tooling::core::poisson::fft::FftPoisson;
     use crate::tooling::core::time::strang::StrangSplitting;
-    use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
-    use crate::tooling::core::integrator::TimeIntegrator as _;
 
     // Setup: 1D plane wave in x1. v₀(x) = -A*sin(k*x1) (converging flow toward x=0).
     // t_col = 1/A (with k=1, H=1): at t=1 the caustic forms.
@@ -48,8 +48,10 @@ fn zeldovich_pancake() {
             let v2 = -lv + (iv2 as f64 + 0.5) * dv[1];
             for iv3 in 0..nv3 {
                 let v3 = -lv + (iv3 as f64 + 0.5) * dv[2];
-                s_norm += (-(v1*v1+v2*v2+v3*v3) / (2.0*sigma_v*sigma_v)).exp()
-                    * dv[0] * dv[1] * dv[2];
+                s_norm += (-(v1 * v1 + v2 * v2 + v3 * v3) / (2.0 * sigma_v * sigma_v)).exp()
+                    * dv[0]
+                    * dv[1]
+                    * dv[2];
             }
         }
     }
@@ -68,9 +70,8 @@ fn zeldovich_pancake() {
                             let v3 = -lv + (iv3 as f64 + 0.5) * dv[2];
                             // Only the x1 component is perturbed; v2,v3 centred at 0
                             let dv1 = v1 - v0;
-                            let v2sq = dv1*dv1 + v2*v2 + v3*v3;
-                            let f = rho_bar / s_norm
-                                * (-v2sq / (2.0*sigma_v*sigma_v)).exp();
+                            let v2sq = dv1 * dv1 + v2 * v2 + v3 * v3;
+                            let f = rho_bar / s_norm * (-v2sq / (2.0 * sigma_v * sigma_v)).exp();
                             let idx = grid.index([ix1, ix2, ix3], [iv1, iv2, iv3]);
                             grid.data[idx] = f;
                         }
@@ -97,7 +98,10 @@ fn zeldovich_pancake() {
     }
 
     let rho_final = grid.compute_density();
-    assert!(!rho_final.data.iter().any(|x| x.is_nan()), "Density contains NaN");
+    assert!(
+        !rho_final.data.iter().any(|x| x.is_nan()),
+        "Density contains NaN"
+    );
 
     let rho_max_final = rho_final.data.iter().cloned().fold(0.0f64, f64::max);
 
@@ -105,11 +109,14 @@ fn zeldovich_pancake() {
     assert!(
         rho_max_final > 1.5 * rho_max_init,
         "Zel'dovich pancake: density should grow toward caustic. init={:.4}, final={:.4}",
-        rho_max_init, rho_max_final
+        rho_max_init,
+        rho_max_final
     );
     println!(
         "Zel'dovich pancake: t_run={:.2}, rho_max_init={:.4}, rho_max_final={:.4}, ratio={:.2}",
-        n_steps as f64 * dt, rho_max_init, rho_max_final,
+        n_steps as f64 * dt,
+        rho_max_init,
+        rho_max_final,
         rho_max_final / rho_max_init
     );
 }

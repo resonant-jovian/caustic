@@ -2,13 +2,13 @@
 
 #[test]
 fn jeans_stability() {
-    use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
-    use crate::tooling::core::algos::uniform::UniformGrid6D;
     use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::algos::uniform::UniformGrid6D;
+    use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
+    use crate::tooling::core::integrator::TimeIntegrator as _;
+    use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
     use crate::tooling::core::poisson::fft::FftPoisson;
     use crate::tooling::core::time::strang::StrangSplitting;
-    use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
-    use crate::tooling::core::integrator::TimeIntegrator as _;
 
     // Large sigma=3.0, small box lx=0.5:
     // k_J = sqrt(4πGρ0)/σ ≈ sqrt(4π)/3 ≈ 1.18 (ρ0≈1, G=1)
@@ -86,8 +86,14 @@ fn jeans_stability() {
     }
 
     let rho_final = grid.compute_density();
-    assert!(!rho_final.data.iter().any(|x| x.is_nan()), "Density contains NaN");
-    assert!(rho_final.data.iter().all(|x| x.is_finite()), "Density contains Inf");
+    assert!(
+        !rho_final.data.iter().any(|x| x.is_nan()),
+        "Density contains NaN"
+    );
+    assert!(
+        rho_final.data.iter().all(|x| x.is_finite()),
+        "Density contains Inf"
+    );
 
     let rho_max_final = rho_final.data.iter().cloned().fold(0.0f64, f64::max);
 
@@ -95,11 +101,14 @@ fn jeans_stability() {
     assert!(
         rho_max_final < 3.0 * rho_max_init,
         "Jeans stability: density grew too much. init={:.4}, final={:.4}",
-        rho_max_init, rho_max_final
+        rho_max_init,
+        rho_max_final
     );
     println!(
         "Jeans stability: k={:.3}, k_J≈{:.3}, rho_max_init={:.4}, rho_max_final={:.4}",
-        k, (4.0 * std::f64::consts::PI * g).sqrt() / sigma,
-        rho_max_init, rho_max_final
+        k,
+        (4.0 * std::f64::consts::PI * g).sqrt() / sigma,
+        rho_max_init,
+        rho_max_final
     );
 }

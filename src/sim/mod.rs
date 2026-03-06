@@ -1,16 +1,16 @@
 //! Top-level `Simulation` struct. Entry point for library users; matches the README builder API.
 
 use crate::tooling::core::{
-    types::*,
+    advecator::Advector,
+    conditions::{ExitReason, TimeLimitCondition},
+    diagnostics::{Diagnostics, GlobalDiagnostics},
+    init::{domain::Domain, input::optional::OptionalParams},
+    integrator::TimeIntegrator,
+    io::{IOManager, OutputFormat},
+    output::exit::{package::ExitPackage, standard::ExitEvaluator},
     phasespace::PhaseSpaceRepr,
     solver::PoissonSolver,
-    advecator::Advector,
-    integrator::TimeIntegrator,
-    diagnostics::{Diagnostics, GlobalDiagnostics},
-    io::{IOManager, OutputFormat},
-    conditions::{ExitReason, TimeLimitCondition},
-    output::exit::{standard::ExitEvaluator, package::ExitPackage},
-    init::{domain::Domain, input::optional::OptionalParams},
+    types::*,
 };
 
 /// The top-level simulation object. Owns all solver components.
@@ -70,7 +70,8 @@ impl Simulation {
             dt = (t_final - self.time).max(0.0);
         }
 
-        self.integrator.advance(&mut *self.repr, &*self.poisson, &*self.advector, dt);
+        self.integrator
+            .advance(&mut *self.repr, &*self.poisson, &*self.advector, dt);
 
         self.time += dt;
         self.step += 1;
@@ -79,7 +80,9 @@ impl Simulation {
         let potential = self.poisson.solve(&density, self.g);
         let dx = self.domain.dx();
         let dx3 = dx[0] * dx[1] * dx[2];
-        let diag = self.diagnostics.compute(&*self.repr, &potential, self.time, dx3);
+        let diag = self
+            .diagnostics
+            .compute(&*self.repr, &potential, self.time, dx3);
 
         Ok(self.exit_evaluator.check(&diag))
     }
@@ -177,15 +180,23 @@ impl SimulationBuilder {
         use crate::tooling::core::algos::uniform::UniformGrid6D;
         use rust_decimal::prelude::ToPrimitive;
 
-        let domain = self.domain.ok_or_else(|| anyhow::anyhow!("domain not set"))?;
-        let poisson = self.poisson.ok_or_else(|| anyhow::anyhow!("poisson_solver not set"))?;
-        let advector = self.advector.ok_or_else(|| anyhow::anyhow!("advector not set"))?;
-        let integrator = self.integrator.ok_or_else(|| anyhow::anyhow!("integrator not set"))?;
+        let domain = self
+            .domain
+            .ok_or_else(|| anyhow::anyhow!("domain not set"))?;
+        let poisson = self
+            .poisson
+            .ok_or_else(|| anyhow::anyhow!("poisson_solver not set"))?;
+        let advector = self
+            .advector
+            .ok_or_else(|| anyhow::anyhow!("advector not set"))?;
+        let integrator = self
+            .integrator
+            .ok_or_else(|| anyhow::anyhow!("integrator not set"))?;
 
         // t_final: prefer explicit t_final, else read from domain
-        let t_final = self.t_final.unwrap_or_else(|| {
-            domain.time_range.t_final.to_f64().unwrap_or(1.0)
-        });
+        let t_final = self
+            .t_final
+            .unwrap_or_else(|| domain.time_range.t_final.to_f64().unwrap_or(1.0));
 
         let g = self.g.unwrap_or(1.0);
 
@@ -204,7 +215,9 @@ impl SimulationBuilder {
         let density = repr.compute_density();
         let potential = poisson.solve(&density, g);
 
-        let mut diagnostics = Diagnostics { history: Vec::new() };
+        let mut diagnostics = Diagnostics {
+            history: Vec::new(),
+        };
         let initial_diag = diagnostics.compute(&*repr, &potential, 0.0, dx3);
 
         // Build exit evaluator with time limit as default condition

@@ -2,11 +2,8 @@
 //! splitting. Re-solves Poisson at each Runge-Kutta stage.
 
 use super::super::{
-    types::*,
-    integrator::TimeIntegrator,
-    phasespace::PhaseSpaceRepr,
-    solver::PoissonSolver,
-    advecator::Advector,
+    advecator::Advector, integrator::TimeIntegrator, phasespace::PhaseSpaceRepr,
+    solver::PoissonSolver, types::*,
 };
 
 /// Method-of-lines Runge-Kutta integrator for the full 6D Vlasov PDE.
@@ -29,7 +26,9 @@ impl TimeIntegrator for UnsplitIntegrator {
         advector: &dyn Advector,
         dt: f64,
     ) {
-        todo!("RK on full 6D Vlasov RHS: df/dt = -v*grad_x f + grad Phi * grad_v f. Re-solve Poisson at each stage.")
+        todo!(
+            "RK on full 6D Vlasov RHS: df/dt = -v*grad_x f + grad Phi * grad_v f. Re-solve Poisson at each stage."
+        )
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

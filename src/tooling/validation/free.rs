@@ -3,10 +3,10 @@
 
 #[test]
 fn free_streaming() {
-    use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::algos::uniform::UniformGrid6D;
-    use crate::tooling::core::types::DisplacementField;
+    use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
+    use crate::tooling::core::types::DisplacementField;
 
     // 16×16×16 spatial, 4×4×4 velocity = 262144 cells total
     // Spatial: [−4, 4]³, dx = 0.5.  Velocity: [−2, 2]³, dv = 1.0
@@ -55,7 +55,12 @@ fn free_streaming() {
     let dt = 2.0f64;
     let shift = vx * dt; // = 1.0 physical unit
 
-    let dummy = DisplacementField { dx: vec![], dy: vec![], dz: vec![], shape: [0, 0, 0] };
+    let dummy = DisplacementField {
+        dx: vec![],
+        dy: vec![],
+        dz: vec![],
+        shape: [0, 0, 0],
+    };
     grid.advect_x(&dummy, dt);
 
     // Check: the Gaussian peak should now be centred at x1 = shift (periodic wrapping)
@@ -76,6 +81,7 @@ fn free_streaming() {
     assert!(
         max_err < 0.05,
         "Free streaming L∞ error = {:.4}, expected < 0.05 (shift = {:.2} physical units)",
-        max_err, shift
+        max_err,
+        shift
     );
 }

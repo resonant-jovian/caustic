@@ -2,11 +2,8 @@
 //! Use only for testing and comparison.
 
 use super::super::{
-    types::*,
-    integrator::TimeIntegrator,
-    phasespace::PhaseSpaceRepr,
-    solver::PoissonSolver,
-    advecator::Advector,
+    advecator::Advector, integrator::TimeIntegrator, phasespace::PhaseSpaceRepr,
+    solver::PoissonSolver, types::*,
 };
 
 /// Lie (1st-order) operator splitting: drift(Δt) → kick(Δt).

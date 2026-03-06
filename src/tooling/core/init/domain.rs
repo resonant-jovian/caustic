@@ -160,8 +160,12 @@ impl DomainBuilder {
     pub fn spatial_extent(mut self, l: f64) -> Self {
         let L = Decimal::from_f64_retain(l).expect("spatial extent: l should be a decimal");
         self.spatial = Some(SpatialDom {
-            x1: L, x2: L, x3: L,
-            neg_x1: Some(-L), neg_x2: Some(-L), neg_x3: Some(-L),
+            x1: L,
+            x2: L,
+            x3: L,
+            neg_x1: Some(-L),
+            neg_x2: Some(-L),
+            neg_x3: Some(-L),
         });
         self
     }
@@ -170,21 +174,33 @@ impl DomainBuilder {
     pub fn velocity_extent(mut self, lv: f64) -> Self {
         let Lv = Decimal::from_f64_retain(lv).expect("velocity extent");
         self.velocity = Some(VelocityDom {
-            v1: Lv, v2: Lv, v3: Lv,
-            neg_v1: Some(-Lv), neg_v2: Some(-Lv), neg_v3: Some(-Lv),
+            v1: Lv,
+            v2: Lv,
+            v3: Lv,
+            neg_v1: Some(-Lv),
+            neg_v2: Some(-Lv),
+            neg_v3: Some(-Lv),
         });
         self
     }
 
     /// Set spatial resolution (same in all dimensions).
     pub fn spatial_resolution(mut self, n: i128) -> Self {
-        self.spatial_res = Some(SpatialRes { x1: n, x2: n, x3: n });
+        self.spatial_res = Some(SpatialRes {
+            x1: n,
+            x2: n,
+            x3: n,
+        });
         self
     }
 
     /// Set velocity resolution (same in all dimensions).
     pub fn velocity_resolution(mut self, n: i128) -> Self {
-        self.velocity_res = Some(VelocityRes { v1: n, v2: n, v3: n });
+        self.velocity_res = Some(VelocityRes {
+            v1: n,
+            v2: n,
+            v3: n,
+        });
         self
     }
 
@@ -212,13 +228,27 @@ impl DomainBuilder {
     /// Validate and construct the `Domain`.
     pub fn build(self) -> anyhow::Result<Domain> {
         Ok(Domain {
-            spatial: self.spatial.ok_or_else(|| anyhow::anyhow!("missing spatial extent"))?,
-            velocity: self.velocity.ok_or_else(|| anyhow::anyhow!("missing velocity extent"))?,
-            spatial_res: self.spatial_res.ok_or_else(|| anyhow::anyhow!("missing spatial resolution"))?,
-            velocity_res: self.velocity_res.ok_or_else(|| anyhow::anyhow!("missing velocity resolution"))?,
-            time_range: self.time_range.ok_or_else(|| anyhow::anyhow!("missing t_final"))?,
-            spatial_bc: self.spatial_bc.ok_or_else(|| anyhow::anyhow!("missing spatial BC"))?,
-            velocity_bc: self.velocity_bc.ok_or_else(|| anyhow::anyhow!("missing velocity BC"))?,
+            spatial: self
+                .spatial
+                .ok_or_else(|| anyhow::anyhow!("missing spatial extent"))?,
+            velocity: self
+                .velocity
+                .ok_or_else(|| anyhow::anyhow!("missing velocity extent"))?,
+            spatial_res: self
+                .spatial_res
+                .ok_or_else(|| anyhow::anyhow!("missing spatial resolution"))?,
+            velocity_res: self
+                .velocity_res
+                .ok_or_else(|| anyhow::anyhow!("missing velocity resolution"))?,
+            time_range: self
+                .time_range
+                .ok_or_else(|| anyhow::anyhow!("missing t_final"))?,
+            spatial_bc: self
+                .spatial_bc
+                .ok_or_else(|| anyhow::anyhow!("missing spatial BC"))?,
+            velocity_bc: self
+                .velocity_bc
+                .ok_or_else(|| anyhow::anyhow!("missing velocity BC"))?,
         })
     }
 }

@@ -1,6 +1,6 @@
 //! Primary snapshot outputs: f(x,v,t), Φ(x,t), ρ(x,t), g(x,t).
 
-use super::super::{types::*, phasespace::PhaseSpaceRepr};
+use super::super::{phasespace::PhaseSpaceRepr, types::*};
 
 /// All primary fields at one simulation time.
 pub struct PrimarySnapshot {

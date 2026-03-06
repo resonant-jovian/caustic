@@ -102,7 +102,9 @@ pub struct OptionalParams {
 impl Default for OptionalParams {
     fn default() -> Self {
         Self {
-            dt: Timestep { delta_t: Decimal::ZERO }, // adaptive
+            dt: Timestep {
+                delta_t: Decimal::ZERO,
+            }, // adaptive
             cfl_factor: 0.5,
             dt_min: 1e-10,
             phi_external: None,

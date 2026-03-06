@@ -30,11 +30,7 @@ pub enum ExitReason {
 
 /// Trait for simulation exit predicates. Evaluated after each timestep.
 pub trait ExitCondition {
-    fn check(
-        &self,
-        diag: &GlobalDiagnostics,
-        initial: &GlobalDiagnostics,
-    ) -> Option<ExitReason>;
+    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics) -> Option<ExitReason>;
 }
 
 /// Exit when simulation time reaches `t_final`.
@@ -58,11 +54,7 @@ pub struct EnergyDriftCondition {
 }
 
 impl ExitCondition for EnergyDriftCondition {
-    fn check(
-        &self,
-        diag: &GlobalDiagnostics,
-        initial: &GlobalDiagnostics,
-    ) -> Option<ExitReason> {
+    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics) -> Option<ExitReason> {
         let e0 = initial.total_energy.abs();
         if e0 > 1e-30 && (diag.total_energy - initial.total_energy).abs() / e0 > self.tolerance {
             Some(ExitReason::EnergyDrift)
@@ -78,11 +70,7 @@ pub struct MassLossCondition {
 }
 
 impl ExitCondition for MassLossCondition {
-    fn check(
-        &self,
-        diag: &GlobalDiagnostics,
-        initial: &GlobalDiagnostics,
-    ) -> Option<ExitReason> {
+    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics) -> Option<ExitReason> {
         let m0 = initial.mass_in_box.abs();
         if m0 > 1e-30 && diag.mass_in_box / m0 < self.threshold {
             Some(ExitReason::MassLoss)
@@ -98,11 +86,7 @@ pub struct CasimirDriftCondition {
 }
 
 impl ExitCondition for CasimirDriftCondition {
-    fn check(
-        &self,
-        diag: &GlobalDiagnostics,
-        initial: &GlobalDiagnostics,
-    ) -> Option<ExitReason> {
+    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics) -> Option<ExitReason> {
         let c0 = initial.casimir_c2.abs();
         if c0 > 1e-30 && (diag.casimir_c2 - initial.casimir_c2).abs() / c0 > self.tolerance {
             Some(ExitReason::CasimirDrift)
@@ -120,16 +104,15 @@ pub struct WallClockCondition {
 
 impl WallClockCondition {
     pub fn new(limit_secs: f64) -> Self {
-        Self { limit_secs, start: std::time::Instant::now() }
+        Self {
+            limit_secs,
+            start: std::time::Instant::now(),
+        }
     }
 }
 
 impl ExitCondition for WallClockCondition {
-    fn check(
-        &self,
-        _diag: &GlobalDiagnostics,
-        _initial: &GlobalDiagnostics,
-    ) -> Option<ExitReason> {
+    fn check(&self, _diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics) -> Option<ExitReason> {
         if self.start.elapsed().as_secs_f64() > self.limit_secs {
             Some(ExitReason::WallClockLimit)
         } else {
@@ -144,11 +127,7 @@ pub struct SteadyStateCondition {
 }
 
 impl ExitCondition for SteadyStateCondition {
-    fn check(
-        &self,
-        diag: &GlobalDiagnostics,
-        _initial: &GlobalDiagnostics,
-    ) -> Option<ExitReason> {
+    fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics) -> Option<ExitReason> {
         // Approximated by entropy rate of change: if entropy is nearly constant, steady state
         // For now, placeholder — needs history of entropy values
         None
@@ -161,11 +140,7 @@ pub struct CflViolationCondition {
 }
 
 impl ExitCondition for CflViolationCondition {
-    fn check(
-        &self,
-        _diag: &GlobalDiagnostics,
-        _initial: &GlobalDiagnostics,
-    ) -> Option<ExitReason> {
+    fn check(&self, _diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics) -> Option<ExitReason> {
         // CFL violation is checked in Simulation::step via max_dt; this condition is a fallback
         None
     }
@@ -175,11 +150,7 @@ impl ExitCondition for CflViolationCondition {
 pub struct CausticFormationCondition;
 
 impl ExitCondition for CausticFormationCondition {
-    fn check(
-        &self,
-        _diag: &GlobalDiagnostics,
-        _initial: &GlobalDiagnostics,
-    ) -> Option<ExitReason> {
+    fn check(&self, _diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics) -> Option<ExitReason> {
         // Stream count field is not stored in GlobalDiagnostics; requires repr access
         // For now: not implemented as a standalone exit condition
         None
@@ -192,11 +163,7 @@ pub struct VirialRelaxedCondition {
 }
 
 impl ExitCondition for VirialRelaxedCondition {
-    fn check(
-        &self,
-        diag: &GlobalDiagnostics,
-        _initial: &GlobalDiagnostics,
-    ) -> Option<ExitReason> {
+    fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics) -> Option<ExitReason> {
         if (diag.virial_ratio - 1.0).abs() < self.tolerance {
             Some(ExitReason::VirialRelaxed)
         } else {

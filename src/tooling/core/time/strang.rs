@@ -2,11 +2,8 @@
 //! drift(Δt/2) → kick(Δt) → drift(Δt/2). Naturally symplectic.
 
 use super::super::{
-    types::*,
-    integrator::TimeIntegrator,
-    phasespace::PhaseSpaceRepr,
-    solver::PoissonSolver,
-    advecator::Advector,
+    advecator::Advector, integrator::TimeIntegrator, phasespace::PhaseSpaceRepr,
+    solver::PoissonSolver, types::*,
 };
 
 /// Strang splitting: drift(Δt/2) → kick(Δt) → drift(Δt/2).

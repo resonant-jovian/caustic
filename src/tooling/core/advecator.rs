@@ -1,8 +1,8 @@
 //! The `Advector` trait for the 6D transport step.
 //! Advances f by one sub-step using the given force field.
 
-use super::types::AccelerationField;
 use super::phasespace::PhaseSpaceRepr;
+use super::types::AccelerationField;
 
 /// Trait for all phase-space advection schemes.
 pub trait Advector {

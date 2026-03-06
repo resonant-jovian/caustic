@@ -1,8 +1,8 @@
 //! `IOManager` — handles HDF5 snapshot I/O and checkpoint/restart.
 //! Requires the `hdf5` feature flag for full HDF5 support.
 
-use super::types::PhaseSpaceSnapshot;
 use super::diagnostics::{Diagnostics, GlobalDiagnostics};
+use super::types::PhaseSpaceSnapshot;
 
 /// Snapshot serialisation format.
 pub enum OutputFormat {
@@ -64,9 +64,17 @@ impl IOManager {
         if !file_exists {
             writeln!(file, "t,E,T,W,vir,C2,S,M")?;
         }
-        writeln!(file, "{},{},{},{},{},{},{},{}",
-            row.time, row.total_energy, row.kinetic_energy, row.potential_energy,
-            row.virial_ratio, row.casimir_c2, row.entropy, row.mass_in_box
+        writeln!(
+            file,
+            "{},{},{},{},{},{},{},{}",
+            row.time,
+            row.total_energy,
+            row.kinetic_energy,
+            row.potential_energy,
+            row.virial_ratio,
+            row.casimir_c2,
+            row.entropy,
+            row.mass_in_box
         )?;
         Ok(())
     }
