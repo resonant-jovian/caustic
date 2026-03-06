@@ -6,7 +6,6 @@ description = "A General-Purpose 6D Collisionless Gravitational Dynamics Solver"
 authors = ["Albin <albin@sjoegren.se>"]
 license = "GPL-3"
 repository = "https://github.com/resonant-jovian/caustic"
-publish = ["caustic"]
 
 [dependencies]
 rust_decimal = "1.40.0" # High accuracy float handling
