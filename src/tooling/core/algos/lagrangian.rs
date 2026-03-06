@@ -1,7 +1,7 @@
 //! Semi-Lagrangian advector. Traces characteristics backwards from each grid point and
 //! interpolates. Eliminates CFL constraint; Δt limited only by accuracy requirements.
 
-use super::super::{types::*, phasespace::PhaseSpaceRepr, advecator::Advector};
+use super::super::{advecator::Advector, phasespace::PhaseSpaceRepr, types::*};
 
 /// Semi-Lagrangian advector with cubic spline interpolation.
 pub struct SemiLagrangian {
@@ -10,14 +10,21 @@ pub struct SemiLagrangian {
 
 impl SemiLagrangian {
     pub fn new() -> Self {
-        Self { interpolation_order: 3 }
+        Self {
+            interpolation_order: 3,
+        }
     }
 }
 
 impl Advector for SemiLagrangian {
     fn drift(&self, repr: &mut dyn PhaseSpaceRepr, dt: f64) {
         // UniformGrid6D ignores the displacement field; it computes shifts from its velocity grid.
-        let dummy = DisplacementField { dx: vec![], dy: vec![], dz: vec![], shape: [0, 0, 0] };
+        let dummy = DisplacementField {
+            dx: vec![],
+            dy: vec![],
+            dz: vec![],
+            shape: [0, 0, 0],
+        };
         repr.advect_x(&dummy, dt);
     }
 
@@ -80,23 +87,25 @@ pub(crate) fn sl_shift_1d(
     l: f64,
     periodic: bool,
 ) -> Vec<f64> {
-    (0..n).map(|i| {
-        // Center of output cell i: -l + (i + 0.5) * cell_size
-        // Departure point (back-trace): center_i - disp
-        let center_i = -l + (i as f64 + 0.5) * cell_size;
-        let departure_phys = center_i - disp;
-        // Fractional cell index of departure point
-        let departure_idx = (departure_phys + l) / cell_size - 0.5;
-        if periodic {
-            cubic_spline_interpolate(data, departure_idx, n)
-        } else {
-            // Absorbing BC: anything outside [−0.5, n−0.5) maps to zero
-            if departure_idx < -0.5 || departure_idx >= n as f64 - 0.5 {
-                0.0
+    (0..n)
+        .map(|i| {
+            // Center of output cell i: -l + (i + 0.5) * cell_size
+            // Departure point (back-trace): center_i - disp
+            let center_i = -l + (i as f64 + 0.5) * cell_size;
+            let departure_phys = center_i - disp;
+            // Fractional cell index of departure point
+            let departure_idx = (departure_phys + l) / cell_size - 0.5;
+            if periodic {
+                cubic_spline_interpolate(data, departure_idx, n)
             } else {
-                let clamped = departure_idx.clamp(0.0, n as f64 - 1.0 - 1e-10);
-                cubic_spline_interpolate_open(data, clamped, n)
+                // Absorbing BC: anything outside [−0.5, n−0.5) maps to zero
+                if departure_idx < -0.5 || departure_idx >= n as f64 - 0.5 {
+                    0.0
+                } else {
+                    let clamped = departure_idx.clamp(0.0, n as f64 - 1.0 - 1e-10);
+                    cubic_spline_interpolate_open(data, clamped, n)
+                }
             }
-        }
-    }).collect()
+        })
+        .collect()
 }

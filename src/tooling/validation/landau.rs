@@ -3,13 +3,13 @@
 
 #[test]
 fn landau_damping() {
-    use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
-    use crate::tooling::core::algos::uniform::UniformGrid6D;
     use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::algos::uniform::UniformGrid6D;
+    use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
+    use crate::tooling::core::integrator::TimeIntegrator as _;
+    use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
     use crate::tooling::core::poisson::fft::FftPoisson;
     use crate::tooling::core::time::strang::StrangSplitting;
-    use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
-    use crate::tooling::core::integrator::TimeIntegrator as _;
 
     // Warm Maxwellian (σ=2): k_J = sqrt(4π*G*ρ0)/σ ≈ sqrt(4π)/2 ≈ 1.77 (with ρ0≈1, G=1)
     // lx=1 → k_fund = π ≈ 3.14 > k_J → stable; gravitational Landau damping regime.
@@ -43,8 +43,10 @@ fn landau_damping() {
             let v2 = -lv + (iv2 as f64 + 0.5) * dv[1];
             for iv3 in 0..nv3 {
                 let v3 = -lv + (iv3 as f64 + 0.5) * dv[2];
-                s_norm += (-(v1*v1+v2*v2+v3*v3) / (2.0*sigma*sigma)).exp()
-                    * dv[0] * dv[1] * dv[2];
+                s_norm += (-(v1 * v1 + v2 * v2 + v3 * v3) / (2.0 * sigma * sigma)).exp()
+                    * dv[0]
+                    * dv[1]
+                    * dv[2];
             }
         }
     }
@@ -61,7 +63,8 @@ fn landau_damping() {
                         let v2 = -lv + (iv2 as f64 + 0.5) * dv[1];
                         for iv3 in 0..nv3 {
                             let v3 = -lv + (iv3 as f64 + 0.5) * dv[2];
-                            let f = c * (-(v1*v1+v2*v2+v3*v3)/(2.0*sigma*sigma)).exp()
+                            let f = c
+                                * (-(v1 * v1 + v2 * v2 + v3 * v3) / (2.0 * sigma * sigma)).exp()
                                 * perturb;
                             let idx = grid.index([ix1, ix2, ix3], [iv1, iv2, iv3]);
                             grid.data[idx] = f.max(0.0);
@@ -87,7 +90,10 @@ fn landau_damping() {
     }
 
     let rho_final = grid.compute_density();
-    assert!(!rho_final.data.iter().any(|x| x.is_nan()), "Density contains NaN");
+    assert!(
+        !rho_final.data.iter().any(|x| x.is_nan()),
+        "Density contains NaN"
+    );
 
     let rho_max_final = rho_final.data.iter().cloned().fold(0.0f64, f64::max);
     let rho_min_final = rho_final.data.iter().cloned().fold(f64::MAX, f64::min);
@@ -97,10 +103,14 @@ fn landau_damping() {
     assert!(
         amp_final < 2.0 * amp_init,
         "Landau damping: amplitude grew (unstable). amp_init={:.4e}, amp_final={:.4e}",
-        amp_init, amp_final
+        amp_init,
+        amp_final
     );
     println!(
         "Landau damping: k={:.3}, k_J≈{:.3}, amp_init={:.4e}, amp_final={:.4e}",
-        k, (4.0 * std::f64::consts::PI * g).sqrt() / sigma, amp_init, amp_final
+        k,
+        (4.0 * std::f64::consts::PI * g).sqrt() / sigma,
+        amp_init,
+        amp_final
     );
 }

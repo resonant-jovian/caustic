@@ -2,9 +2,9 @@
 //! single-stream regions.
 
 use super::super::{
-    types::*,
+    init::{cosmological::ZeldovichIC, domain::Domain},
     phasespace::PhaseSpaceRepr,
-    init::{domain::Domain, cosmological::ZeldovichIC},
+    types::*,
 };
 
 /// One Lagrangian tracer particle on the dark matter sheet.

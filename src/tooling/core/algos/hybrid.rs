@@ -1,8 +1,8 @@
 //! Hybrid representation: SheetTracker in single-stream regions, UniformGrid6D in
 //! multi-stream (halo interior). Switches at caustic surfaces.
 
+use super::super::{init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
 use super::{sheet::SheetTracker, uniform::UniformGrid6D};
-use super::super::{types::*, phasespace::PhaseSpaceRepr, init::domain::Domain};
 
 /// Hybrid representation combining SheetTracker and UniformGrid6D.
 pub struct HybridRepr {

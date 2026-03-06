@@ -17,12 +17,23 @@ pub fn write_csv(history: &[GlobalDiagnostics], path: &str) -> anyhow::Result<()
     let mut file = std::fs::File::create(path)?;
     writeln!(file, "t,E,T,W,vir,Px,Py,Pz,Lx,Ly,Lz,C2,S,M")?;
     for d in history {
-        writeln!(file,
+        writeln!(
+            file,
             "{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
-            d.time, d.total_energy, d.kinetic_energy, d.potential_energy, d.virial_ratio,
-            d.total_momentum[0], d.total_momentum[1], d.total_momentum[2],
-            d.total_angular_momentum[0], d.total_angular_momentum[1], d.total_angular_momentum[2],
-            d.casimir_c2, d.entropy, d.mass_in_box
+            d.time,
+            d.total_energy,
+            d.kinetic_energy,
+            d.potential_energy,
+            d.virial_ratio,
+            d.total_momentum[0],
+            d.total_momentum[1],
+            d.total_momentum[2],
+            d.total_angular_momentum[0],
+            d.total_angular_momentum[1],
+            d.total_angular_momentum[2],
+            d.casimir_c2,
+            d.entropy,
+            d.mass_in_box
         )?;
     }
     Ok(())
@@ -41,10 +52,12 @@ pub fn conservation_summary(history: &[GlobalDiagnostics]) -> ConservationSummar
     let e0 = history[0].total_energy.abs().max(1e-30);
     let c2_0 = history[0].casimir_c2.abs().max(1e-30);
 
-    let max_energy_drift = history.iter()
+    let max_energy_drift = history
+        .iter()
         .map(|d| (d.total_energy - history[0].total_energy).abs() / e0)
         .fold(0.0_f64, f64::max);
-    let max_casimir_drift = history.iter()
+    let max_casimir_drift = history
+        .iter()
         .map(|d| (d.casimir_c2 - history[0].casimir_c2).abs() / c2_0)
         .fold(0.0_f64, f64::max);
 

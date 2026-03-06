@@ -1,11 +1,7 @@
 //! Spatial CFL constraint: Δt < Δx / v_max. Applies to Eulerian advection only;
 //! not needed for semi-Lagrangian methods.
 
-use super::super::super::{
-    types::*,
-    phasespace::PhaseSpaceRepr,
-    init::domain::Domain,
-};
+use super::super::super::{init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
 
 /// Spatial CFL timestep constraint.
 pub struct SpatialCfl {

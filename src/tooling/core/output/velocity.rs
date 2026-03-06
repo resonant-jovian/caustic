@@ -1,7 +1,7 @@
 //! Velocity moment fields derived from f: density, mean velocity, dispersion tensor,
 //! kinetic energy density, heat flux.
 
-use super::super::{types::*, phasespace::PhaseSpaceRepr, init::domain::Domain};
+use super::super::{init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
 
 /// All velocity moments of the distribution function.
 pub struct VelocityMoments {
@@ -15,7 +15,9 @@ pub struct VelocityMoments {
 impl VelocityMoments {
     /// Compute all velocity moments from the distribution function.
     pub fn compute(repr: &dyn PhaseSpaceRepr, domain: &Domain) -> Self {
-        todo!("iterate spatial grid; at each x: rho=int f dv, u=int f*v dv/rho, sigma^2=int f*(v-u)^2 dv/rho ...")
+        todo!(
+            "iterate spatial grid; at each x: rho=int f dv, u=int f*v dv/rho, sigma^2=int f*(v-u)^2 dv/rho ..."
+        )
     }
 
     /// Surface density Σ = ∫ρ dl along projection axis. Gravitational lensing observable.

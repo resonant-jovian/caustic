@@ -1,7 +1,7 @@
 //! Phase-space structure diagnostics: stream count, caustic surfaces, power spectrum,
 //! growth rates.
 
-use super::super::{types::*, phasespace::PhaseSpaceRepr};
+use super::super::{phasespace::PhaseSpaceRepr, types::*};
 
 /// Phase-space structure diagnostic outputs.
 pub struct PhaseSpaceDiagnostics {

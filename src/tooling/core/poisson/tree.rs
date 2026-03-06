@@ -1,6 +1,6 @@
 //! Tree code Poisson solver (Barnes-Hut). O(N log N) per solve.
 
-use super::super::{types::*, solver::PoissonSolver, init::domain::Domain};
+use super::super::{init::domain::Domain, solver::PoissonSolver, types::*};
 
 /// One node of the Barnes-Hut octree.
 pub struct OctreeNode {

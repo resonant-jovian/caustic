@@ -1,7 +1,7 @@
 //! Spectral-in-velocity representation. Expands f in Hermite basis functions:
 //! f(x,v,t) = Σₙ aₙ(x,t) Hₙ(v). Memory O(Nₓ³ × N_modes).
 
-use super::super::{types::*, phasespace::PhaseSpaceRepr, init::domain::Domain};
+use super::super::{init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
 
 /// Spectral-in-velocity representation using Hermite polynomial basis.
 pub struct SpectralV {

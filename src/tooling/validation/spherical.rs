@@ -3,19 +3,19 @@
 
 #[test]
 fn spherical_collapse() {
-    use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
-    use crate::tooling::core::algos::uniform::UniformGrid6D;
     use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::algos::uniform::UniformGrid6D;
+    use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
+    use crate::tooling::core::integrator::TimeIntegrator as _;
+    use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
     use crate::tooling::core::poisson::fft::FftPoisson;
     use crate::tooling::core::time::strang::StrangSplitting;
-    use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
-    use crate::tooling::core::integrator::TimeIntegrator as _;
 
     // Cold uniform sphere: f(x,v) ≈ ρ0 * δ³(v) represented as a narrow Gaussian in v.
     // With G=1, ρ0=1: t_col = π/(2√(1/6)) ≈ π*√6/2 ≈ 3.85.
     // We run for t=0.5 << t_col; collapse starts so max density increases.
-    let lx = 2.0f64;  // sphere of radius ~1 inside [-2,2]³
-    let lv = 1.0f64;  // narrow velocity range
+    let lx = 2.0f64; // sphere of radius ~1 inside [-2,2]³
+    let lv = 1.0f64; // narrow velocity range
     let sigma_v = 0.3f64; // cold: narrow Gaussian approximating δ(v)
     let g = 1.0f64;
     let rho0 = 1.0f64;
@@ -45,8 +45,10 @@ fn spherical_collapse() {
             let v2 = -lv + (iv2 as f64 + 0.5) * dv[1];
             for iv3 in 0..nv3 {
                 let v3 = -lv + (iv3 as f64 + 0.5) * dv[2];
-                s_norm += (-(v1*v1+v2*v2+v3*v3) / (2.0*sigma_v*sigma_v)).exp()
-                    * dv[0] * dv[1] * dv[2];
+                s_norm += (-(v1 * v1 + v2 * v2 + v3 * v3) / (2.0 * sigma_v * sigma_v)).exp()
+                    * dv[0]
+                    * dv[1]
+                    * dv[2];
             }
         }
     }
@@ -57,19 +59,20 @@ fn spherical_collapse() {
             let x2 = -lx + (ix2 as f64 + 0.5) * dx[1];
             for ix3 in 0..nx3 {
                 let x3 = -lx + (ix3 as f64 + 0.5) * dx[2];
-                let r = (x1*x1 + x2*x2 + x3*x3).sqrt();
+                let r = (x1 * x1 + x2 * x2 + x3 * x3).sqrt();
                 // Uniform inside sphere, zero outside
                 let density = if r <= r_sphere { rho0 } else { 0.0 };
-                if density == 0.0 { continue; }
+                if density == 0.0 {
+                    continue;
+                }
                 for iv1 in 0..nv1 {
                     let v1 = -lv + (iv1 as f64 + 0.5) * dv[0];
                     for iv2 in 0..nv2 {
                         let v2 = -lv + (iv2 as f64 + 0.5) * dv[1];
                         for iv3 in 0..nv3 {
                             let v3 = -lv + (iv3 as f64 + 0.5) * dv[2];
-                            let v2sq = v1*v1 + v2*v2 + v3*v3;
-                            let f = density / s_norm
-                                * (-v2sq / (2.0*sigma_v*sigma_v)).exp();
+                            let v2sq = v1 * v1 + v2 * v2 + v3 * v3;
+                            let f = density / s_norm * (-v2sq / (2.0 * sigma_v * sigma_v)).exp();
                             let idx = grid.index([ix1, ix2, ix3], [iv1, iv2, iv3]);
                             grid.data[idx] = f;
                         }
@@ -95,7 +98,10 @@ fn spherical_collapse() {
     }
 
     let rho_final = grid.compute_density();
-    assert!(!rho_final.data.iter().any(|x| x.is_nan()), "Density contains NaN");
+    assert!(
+        !rho_final.data.iter().any(|x| x.is_nan()),
+        "Density contains NaN"
+    );
 
     let rho_max_final = rho_final.data.iter().cloned().fold(0.0f64, f64::max);
 

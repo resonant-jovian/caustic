@@ -1,6 +1,6 @@
 //! Caustic surface detection, analysis, and tracking.
 
-use super::super::{types::*, init::domain::Domain};
+use super::super::{init::domain::Domain, types::*};
 
 /// Tracks formation and evolution of caustic surfaces.
 pub struct CausticDetector;

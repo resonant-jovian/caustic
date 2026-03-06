@@ -1,11 +1,11 @@
 //! Standardised exit output package produced at simulation termination.
 
 use super::super::super::{
-    types::*,
     conditions::ExitReason,
     diagnostics::GlobalDiagnostics,
     io::IOManager,
     output::global::{ConservationSummary, conservation_summary},
+    types::*,
 };
 
 /// Complete output produced upon simulation exit, as specified in Section 4.3 of the spec.
@@ -52,8 +52,17 @@ impl ExitPackage {
     /// Print human-readable conservation errors and performance statistics.
     pub fn print_summary(&self) {
         println!("Exit: {:?}", self.exit_reason);
-        println!("Steps: {}, Wall clock: {:.2}s", self.total_steps, self.wall_clock_seconds);
-        println!("Max energy drift: {:.2e}", self.conservation_summary.max_energy_drift);
-        println!("Max Casimir drift: {:.2e}", self.conservation_summary.max_casimir_drift);
+        println!(
+            "Steps: {}, Wall clock: {:.2}s",
+            self.total_steps, self.wall_clock_seconds
+        );
+        println!(
+            "Max energy drift: {:.2e}",
+            self.conservation_summary.max_energy_drift
+        );
+        println!(
+            "Max Casimir drift: {:.2e}",
+            self.conservation_summary.max_casimir_drift
+        );
     }
 }

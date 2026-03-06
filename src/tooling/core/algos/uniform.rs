@@ -1,13 +1,13 @@
 //! Brute-force uniform 6D grid. Memory O(N⁶). Simple and correct; primary reference
 //! implementation for validation.
 
-use rust_decimal::prelude::ToPrimitive;
 use super::super::{
-    types::*,
-    phasespace::PhaseSpaceRepr,
     init::domain::{Domain, SpatialBoundType, VelocityBoundType},
+    phasespace::PhaseSpaceRepr,
+    types::*,
 };
 use super::lagrangian::sl_shift_1d;
+use rust_decimal::prelude::ToPrimitive;
 
 /// Stores f on a uniform (Nx1×Nx2×Nx3×Nv1×Nv2×Nv3) grid as a flat `Vec<f64>`.
 /// Index order: x1 fastest-changing outer, v3 fastest-changing inner (row-major).
@@ -20,13 +20,24 @@ impl UniformGrid6D {
     /// Allocate Nx³ × Nv³ floats, zero-initialised.
     pub fn new(domain: Domain) -> Self {
         let n = domain.total_cells();
-        Self { data: vec![0.0; n], domain }
+        Self {
+            data: vec![0.0; n],
+            domain,
+        }
     }
 
     pub fn from_snapshot(snap: PhaseSpaceSnapshot, domain: Domain) -> Self {
-        assert_eq!(snap.data.len(), domain.total_cells(),
-            "snapshot size mismatch: {} vs {}", snap.data.len(), domain.total_cells());
-        Self { data: snap.data, domain }
+        assert_eq!(
+            snap.data.len(),
+            domain.total_cells(),
+            "snapshot size mismatch: {} vs {}",
+            snap.data.len(),
+            domain.total_cells()
+        );
+        Self {
+            data: snap.data,
+            domain,
+        }
     }
 
     /// Linear index into flat Vec from (ix1, ix2, ix3, iv1, iv2, iv3) — row-major 6D.
@@ -38,15 +49,18 @@ impl UniformGrid6D {
         let s_x3 = nv1 * s_v1;
         let s_x2 = nx3 * s_x3;
         let s_x1 = nx2 * s_x2;
-        ix[0] * s_x1 + ix[1] * s_x2 + ix[2] * s_x3
-            + iv[0] * s_v1 + iv[1] * s_v2 + iv[2] * s_v3
+        ix[0] * s_x1 + ix[1] * s_x2 + ix[2] * s_x3 + iv[0] * s_v1 + iv[1] * s_v2 + iv[2] * s_v3
     }
 
     pub(crate) fn sizes(&self) -> [usize; 6] {
         let d = &self.domain;
         [
-            d.spatial_res.x1 as usize, d.spatial_res.x2 as usize, d.spatial_res.x3 as usize,
-            d.velocity_res.v1 as usize, d.velocity_res.v2 as usize, d.velocity_res.v3 as usize,
+            d.spatial_res.x1 as usize,
+            d.spatial_res.x2 as usize,
+            d.spatial_res.x3 as usize,
+            d.velocity_res.v1 as usize,
+            d.velocity_res.v2 as usize,
+            d.velocity_res.v3 as usize,
         ]
     }
 
@@ -80,21 +94,28 @@ impl PhaseSpaceRepr for UniformGrid6D {
         let s_x2 = nx3 * s_x3;
         let s_x1 = nx2 * s_x2;
 
-        let data: Vec<f64> = (0..nx1 * nx2 * nx3).map(|si| {
-            let ix3 = si % nx3;
-            let ix2 = (si / nx3) % nx2;
-            let ix1 = si / (nx2 * nx3);
-            let base = ix1 * s_x1 + ix2 * s_x2 + ix3 * s_x3;
-            let sum: f64 = (0..nv1 * nv2 * nv3).map(|vi| {
-                let iv3 = vi % nv3;
-                let iv2 = (vi / nv3) % nv2;
-                let iv1 = vi / (nv2 * nv3);
-                self.data[base + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3]
-            }).sum();
-            sum * dv3
-        }).collect();
+        let data: Vec<f64> = (0..nx1 * nx2 * nx3)
+            .map(|si| {
+                let ix3 = si % nx3;
+                let ix2 = (si / nx3) % nx2;
+                let ix1 = si / (nx2 * nx3);
+                let base = ix1 * s_x1 + ix2 * s_x2 + ix3 * s_x3;
+                let sum: f64 = (0..nv1 * nv2 * nv3)
+                    .map(|vi| {
+                        let iv3 = vi % nv3;
+                        let iv2 = (vi / nv3) % nv2;
+                        let iv1 = vi / (nv2 * nv3);
+                        self.data[base + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3]
+                    })
+                    .sum();
+                sum * dv3
+            })
+            .collect();
 
-        DensityField { data, shape: [nx1, nx2, nx3] }
+        DensityField {
+            data,
+            shape: [nx1, nx2, nx3],
+        }
     }
 
     fn advect_x(&mut self, _displacement: &DisplacementField, dt: f64) {
@@ -115,8 +136,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
         let s_x1 = nx2 * s_x2;
 
         let flat_idx = |ix: [usize; 3], iv: [usize; 3]| -> usize {
-            ix[0] * s_x1 + ix[1] * s_x2 + ix[2] * s_x3
-                + iv[0] * s_v1 + iv[1] * s_v2 + iv[2] * s_v3
+            ix[0] * s_x1 + ix[1] * s_x2 + ix[2] * s_x3 + iv[0] * s_v1 + iv[1] * s_v2 + iv[2] * s_v3
         };
 
         let mut buf = self.data.clone();
@@ -190,8 +210,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
         let s_x1 = nx2 * s_x2;
 
         let flat_idx = |ix: [usize; 3], iv: [usize; 3]| -> usize {
-            ix[0] * s_x1 + ix[1] * s_x2 + ix[2] * s_x3
-                + iv[0] * s_v1 + iv[1] * s_v2 + iv[2] * s_v3
+            ix[0] * s_x1 + ix[1] * s_x2 + ix[2] * s_x3 + iv[0] * s_v1 + iv[1] * s_v2 + iv[2] * s_v3
         };
 
         let mut buf = self.data.clone();
@@ -212,7 +231,8 @@ impl PhaseSpaceRepr for UniformGrid6D {
                             let line: Vec<f64> = (0..nv1)
                                 .map(|iv1| buf[flat_idx(ix, [iv1, iv2, iv3])])
                                 .collect();
-                            let shifted = sl_shift_1d(&line, disp[0], dv[0], nv1, lv[0], periodic_v);
+                            let shifted =
+                                sl_shift_1d(&line, disp[0], dv[0], nv1, lv[0], periodic_v);
                             for iv1 in 0..nv1 {
                                 buf[flat_idx(ix, [iv1, iv2, iv3])] = shifted[iv1];
                             }
@@ -225,7 +245,8 @@ impl PhaseSpaceRepr for UniformGrid6D {
                             let line: Vec<f64> = (0..nv2)
                                 .map(|iv2| buf[flat_idx(ix, [iv1, iv2, iv3])])
                                 .collect();
-                            let shifted = sl_shift_1d(&line, disp[1], dv[1], nv2, lv[1], periodic_v);
+                            let shifted =
+                                sl_shift_1d(&line, disp[1], dv[1], nv2, lv[1], periodic_v);
                             for iv2 in 0..nv2 {
                                 buf[flat_idx(ix, [iv1, iv2, iv3])] = shifted[iv2];
                             }
@@ -238,7 +259,8 @@ impl PhaseSpaceRepr for UniformGrid6D {
                             let line: Vec<f64> = (0..nv3)
                                 .map(|iv3| buf[flat_idx(ix, [iv1, iv2, iv3])])
                                 .collect();
-                            let shifted = sl_shift_1d(&line, disp[2], dv[2], nv3, lv[2], periodic_v);
+                            let shifted =
+                                sl_shift_1d(&line, disp[2], dv[2], nv3, lv[2], periodic_v);
                             for iv3 in 0..nv3 {
                                 buf[flat_idx(ix, [iv1, iv2, iv3])] = shifted[iv3];
                             }
@@ -259,19 +281,32 @@ impl PhaseSpaceRepr for UniformGrid6D {
         let lv = self.lv();
         let dv3 = dv[0] * dv[1] * dv[2];
 
-        let ix1 = ((position[0] + lx[0]) / dx[0]).floor().clamp(0.0, (nx1 - 1) as f64) as usize;
-        let ix2 = ((position[1] + lx[1]) / dx[1]).floor().clamp(0.0, (nx2 - 1) as f64) as usize;
-        let ix3 = ((position[2] + lx[2]) / dx[2]).floor().clamp(0.0, (nx3 - 1) as f64) as usize;
+        let ix1 = ((position[0] + lx[0]) / dx[0])
+            .floor()
+            .clamp(0.0, (nx1 - 1) as f64) as usize;
+        let ix2 = ((position[1] + lx[1]) / dx[1])
+            .floor()
+            .clamp(0.0, (nx2 - 1) as f64) as usize;
+        let ix3 = ((position[2] + lx[2]) / dx[2])
+            .floor()
+            .clamp(0.0, (nx3 - 1) as f64) as usize;
 
         match order {
             0 => {
-                let sum: f64 = (0..nv1 * nv2 * nv3).map(|vi| {
-                    let iv3 = vi % nv3;
-                    let iv2 = (vi / nv3) % nv2;
-                    let iv1 = vi / (nv2 * nv3);
-                    self.data[self.index([ix1, ix2, ix3], [iv1, iv2, iv3])]
-                }).sum::<f64>() * dv3;
-                Tensor { data: vec![sum], rank: 0, shape: vec![] }
+                let sum: f64 = (0..nv1 * nv2 * nv3)
+                    .map(|vi| {
+                        let iv3 = vi % nv3;
+                        let iv2 = (vi / nv3) % nv2;
+                        let iv1 = vi / (nv2 * nv3);
+                        self.data[self.index([ix1, ix2, ix3], [iv1, iv2, iv3])]
+                    })
+                    .sum::<f64>()
+                    * dv3;
+                Tensor {
+                    data: vec![sum],
+                    rank: 0,
+                    shape: vec![],
+                }
             }
             1 => {
                 let mut vbar = [0.0f64; 3];
@@ -323,7 +358,11 @@ impl PhaseSpaceRepr for UniformGrid6D {
                     shape: vec![3, 3],
                 }
             }
-            _ => Tensor { data: vec![], rank: order, shape: vec![] },
+            _ => Tensor {
+                data: vec![],
+                rank: order,
+                shape: vec![],
+            },
         }
     }
 
@@ -348,10 +387,13 @@ impl PhaseSpaceRepr for UniformGrid6D {
         let dv = self.domain.dv();
         let dx3 = dx[0] * dx[1] * dx[2];
         let dv3 = dv[0] * dv[1] * dv[2];
-        self.data.iter()
+        self.data
+            .iter()
             .filter(|&&f| f > 0.0)
             .map(|&f| -f * f.ln())
-            .sum::<f64>() * dx3 * dv3
+            .sum::<f64>()
+            * dx3
+            * dv3
     }
 
     fn stream_count(&self) -> StreamCountField {
@@ -365,13 +407,18 @@ impl PhaseSpaceRepr for UniformGrid6D {
             for ix2 in 0..nx2 {
                 for ix3 in 0..nx3 {
                     // Marginal f_1(v1|x) = sum_{v2,v3} f(v|x) * dv2 * dv3
-                    let marginal: Vec<f64> = (0..nv1).map(|iv1| {
-                        (0..nv2 * nv3).map(|vi23| {
-                            let iv3 = vi23 % nv3;
-                            let iv2 = vi23 / nv3;
-                            self.data[self.index([ix1, ix2, ix3], [iv1, iv2, iv3])]
-                        }).sum::<f64>() * dv23
-                    }).collect();
+                    let marginal: Vec<f64> = (0..nv1)
+                        .map(|iv1| {
+                            (0..nv2 * nv3)
+                                .map(|vi23| {
+                                    let iv3 = vi23 % nv3;
+                                    let iv2 = vi23 / nv3;
+                                    self.data[self.index([ix1, ix2, ix3], [iv1, iv2, iv3])]
+                                })
+                                .sum::<f64>()
+                                * dv23
+                        })
+                        .collect();
 
                     // Count peaks: cells where f[i-1] < f[i] > f[i+1]
                     let mut peaks = 0u32;
@@ -385,7 +432,10 @@ impl PhaseSpaceRepr for UniformGrid6D {
             }
         }
 
-        StreamCountField { data: out, shape: [nx1, nx2, nx3] }
+        StreamCountField {
+            data: out,
+            shape: [nx1, nx2, nx3],
+        }
     }
 
     fn velocity_distribution(&self, position: &[f64; 3]) -> Vec<f64> {
@@ -393,16 +443,24 @@ impl PhaseSpaceRepr for UniformGrid6D {
         let dx = self.domain.dx();
         let lx = self.lx();
 
-        let ix1 = ((position[0] + lx[0]) / dx[0]).floor().clamp(0.0, (nx1 - 1) as f64) as usize;
-        let ix2 = ((position[1] + lx[1]) / dx[1]).floor().clamp(0.0, (nx2 - 1) as f64) as usize;
-        let ix3 = ((position[2] + lx[2]) / dx[2]).floor().clamp(0.0, (nx3 - 1) as f64) as usize;
+        let ix1 = ((position[0] + lx[0]) / dx[0])
+            .floor()
+            .clamp(0.0, (nx1 - 1) as f64) as usize;
+        let ix2 = ((position[1] + lx[1]) / dx[1])
+            .floor()
+            .clamp(0.0, (nx2 - 1) as f64) as usize;
+        let ix3 = ((position[2] + lx[2]) / dx[2])
+            .floor()
+            .clamp(0.0, (nx3 - 1) as f64) as usize;
 
-        (0..nv1 * nv2 * nv3).map(|vi| {
-            let iv3 = vi % nv3;
-            let iv2 = (vi / nv3) % nv2;
-            let iv1 = vi / (nv2 * nv3);
-            self.data[self.index([ix1, ix2, ix3], [iv1, iv2, iv3])]
-        }).collect()
+        (0..nv1 * nv2 * nv3)
+            .map(|vi| {
+                let iv3 = vi % nv3;
+                let iv2 = (vi / nv3) % nv2;
+                let iv1 = vi / (nv2 * nv3);
+                self.data[self.index([ix1, ix2, ix3], [iv1, iv2, iv3])]
+            })
+            .collect()
     }
 
     fn total_kinetic_energy(&self) -> f64 {

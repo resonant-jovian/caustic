@@ -1,8 +1,10 @@
 //! The `PhaseSpaceRepr` trait — the central abstraction of the library.
 //! All phase-space storage strategies implement this.
 
-use super::types::{AccelerationField, DensityField, DisplacementField, PhaseSpaceSnapshot,
-                   StreamCountField, Tensor};
+use super::types::{
+    AccelerationField, DensityField, DisplacementField, PhaseSpaceSnapshot, StreamCountField,
+    Tensor,
+};
 
 /// Central trait for all phase-space storage and manipulation strategies.
 ///

@@ -3,10 +3,10 @@
 
 #[test]
 fn uniform_acceleration() {
-    use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::algos::uniform::UniformGrid6D;
-    use crate::tooling::core::types::AccelerationField;
+    use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
+    use crate::tooling::core::types::AccelerationField;
 
     // 4×4×4 spatial, 16×16×16 velocity = 262144 cells
     // Spatial: [−2, 2]³, dx=1.0.  Velocity: [−4, 4]³, dv=0.5
@@ -88,6 +88,7 @@ fn uniform_acceleration() {
     assert!(
         max_err < 1e-10,
         "Uniform acceleration L∞ error = {:.2e}, expected < 1e-10 (shift = {:.2})",
-        max_err, shift
+        max_err,
+        shift
     );
 }

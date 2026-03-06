@@ -1,8 +1,8 @@
 //! `Diagnostics` — computes and stores all conserved quantities and monitoring outputs
 //! at each timestep.
 
-use super::types::{DensityField, PotentialField};
 use super::phasespace::PhaseSpaceRepr;
+use super::types::{DensityField, PotentialField};
 
 /// One row of the global time-series output.
 #[derive(Debug, Clone, Copy)]
@@ -41,7 +41,11 @@ impl Diagnostics {
         let c2 = repr.casimir_c2();
         let s = repr.entropy();
         let m = repr.total_mass();
-        let vir = if w.abs() > 1e-30 { 2.0 * t / w.abs() } else { 0.0 };
+        let vir = if w.abs() > 1e-30 {
+            2.0 * t / w.abs()
+        } else {
+            0.0
+        };
         let diag = GlobalDiagnostics {
             time,
             total_energy: e,
@@ -66,9 +70,13 @@ impl Diagnostics {
     /// Total potential energy W = ½∫ρΦ dx³.
     /// `dx3` is the spatial cell volume.
     pub fn potential_energy(density: &DensityField, potential: &PotentialField, dx3: f64) -> f64 {
-        0.5 * density.data.iter().zip(potential.data.iter())
+        0.5 * density
+            .data
+            .iter()
+            .zip(potential.data.iter())
             .map(|(&rho, &phi)| rho * phi)
-            .sum::<f64>() * dx3
+            .sum::<f64>()
+            * dx3
     }
 
     /// Virial ratio 2T/|W|. Equals 1.0 at equilibrium.

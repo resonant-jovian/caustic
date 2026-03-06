@@ -1,9 +1,9 @@
 //! The `TimeIntegrator` trait. Orchestrates the full timestep: compute density → solve
 //! Poisson → compute force → advect. Different splitting orders implement this differently.
 
+use super::advecator::Advector;
 use super::phasespace::PhaseSpaceRepr;
 use super::solver::PoissonSolver;
-use super::advecator::Advector;
 
 /// Complete simulation state at one instant.
 pub struct SimState {

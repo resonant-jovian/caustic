@@ -24,7 +24,11 @@ pub struct PlummerIC {
 
 impl PlummerIC {
     pub fn new(mass: f64, scale_radius: f64, g: f64) -> Self {
-        Self { mass, scale_radius, g }
+        Self {
+            mass,
+            scale_radius,
+            g,
+        }
     }
 }
 
@@ -67,7 +71,11 @@ pub struct KingIC {
 
 impl KingIC {
     pub fn new(mass: f64, king_parameter_w0: f64, velocity_dispersion: f64) -> Self {
-        Self { mass, king_parameter_w0, velocity_dispersion }
+        Self {
+            mass,
+            king_parameter_w0,
+            velocity_dispersion,
+        }
     }
 }
 
@@ -94,7 +102,11 @@ pub struct HernquistIC {
 
 impl HernquistIC {
     pub fn new(mass: f64, scale_radius: f64, g: f64) -> Self {
-        Self { mass, scale_radius, g }
+        Self {
+            mass,
+            scale_radius,
+            g,
+        }
     }
 }
 
@@ -125,13 +137,20 @@ pub struct NfwIC {
 
 impl NfwIC {
     pub fn new(mass: f64, scale_radius: f64, concentration: f64, g: f64) -> Self {
-        Self { mass, scale_radius, concentration, g }
+        Self {
+            mass,
+            scale_radius,
+            concentration,
+            g,
+        }
     }
 }
 
 impl IsolatedEquilibrium for NfwIC {
     fn distribution_function(&self, energy: f64, angular_momentum: f64) -> f64 {
-        todo!("Eddington integral: f(E) = 1/sqrt(8*pi^2) * d/dE int dPhi/sqrt(E-Phi) * d^2rho/dPhi^2")
+        todo!(
+            "Eddington integral: f(E) = 1/sqrt(8*pi^2) * d/dE int dPhi/sqrt(E-Phi) * d^2rho/dPhi^2"
+        )
     }
 
     fn density_profile(&self, r: f64) -> f64 {

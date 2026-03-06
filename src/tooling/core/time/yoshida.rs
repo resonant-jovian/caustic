@@ -2,11 +2,8 @@
 //! specific coefficients w0, w1.
 
 use super::super::{
-    types::*,
-    integrator::TimeIntegrator,
-    phasespace::PhaseSpaceRepr,
-    solver::PoissonSolver,
-    advecator::Advector,
+    advecator::Advector, integrator::TimeIntegrator, phasespace::PhaseSpaceRepr,
+    solver::PoissonSolver, types::*,
 };
 
 /// Yoshida coefficient w1 = 1 / (2 − 2^(1/3)).

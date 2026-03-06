@@ -1,6 +1,6 @@
 //! Adaptive mesh refinement in 6D. Refines cells where f is large or has steep gradients.
 
-use super::super::{types::*, phasespace::PhaseSpaceRepr, init::domain::Domain};
+use super::super::{init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
 
 /// One AMR leaf cell in 6D phase space.
 pub struct AmrCell {
