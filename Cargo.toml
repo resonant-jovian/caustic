@@ -5,6 +5,8 @@ edition = "2024"
 description = "A General-Purpose 6D Collisionless Gravitational Dynamics Solver"
 authors = ["Albin <albin@sjoegren.se>"]
 license = "GPL-3"
+repository = "https://github.com/resonant-jovian/caustic"
+publish = ["caustic"]
 
 [dependencies]
 rust_decimal = "1.40.0" # High accuracy float handling
@@ -14,3 +16,6 @@ rustfft = "6.4.1"   # FFT Poisson solver
 rayon   = "1.11.0"   # data-parallel loops over 6D grid
 hdf5-metno = { version = "0.12.3", optional = true }   # behind `[features] hdf5 = [...]`
 ndarray = "0.17.2"    # for tensor-train milestone
+
+[lints.rust]
+unsafe_code = "forbid"
