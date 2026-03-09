@@ -25,12 +25,29 @@ impl TimeIntegrator for StrangSplitting {
         advector: &dyn Advector,
         dt: f64,
     ) {
-        advector.drift(repr, dt / 2.0);
-        let density = repr.compute_density();
-        let potential = solver.solve(&density, self.g);
-        let accel = solver.compute_acceleration(&potential);
-        advector.kick(repr, &accel, dt);
-        advector.drift(repr, dt / 2.0);
+        let _span = tracing::info_span!("strang_advance").entered();
+
+        {
+            let _s = tracing::info_span!("drift_half").entered();
+            advector.drift(repr, dt / 2.0);
+        }
+
+        let accel = {
+            let _s = tracing::info_span!("poisson_solve").entered();
+            let density = repr.compute_density();
+            let potential = solver.solve(&density, self.g);
+            solver.compute_acceleration(&potential)
+        };
+
+        {
+            let _s = tracing::info_span!("kick").entered();
+            advector.kick(repr, &accel, dt);
+        }
+
+        {
+            let _s = tracing::info_span!("drift_half").entered();
+            advector.drift(repr, dt / 2.0);
+        }
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

@@ -175,6 +175,13 @@ impl SimulationBuilder {
         self
     }
 
+    pub fn cfl_factor(mut self, cfl: f64) -> Self {
+        let mut opts = self.opts.unwrap_or_default();
+        opts.cfl_factor = cfl;
+        self.opts = Some(opts);
+        self
+    }
+
     /// Validate all required fields are set, initialise repr from IC snapshot.
     pub fn build(self) -> anyhow::Result<Simulation> {
         use crate::tooling::core::algos::uniform::UniformGrid6D;

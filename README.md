@@ -16,183 +16,195 @@ The library provides a pluggable architecture where the phase-space representati
 
 N-body simulations sample the distribution function with discrete particles. This introduces noise and artificial two-body relaxation that destroys exactly the structures a collisionless solver should preserve: caustic surfaces, thin phase-space streams, and the true velocity distribution at any point. caustic solves the governing equation directly — no particles, no sampling noise, no artificial collisionality.
 
-## Architecture
-
-| Layer | Components |
-|---|---|
-| **Orchestration** | `TimeIntegrator` — Strang splitting, Yoshida, RK4 |
-| **Core solvers** | `Advector` (semi-Lagrangian, spectral, finite volume) · `PoissonSolver` (FFT, multigrid, tree) · `PhaseSpaceRepresentation` (grid, sheet, tensor, spectral, hybrid) |
-| **Supporting** | `InitialConditions` · `Diagnostics` · `IOManager` |
-
-### Core modules
-
-| Module | Purpose |
-|---|---|
-| `caustic::representation` | Phase-space storage and queries. Trait-based — implement `PhaseSpaceRepr` for your own representation. Ships with `UniformGrid6D` and (WIP) `TensorTrain`, `SheetTracker`. |
-| `caustic::poisson` | 3D Poisson solvers. `FftPoisson` (periodic), `FftIsolated` (zero-padded), `Multigrid`. |
-| `caustic::advect` | 6D advection step. `SemiLagrangian`, `SpectralAdvector`. |
-| `caustic::integrate` | Time-stepping orchestration. `StrangSplitting`, `YoshidaSplitting`. |
-| `caustic::initial` | Initial condition library. Plummer, King, Hernquist, NFW, Zeldovich cosmological, disk equilibria, custom callables. |
-| `caustic::diagnostics` | Conservation monitors (energy, momentum, Casimir C₂, entropy), moment computation, stream counting. |
-| `caustic::io` | HDF5 snapshot I/O and checkpoint/restart. |
-
 ## Quick start
 
 Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-caustic = "0.1"
+caustic = "0.0.4"
 ```
 
 ### Minimal example: Plummer sphere equilibrium
 
 ```rust
 use caustic::prelude::*;
+use caustic::{
+    FftPoisson, PlummerIC, SemiLagrangian, StrangSplitting,
+    SpatialBoundType, VelocityBoundType, sample_on_grid,
+};
 
-fn main() -> Result<(), CausticError> {
-    // Define the computational domain
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let domain = Domain::builder()
         .spatial_extent(20.0)      // [-20, 20]^3 in natural units
         .velocity_extent(3.0)      // [-3, 3]^3
-        .spatial_resolution(64)    // 64^3 spatial grid
-        .velocity_resolution(64)   // 64^3 velocity grid
-        .boundary(Boundary::Isolated)
+        .spatial_resolution(32)    // 32^3 spatial grid
+        .velocity_resolution(32)   // 32^3 velocity grid
+        .t_final(50.0)
+        .spatial_bc(SpatialBoundType::Periodic)
+        .velocity_bc(VelocityBoundType::Open)
         .build()?;
 
-    // Set up a Plummer sphere equilibrium
-    let ic = PlummerModel::new()
-        .mass(1.0)
-        .scale_radius(1.0)
-        .build();
+    // Set up a Plummer sphere: mass=1, scale_radius=1, G=1
+    let ic = PlummerIC::new(1.0, 1.0, 1.0);
+    let snap = sample_on_grid(&ic, &domain);
 
-    // Choose solver components
-    let repr = UniformGrid6D::new(&domain);
-    let poisson = FftIsolated::new(&domain);
-    let advector = SemiLagrangian::new();
-    let integrator = StrangSplitting::new();
-
-    // Build the simulation
+    let poisson = FftPoisson::new(&domain);
     let mut sim = Simulation::builder()
         .domain(domain)
-        .representation(repr)
         .poisson_solver(poisson)
-        .advector(advector)
-        .integrator(integrator)
-        .initial_conditions(ic)
-        .time_final(50.0)          // 50 dynamical times
-        .output_interval(1.0)
-        .exit_on_energy_drift(1e-4)
+        .advector(SemiLagrangian::new())
+        .integrator(StrangSplitting::new(1.0))
+        .initial_conditions(snap)
+        .time_final(50.0)
         .build()?;
 
-    // Run
-    sim.run()?;
-
+    let exit = sim.run()?;
+    exit.print_summary();
     Ok(())
 }
 ```
 
-### Custom initial conditions
+## Architecture
 
-```rust
-use caustic::prelude::*;
+Each solver component is a Rust trait; implementations are swapped independently:
 
-let ic = CustomIC::from_fn(|x, v| {
-    // Two overlapping Gaussians — a simple merger setup
-    let r1_sq = (x[0] - 3.0).powi(2) + x[1].powi(2) + x[2].powi(2);
-    let r2_sq = (x[0] + 3.0).powi(2) + x[1].powi(2) + x[2].powi(2);
-    let v_sq = v[0].powi(2) + v[1].powi(2) + v[2].powi(2);
-    let sigma = 0.5;
+| Trait | Role | Implementations |
+|---|---|---|
+| `PhaseSpaceRepr` | Store and query f(x,v) | `UniformGrid6D` (rayon-parallelized) |
+| `PoissonSolver` | Solve nabla^2 Phi = 4piG rho | `FftPoisson` (periodic, R2C), `FftIsolated` (Hockney-Eastwood zero-padding) |
+| `Advector` | Advance f by dt | `SemiLagrangian` (Catmull-Rom interpolation) |
+| `TimeIntegrator` | Orchestrate operator splitting | `StrangSplitting` (2nd-order), `LieSplitting` (1st-order), `YoshidaSplitting` (4th-order) |
 
-    let f1 = (-r1_sq / 2.0).exp() * (-v_sq / (2.0 * sigma * sigma)).exp();
-    let f2 = (-r2_sq / 2.0).exp() * (-v_sq / (2.0 * sigma * sigma)).exp();
-    f1 + f2
-});
-```
+### The `PhaseSpaceRepr` trait
 
-## Representations
-
-The central algorithmic challenge is representing a 6D function efficiently. caustic treats this as a trait so that novel representations can be developed and benchmarked within the same framework:
+The central abstraction. All phase-space storage strategies implement this interface:
 
 ```rust
 pub trait PhaseSpaceRepr: Send + Sync {
-    /// Integrate f over all velocities to produce the 3D density field.
+    /// Integrate f over all velocities: rho(x) = integral f dv^3.
     fn compute_density(&self) -> DensityField;
 
-    /// Advect f in spatial coordinates by displacement field.
+    /// Drift sub-step: advect f in spatial coordinates by dx = v*dt.
     fn advect_x(&mut self, displacement: &DisplacementField, dt: f64);
 
-    /// Advect f in velocity coordinates by acceleration field.
+    /// Kick sub-step: advect f in velocity coordinates by dv = g*dt.
     fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64);
 
-    /// Compute a velocity moment of order `n` at spatial position.
+    /// Compute velocity moment of order n at given spatial position.
     fn moment(&self, position: &[f64; 3], order: usize) -> Tensor;
 
-    /// Total mass (integral of f over all phase space).
+    /// Total mass M = integral f dx^3 dv^3.
     fn total_mass(&self) -> f64;
 
-    /// Casimir invariant C_2 = ∫ f² dx³ dv³.
+    /// Casimir invariant C_2 = integral f^2 dx^3 dv^3.
     fn casimir_c2(&self) -> f64;
+
+    /// Boltzmann entropy S = -integral f ln f dx^3 dv^3.
+    fn entropy(&self) -> f64;
+
+    /// Number of distinct velocity streams at each spatial point.
+    fn stream_count(&self) -> StreamCountField;
+
+    /// Extract the local velocity distribution f(v|x) at a given position.
+    fn velocity_distribution(&self, position: &[f64; 3]) -> Vec<f64>;
+
+    /// Total kinetic energy T = 1/2 integral f v^2 dx^3 dv^3.
+    fn total_kinetic_energy(&self) -> f64;
+
+    /// Extract a full 6D snapshot of the current state.
+    fn to_snapshot(&self, time: f64) -> PhaseSpaceSnapshot;
 }
 ```
 
-### Shipped representations
+## Initial conditions
 
-- **`UniformGrid6D`** — brute-force uniform grid. Simple, correct, useful for validation. Memory: O(N⁶).
-- **`TensorTrain`** *(work in progress)* — low-rank tensor decomposition exploiting compressibility. Memory: O(N³ r³) where r is the rank.
-- **`SheetTracker`** *(work in progress)* — Lagrangian sheet representation for cold (dark matter) initial conditions. Memory: O(N³).
+All implemented ICs satisfy the `IsolatedEquilibrium` trait and can be sampled onto a grid with `sample_on_grid()`:
 
-## Validation
+- **`PlummerIC`** — Plummer sphere via analytic distribution function f(E)
+- **`KingIC`** — King model via Poisson-Boltzmann ODE (RK4 integration)
+- **`HernquistIC`** — Hernquist profile via closed-form f(E)
+- **`NfwIC`** — NFW profile via numerical Eddington inversion
+- **`ZeldovichSingleMode`** — single-mode Zel'dovich pancake (cosmological)
+- **`MergerIC`** — two-body superposition f = f_1 + f_2 with offsets
+- **`TidalIC`** — progenitor equilibrium model in an external host potential
+- **`CustomIC`** / **`CustomICArray`** — user-provided callable or pre-computed array
 
-caustic includes a built-in test suite against known analytic solutions:
+## Diagnostics
 
-```bash
-cargo test --release -- --test-threads=1
-```
+Conserved quantities monitored each timestep via `GlobalDiagnostics`:
 
-| Test | What it validates |
+- Total energy (kinetic + potential), momentum, angular momentum
+- Casimir C_2, Boltzmann entropy
+- Virial ratio, total mass in box
+- Density profile (radial binning)
+
+Additional output modules: `VelocityMoments` (surface density, J-factor), `PhaseSpaceDiagnostics` (power spectrum, growth rates), `CausticDetector` (caustic surface detection, first caustic time).
+
+## Validation suite
+
+Run with `cargo test --release -- --test-threads=1`:
+
+| Test | Validates |
 |---|---|
-| `free_streaming` | Spatial advection accuracy (G=0) |
+| `free_streaming` | Spatial advection accuracy (G=0, f shifts as f(x-vt, v, 0)) |
 | `uniform_acceleration` | Velocity advection accuracy |
-| `jeans_instability` | Self-consistent gravitational coupling |
+| `jeans_instability` | Growth rate matches analytic dispersion relation |
+| `jeans_stability` | Sub-Jeans perturbation does not grow |
 | `plummer_equilibrium` | Long-term equilibrium preservation |
-| `zeldovich_pancake` | Cosmological dynamics, caustic formation |
-| `conservation` | Energy, momentum, Casimir invariant conservation |
+| `zeldovich_pancake` | Caustic position matches analytic Zel'dovich solution |
+| `spherical_collapse` | Spherical overdensity collapse dynamics |
+| `conservation_laws` | Energy, momentum, C_2 conservation to tolerance |
+| `landau_damping` | Damping rate matches analytic Landau rate |
+
+Plus 2 integration tests (`smoke_test`, `end_to_end_run`) exercising the full pipeline from `Domain` through `Simulation::run()` to `ExitPackage`.
 
 ## Feature flags
 
 ```toml
 [dependencies]
-caustic = { version = "0.1", features = ["hdf5", "mpi", "cosmological"] }
+caustic = { version = "0.0.4", features = ["jemalloc"] }
 ```
 
 | Flag | Description |
 |---|---|
-| `hdf5` | Enable HDF5 snapshot I/O (requires libhdf5) |
-| `mpi` | Distributed-memory parallelism via MPI |
-| `cosmological` | Comoving coordinates, expansion factor, Zel'dovich ICs |
-| `simd` | Explicit SIMD vectorization for advection kernels |
+| `jemalloc` | jemalloc global allocator via `tikv-jemallocator` |
+| `mimalloc-alloc` | mimalloc global allocator |
+| `dhat-heap` | Heap profiling via `dhat` |
+| `tracy` | Tracy profiler integration via `tracing-tracy` |
+
+## Performance
+
+- **Parallelism**: rayon data parallelism across all hot paths (`compute_density`, `advect_x`, `advect_v`, FFT axes)
+- **Release profile**: fat LTO, `codegen-units = 1`, `target-cpu=native` (via `.cargo/config.toml`)
+- **Benchmarks**: criterion benchmarks (`cargo bench`), benchmark binary: `solver_kernels`
+- **Instrumentation**: `tracing::info_span!` on all hot methods (zero overhead without a subscriber)
+- **Profiling profile**: `[profile.profiling]` inherits release with debug symbols for `perf`/`samply`
 
 ## Roadmap
 
-- [ ] Uniform 6D grid representation
-- [ ] FFT Poisson solver (periodic + isolated)
-- [ ] Semi-Lagrangian advection with Strang splitting
-- [ ] Plummer, King, Hernquist initial conditions
-- [ ] Energy/momentum/Casimir conservation diagnostics
-- [ ] Tensor-train representation
-- [ ] Sheet-tracking representation for cold ICs
-- [ ] Hybrid sheet/grid representation
-- [ ] Spectral velocity-space (Hermite) representation
-- [ ] Multigrid Poisson solver
-- [ ] Adaptive time-stepping
+- [x] Uniform 6D grid with rayon parallelism
+- [x] FFT Poisson (periodic + Hockney-Eastwood isolated)
+- [x] Semi-Lagrangian advection (Catmull-Rom) + Strang/Lie/Yoshida splitting
+- [x] Isolated equilibrium ICs (Plummer, King, Hernquist, NFW)
+- [x] Cosmological, merger, tidal, and custom ICs
+- [x] Conservation diagnostics + 11-test validation suite
+- [x] Criterion benchmarks + tracing instrumentation
+- [x] Binary snapshot I/O, CSV diagnostics, JSON checkpoints
+- [ ] Tensor-train low-rank representation
+- [ ] Lagrangian sheet tracker for cold dark matter
+- [ ] Multigrid / spherical harmonics Poisson solvers
+- [ ] Adaptive mesh refinement
+- [ ] GPU acceleration
 - [ ] MPI domain decomposition
-- [ ] Cosmological (comoving) mode
-- [ ] GPU acceleration (wgpu compute shaders)
+
+## Companion: phasma
+
+[phasma](https://github.com/resonant-jovian/phasma) is a ratatui-based terminal UI that consumes caustic as a library dependency. It provides interactive parameter editing, live diagnostics rendering, density/phase-space heatmaps, energy conservation plots, and radial profile charts — all from the terminal. phasma contains no solver logic; it delegates entirely to caustic.
 
 ## Minimum supported Rust version
 
-caustic targets **stable Rust 1.75+**.
+Rust edition 2024, targeting **stable Rust 1.75+**.
 
 ## License
 

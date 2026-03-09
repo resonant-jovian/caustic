@@ -79,7 +79,7 @@ fn cubic_spline_interpolate_open(data: &[f64], x: f64, n: usize) -> f64 {
 /// - `n`: number of cells
 /// - `l`: half-extent of the domain
 /// - `periodic`: true → wrap-around; false → absorbing (out-of-bounds → 0)
-pub(crate) fn sl_shift_1d(
+pub fn sl_shift_1d(
     data: &[f64],
     disp: f64,
     cell_size: f64,

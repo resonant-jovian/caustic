@@ -50,11 +50,11 @@ pub trait PhaseSpaceRepr: Send + Sync {
 
     /// Total kinetic energy T = ½∫fv² dx³dv³.
     fn total_kinetic_energy(&self) -> f64 {
-        todo!("total_kinetic_energy not implemented for this PhaseSpaceRepr")
+        panic!("total_kinetic_energy must be implemented by PhaseSpaceRepr impl")
     }
 
     /// Extract a full 6D snapshot of the current state.
     fn to_snapshot(&self, time: f64) -> PhaseSpaceSnapshot {
-        todo!("to_snapshot not implemented for this PhaseSpaceRepr")
+        panic!("to_snapshot must be implemented by PhaseSpaceRepr impl")
     }
 }

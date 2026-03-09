@@ -44,9 +44,39 @@ impl ExitPackage {
         }
     }
 
-    /// Write all fields: snapshot HDF5, diagnostics CSV, exit metadata JSON.
+    /// Write all fields: snapshot binary, diagnostics CSV, exit metadata JSON.
     pub fn save(&self, io: &IOManager) -> anyhow::Result<()> {
-        todo!("write snapshot HDF5, diagnostics CSV, exit metadata JSON")
+        use std::io::Write;
+
+        // 1. Save final snapshot
+        io.save_snapshot(&self.final_snapshot, "final_snapshot.bin")?;
+
+        // 2. Write diagnostics CSV
+        for row in &self.diagnostics_history {
+            io.append_diagnostics(row)?;
+        }
+
+        // 3. Write exit metadata JSON
+        let metadata = serde_json::json!({
+            "exit_reason": format!("{:?}", self.exit_reason),
+            "exit_message": self.exit_message,
+            "total_steps": self.total_steps,
+            "wall_clock_seconds": self.wall_clock_seconds,
+            "peak_memory_bytes": self.peak_memory_bytes,
+            "conservation": {
+                "max_energy_drift": self.conservation_summary.max_energy_drift,
+                "max_momentum_drift": self.conservation_summary.max_momentum_drift,
+                "max_angular_momentum_drift": self.conservation_summary.max_angular_momentum_drift,
+                "max_casimir_drift": self.conservation_summary.max_casimir_drift,
+            }
+        });
+
+        std::fs::create_dir_all(&io.output_dir)?;
+        let path = io.output_dir.join("exit_metadata.json");
+        let mut file = std::fs::File::create(path)?;
+        file.write_all(serde_json::to_string_pretty(&metadata)?.as_bytes())?;
+
+        Ok(())
     }
 
     /// Print human-readable conservation errors and performance statistics.

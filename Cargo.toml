@@ -1,6 +1,6 @@
 [package]
 name = "caustic"
-version = "0.0.3"
+version = "0.0.4"
 edition = "2024"
 description = "A General-Purpose 6D Collisionless Gravitational Dynamics Solver"
 authors = ["Albin <albin@sjoegren.se>"]
@@ -13,9 +13,44 @@ rust_decimal = "1.40.0" # High accuracy float handling
 anyhow = "1.0.102"  # Error handling
 thiserror = "2.0.18" # Error handling
 rustfft = "6.4.1"   # FFT Poisson solver
-# rayon   = "1.11.0"   # data-parallel loops over 6D grid
+rayon = "1.11.0"     # data-parallel loops over 6D grid
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+realfft = "3.5.0"    # Real-to-complex FFT (Hermitian symmetry)
+tracing = "0.1"      # Zero-cost instrumentation spans
 # hdf5-metno = { version = "0.12.3", optional = true }   # behind `[features] hdf5 = [...]`
 # ndarray = "0.17.2"    # for tensor-train milestone
 
+# Optional allocator / profiling deps behind feature flags
+dhat = { version = "0.3", optional = true }
+tikv-jemallocator = { version = "0.6", optional = true }
+mimalloc = { version = "0.1", optional = true }
+tracing-tracy = { version = "0.11", optional = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[features]
+default = []
+jemalloc = ["dep:tikv-jemallocator"]
+mimalloc-alloc = ["dep:mimalloc"]
+dhat-heap = ["dep:dhat"]
+tracy = ["dep:tracing-tracy"]
+
+[[bench]]
+name = "solver_kernels"
+harness = false
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = "none"
+
 [lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"

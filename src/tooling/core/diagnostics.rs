@@ -3,9 +3,10 @@
 
 use super::phasespace::PhaseSpaceRepr;
 use super::types::{DensityField, PotentialField};
+use serde::Serialize;
 
 /// One row of the global time-series output.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize)]
 pub struct GlobalDiagnostics {
     pub time: f64,
     pub total_energy: f64,
@@ -85,7 +86,44 @@ impl Diagnostics {
     }
 
     /// Spherically averaged density profile ρ(r) at current timestep.
-    pub fn density_profile(density: &DensityField) -> Vec<(f64, f64)> {
-        todo!("bin by radius, average")
+    /// Bins density cells by radius from domain centre, returns (r_bin, ρ_avg) pairs.
+    pub fn density_profile(density: &DensityField, dx: [f64; 3]) -> Vec<(f64, f64)> {
+        let [nx, ny, nz] = density.shape;
+        let cx = nx as f64 / 2.0;
+        let cy = ny as f64 / 2.0;
+        let cz = nz as f64 / 2.0;
+
+        // Determine maximum radius and bin width
+        let r_max = (cx * dx[0]).min(cy * dx[1]).min(cz * dx[2]);
+        let n_bins = (nx.max(ny).max(nz) / 2).max(1);
+        let dr = r_max / n_bins as f64;
+
+        let mut bin_sum = vec![0.0f64; n_bins];
+        let mut bin_count = vec![0u64; n_bins];
+
+        for ix in 0..nx {
+            for iy in 0..ny {
+                for iz in 0..nz {
+                    let rx = (ix as f64 + 0.5 - cx) * dx[0];
+                    let ry = (iy as f64 + 0.5 - cy) * dx[1];
+                    let rz = (iz as f64 + 0.5 - cz) * dx[2];
+                    let r = (rx * rx + ry * ry + rz * rz).sqrt();
+                    let bin = (r / dr) as usize;
+                    if bin < n_bins {
+                        bin_sum[bin] += density.data[ix * ny * nz + iy * nz + iz];
+                        bin_count[bin] += 1;
+                    }
+                }
+            }
+        }
+
+        (0..n_bins)
+            .filter(|&i| bin_count[i] > 0)
+            .map(|i| {
+                let r = (i as f64 + 0.5) * dr;
+                let rho_avg = bin_sum[i] / bin_count[i] as f64;
+                (r, rho_avg)
+            })
+            .collect()
     }
 }

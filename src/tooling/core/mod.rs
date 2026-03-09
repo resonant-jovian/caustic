@@ -1,8 +1,8 @@
 pub(crate) mod advecator;
-pub(crate) mod algos;
+pub mod algos;
 pub(crate) mod conditions;
 pub(crate) mod diagnostics;
-pub(crate) mod init;
+pub mod init;
 pub(crate) mod integrator;
 pub(crate) mod io;
 pub(crate) mod output;
