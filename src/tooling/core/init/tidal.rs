@@ -3,6 +3,7 @@
 use super::super::types::PhaseSpaceSnapshot;
 use super::domain::Domain;
 use super::isolated::IsolatedEquilibrium;
+use rust_decimal::prelude::ToPrimitive;
 
 /// Tidal stream IC: progenitor cluster on an orbit in an external host potential.
 pub struct TidalIC {
@@ -20,17 +21,100 @@ impl TidalIC {
         progenitor_position: [f64; 3],
         progenitor_velocity: [f64; 3],
     ) -> Self {
-        todo!()
+        Self {
+            host_potential,
+            progenitor,
+            progenitor_position,
+            progenitor_velocity,
+        }
     }
 
     /// Sample progenitor f centred on (progenitor_position, progenitor_velocity).
+    ///
+    /// At each (x, v) grid point: compute position and velocity relative to the
+    /// progenitor centre, evaluate energy in progenitor's rest frame, then use the
+    /// progenitor's distribution function.
     pub fn sample_on_grid(&self, domain: &Domain) -> PhaseSpaceSnapshot {
-        todo!()
+        let nx1 = domain.spatial_res.x1 as usize;
+        let nx2 = domain.spatial_res.x2 as usize;
+        let nx3 = domain.spatial_res.x3 as usize;
+        let nv1 = domain.velocity_res.v1 as usize;
+        let nv2 = domain.velocity_res.v2 as usize;
+        let nv3 = domain.velocity_res.v3 as usize;
+
+        let dx = domain.dx();
+        let dv = domain.dv();
+        let lx = [
+            domain.spatial.x1.to_f64().unwrap(),
+            domain.spatial.x2.to_f64().unwrap(),
+            domain.spatial.x3.to_f64().unwrap(),
+        ];
+        let lv = [
+            domain.velocity.v1.to_f64().unwrap(),
+            domain.velocity.v2.to_f64().unwrap(),
+            domain.velocity.v3.to_f64().unwrap(),
+        ];
+
+        let pos = self.progenitor_position;
+        let vel = self.progenitor_velocity;
+
+        let s_v3 = 1usize;
+        let s_v2 = nv3;
+        let s_v1 = nv2 * nv3;
+        let s_x3 = nv1 * s_v1;
+        let s_x2 = nx3 * s_x3;
+        let s_x1 = nx2 * s_x2;
+
+        let total = nx1 * nx2 * nx3 * nv1 * nv2 * nv3;
+        let mut data = vec![0.0f64; total];
+
+        for ix1 in 0..nx1 {
+            let x1 = -lx[0] + (ix1 as f64 + 0.5) * dx[0];
+            for ix2 in 0..nx2 {
+                let x2 = -lx[1] + (ix2 as f64 + 0.5) * dx[1];
+                for ix3 in 0..nx3 {
+                    let x3 = -lx[2] + (ix3 as f64 + 0.5) * dx[2];
+                    let base = ix1 * s_x1 + ix2 * s_x2 + ix3 * s_x3;
+
+                    // Position relative to progenitor centre
+                    let x_rel = [x1 - pos[0], x2 - pos[1], x3 - pos[2]];
+                    let r =
+                        (x_rel[0] * x_rel[0] + x_rel[1] * x_rel[1] + x_rel[2] * x_rel[2]).sqrt();
+                    let phi = self.progenitor.potential(r);
+
+                    for iv1 in 0..nv1 {
+                        let v1 = -lv[0] + (iv1 as f64 + 0.5) * dv[0];
+                        for iv2 in 0..nv2 {
+                            let v2 = -lv[1] + (iv2 as f64 + 0.5) * dv[1];
+                            for iv3 in 0..nv3 {
+                                let v3 = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
+
+                                // Velocity relative to progenitor
+                                let dv1 = v1 - vel[0];
+                                let dv2 = v2 - vel[1];
+                                let dv3 = v3 - vel[2];
+                                let v2sq = dv1 * dv1 + dv2 * dv2 + dv3 * dv3;
+                                let energy = 0.5 * v2sq + phi;
+                                let f = self.progenitor.distribution_function(energy, 0.0).max(0.0);
+                                data[base + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3] = f;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        PhaseSpaceSnapshot {
+            data,
+            shape: [nx1, nx2, nx3, nv1, nv2, nv3],
+            time: 0.0,
+        }
     }
 
-    /// Compute escape velocity from progenitor at given galactocentric radius r.
-    /// Particles outside this radius are tidal debris.
+    /// Compute escape velocity from host potential at given galactocentric radius r.
+    /// Particles with velocity > v_esc at radius r are tidal debris.
     pub fn escape_velocity(&self, r: f64) -> f64 {
-        todo!()
+        let phi = (self.host_potential)([r, 0.0, 0.0]);
+        (2.0 * phi.abs()).sqrt()
     }
 }

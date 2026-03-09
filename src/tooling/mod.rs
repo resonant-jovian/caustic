@@ -1,2 +1,2 @@
-pub(crate) mod core;
+pub mod core;
 pub(crate) mod validation;

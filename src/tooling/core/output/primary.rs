@@ -13,7 +13,30 @@ pub struct PrimarySnapshot {
 
 impl PrimarySnapshot {
     /// Collect all primary fields into a snapshot struct.
+    ///
+    /// Computes density from repr and clones potential. Acceleration is left
+    /// empty (no solver available in this signature — caller should populate
+    /// separately if needed).
     pub fn capture(repr: &dyn PhaseSpaceRepr, potential: &PotentialField, time: f64) -> Self {
-        todo!("collect all fields into snapshot struct")
+        let density = repr.compute_density();
+        let n = density.data.len();
+        let shape = density.shape;
+        let distribution = repr.to_snapshot(time);
+
+        Self {
+            distribution,
+            potential: PotentialField {
+                data: potential.data.clone(),
+                shape: potential.shape,
+            },
+            density,
+            acceleration: AccelerationField {
+                gx: vec![0.0; n],
+                gy: vec![0.0; n],
+                gz: vec![0.0; n],
+                shape,
+            },
+            time,
+        }
     }
 }

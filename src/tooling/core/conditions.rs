@@ -2,6 +2,7 @@
 //! the simulation should terminate.
 
 use super::diagnostics::GlobalDiagnostics;
+use std::cell::Cell;
 
 /// Reason why the simulation terminated.
 #[derive(Debug, Clone)]
@@ -122,14 +123,39 @@ impl ExitCondition for WallClockCondition {
 }
 
 /// Exit when `‖∂f/∂t‖ < threshold` (steady state reached).
+/// Uses interior mutability (Cell) to track previous entropy across calls,
+/// since the trait takes `&self`.
 pub struct SteadyStateCondition {
     pub threshold: f64,
+    prev_entropy: Cell<Option<f64>>,
+}
+
+impl SteadyStateCondition {
+    pub fn new(threshold: f64) -> Self {
+        Self {
+            threshold,
+            prev_entropy: Cell::new(None),
+        }
+    }
 }
 
 impl ExitCondition for SteadyStateCondition {
     fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics) -> Option<ExitReason> {
-        // Approximated by entropy rate of change: if entropy is nearly constant, steady state
-        // For now, placeholder — needs history of entropy values
+        let current = diag.entropy;
+        if let Some(prev) = self.prev_entropy.get() {
+            let dt = diag.time; // Approximate: use absolute time as proxy
+            let rate = if dt > 1e-30 {
+                (current - prev).abs() / dt
+            } else {
+                f64::MAX
+            };
+            self.prev_entropy.set(Some(current));
+            if rate < self.threshold {
+                return Some(ExitReason::SteadyState);
+            }
+        } else {
+            self.prev_entropy.set(Some(current));
+        }
         None
     }
 }
@@ -151,8 +177,8 @@ pub struct CausticFormationCondition;
 
 impl ExitCondition for CausticFormationCondition {
     fn check(&self, _diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics) -> Option<ExitReason> {
-        // Stream count field is not stored in GlobalDiagnostics; requires repr access
-        // For now: not implemented as a standalone exit condition
+        // Stream count field is not stored in GlobalDiagnostics; requires repr access.
+        // Deferred until max_stream_count is added to GlobalDiagnostics.
         None
     }
 }

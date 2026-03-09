@@ -10,6 +10,20 @@ pub struct VelocityCfl {
 impl VelocityCfl {
     /// Maximum stable velocity timestep: Δt = cfl_factor × min(Δv) / max|g|.
     pub fn max_dt(&self, domain: &Domain, accel: &AccelerationField) -> f64 {
-        todo!("dt = cfl_factor * min(dv) / max|g|")
+        let dv = domain.dv();
+        let min_dv = dv[0].min(dv[1]).min(dv[2]);
+
+        let g_max = accel
+            .gx
+            .iter()
+            .zip(accel.gy.iter())
+            .zip(accel.gz.iter())
+            .map(|((&gx, &gy), &gz)| (gx * gx + gy * gy + gz * gz).sqrt())
+            .fold(0.0_f64, f64::max);
+
+        if g_max <= 0.0 {
+            return 1e10;
+        }
+        self.cfl_factor * min_dv / g_max
     }
 }

@@ -4,8 +4,24 @@
 #![allow(unused_variables)]
 #![allow(unused_imports)]
 
+// Feature-gated global allocators
+#[cfg(feature = "jemalloc")]
+#[allow(unsafe_code)]
+#[global_allocator]
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+#[cfg(feature = "mimalloc-alloc")]
+#[allow(unsafe_code)]
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+#[cfg(feature = "dhat-heap")]
+#[allow(unsafe_code)]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 pub(crate) mod sim;
-pub(crate) mod tooling;
+pub mod tooling;
 
 pub use sim::Simulation;
 pub use tooling::core::advecator::Advector;
@@ -19,11 +35,13 @@ pub use tooling::core::types::*;
 // Concrete implementations — needed by phasma and other binary consumers
 pub use tooling::core::algos::lagrangian::SemiLagrangian;
 pub use tooling::core::diagnostics::GlobalDiagnostics;
-pub use tooling::core::poisson::fft::FftPoisson;
-pub use tooling::core::time::strang::StrangSplitting;
-pub use tooling::core::init::domain::{SpatialBoundType, VelocityBoundType};
-pub use tooling::core::init::isolated::{PlummerIC, KingIC, HernquistIC, NfwIC, sample_on_grid};
 pub use tooling::core::init::cosmological::ZeldovichIC;
+pub use tooling::core::init::domain::{SpatialBoundType, VelocityBoundType};
+pub use tooling::core::init::isolated::{HernquistIC, KingIC, NfwIC, PlummerIC, sample_on_grid};
+pub use tooling::core::poisson::fft::{FftIsolated, FftPoisson};
+pub use tooling::core::time::lie::LieSplitting;
+pub use tooling::core::time::strang::StrangSplitting;
+pub use tooling::core::time::yoshida::YoshidaSplitting;
 
 /// Top-level error type for caustic operations.
 #[derive(Debug, thiserror::Error)]

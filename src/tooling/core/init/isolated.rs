@@ -62,38 +62,215 @@ impl IsolatedEquilibrium for PlummerIC {
 }
 
 /// King (1966) lowered Maxwellian: f(E) ∝ (e^((E₀−E)/σ²) − 1) for E < E₀.
+/// Requires solving the Poisson-Boltzmann ODE from r=0 outward to find the
+/// tidal radius r_t where Φ(r_t) = E₀.
 pub struct KingIC {
     pub mass: f64,
     /// Dimensionless King concentration W₀ = Φ(0)/σ².
     pub king_parameter_w0: f64,
     pub velocity_dispersion: f64,
+    /// Tabulated radius values from ODE integration.
+    r_table: Vec<f64>,
+    /// Tabulated density ρ(r) from ODE integration.
+    rho_table: Vec<f64>,
+    /// Tabulated potential Φ(r) from ODE integration (dimensionless W(r)).
+    phi_table: Vec<f64>,
+    /// Normalisation constant A for the DF.
+    norm_a: f64,
+    /// Tidal (boundary) energy E₀ = Φ(r_t).
+    e0: f64,
+    /// Gravitational constant.
+    pub g: f64,
+}
+
+/// Single RK4 step for (y, dy/dr) given f(r, y, dy).
+fn rk4_step(r: f64, y: f64, dy: f64, h: f64, rhs: &dyn Fn(f64, f64, f64) -> f64) -> (f64, f64) {
+    let k1y = dy;
+    let k1d = rhs(r, y, dy);
+    let k2y = dy + 0.5 * h * k1d;
+    let k2d = rhs(r + 0.5 * h, y + 0.5 * h * k1y, dy + 0.5 * h * k1d);
+    let k3y = dy + 0.5 * h * k2d;
+    let k3d = rhs(r + 0.5 * h, y + 0.5 * h * k2y, dy + 0.5 * h * k2d);
+    let k4y = dy + h * k3d;
+    let k4d = rhs(r + h, y + h * k3y, dy + h * k3d);
+    let y_new = y + h / 6.0 * (k1y + 2.0 * k2y + 2.0 * k3y + k4y);
+    let dy_new = dy + h / 6.0 * (k1d + 2.0 * k2d + 2.0 * k3d + k4d);
+    (y_new, dy_new)
 }
 
 impl KingIC {
-    pub fn new(mass: f64, king_parameter_w0: f64, velocity_dispersion: f64) -> Self {
+    pub fn new(mass: f64, king_parameter_w0: f64, velocity_dispersion: f64, g: f64) -> Self {
+        use std::f64::consts::PI;
+        let sigma = velocity_dispersion;
+        let w0 = king_parameter_w0;
+
+        // Solve the dimensionless Poisson-Boltzmann equation:
+        //   W''(r) + (2/r)W'(r) = -9/sigma² * rho(W)
+        // where W(r) = (Φ(r_t) - Φ(r))/σ² is the dimensionless potential
+        // and rho(W) = e^W * erf(sqrt(W)) - sqrt(4W/π) * (1 + 2W/3)
+        // Boundary conditions: W(0) = W₀, W'(0) = 0
+
+        let n_steps = 10000;
+        let r_max_guess = 100.0; // will stop when W <= 0
+        let h = r_max_guess / n_steps as f64;
+
+        let king_rho = |w: f64| -> f64 {
+            if w <= 0.0 {
+                return 0.0;
+            }
+            let sw = w.sqrt();
+            // ρ_king(W) ∝ e^W erf(√W) - √(4W/π)(1 + 2W/3)
+            let erf_val = erf_approx(sw);
+            let term1 = w.exp() * erf_val;
+            let term2 = (4.0 * w / PI).sqrt() * (1.0 + 2.0 * w / 3.0);
+            (term1 - term2).max(0.0)
+        };
+
+        let mut r_table = Vec::with_capacity(n_steps);
+        let mut w_table = Vec::with_capacity(n_steps);
+
+        let mut r = 1e-10; // avoid r=0 singularity
+        let mut w = w0;
+        let mut dw = 0.0; // W'(0) = 0
+
+        r_table.push(0.0);
+        w_table.push(w0);
+
+        // ODE: W'' = -2/r * W' - 9 * king_rho(W)
+        let rhs = |r: f64, w: f64, dw: f64| -> f64 {
+            if r < 1e-30 {
+                // L'Hôpital: at r=0, W'' = -3 * king_rho(W)
+                return -3.0 * king_rho(w);
+            }
+            -2.0 / r * dw - 9.0 * king_rho(w)
+        };
+
+        for _ in 0..n_steps {
+            let (w_new, dw_new) = rk4_step(r, w, dw, h, &rhs);
+            r += h;
+            w = w_new;
+            dw = dw_new;
+            r_table.push(r);
+            w_table.push(w.max(0.0));
+            if w <= 0.0 {
+                break;
+            }
+        }
+
+        let r_t = *r_table.last().unwrap(); // tidal radius
+
+        // Convert dimensionless W(r) to physical quantities
+        // Central potential: Φ(0) = -W₀ σ²,  Φ(r_t) = 0 (tidal boundary)
+        // Physical: Φ(r) = σ²(W(r) - W₀) ... but we set E₀ = Φ(r_t) = 0
+        // Actually: Φ(r) = -σ² * W(r) + Φ(r_t), and E₀ = Φ(r_t)
+
+        // Density normalisation: integrate ρ to get total mass
+        // ρ(r) ∝ king_rho(W(r)) — normalise to get total mass M
+        let mut mass_integral = 0.0;
+        for i in 1..r_table.len() {
+            let r_mid = 0.5 * (r_table[i - 1] + r_table[i]);
+            let rho_mid = king_rho(0.5 * (w_table[i - 1] + w_table[i]));
+            let dr = r_table[i] - r_table[i - 1];
+            mass_integral += 4.0 * PI * r_mid * r_mid * rho_mid * dr;
+        }
+
+        let rho_scale = if mass_integral > 1e-30 {
+            mass / mass_integral
+        } else {
+            1.0
+        };
+
+        // Build physical density table
+        let rho_table: Vec<f64> = w_table.iter().map(|&w| rho_scale * king_rho(w)).collect();
+
+        // Build physical potential table: Φ(r) = -σ² * W(r)
+        // (with convention Φ(r_t) = 0)
+        let phi_table: Vec<f64> = w_table.iter().map(|&w| -sigma * sigma * w).collect();
+        let e0 = 0.0; // E₀ = Φ(r_t) = 0
+
+        // DF normalisation: f(E) = A * (exp((E₀-E)/σ²) - 1)  for E < E₀
+        // A determined by consistency with density
+        let norm_a = rho_scale / (2.0 * PI * sigma * sigma).powf(1.5);
+
         Self {
             mass,
             king_parameter_w0,
-            velocity_dispersion,
+            velocity_dispersion: sigma,
+            r_table,
+            rho_table,
+            phi_table,
+            norm_a,
+            e0,
+            g,
         }
     }
 }
 
+/// Approximate error function (Abramowitz & Stegun 7.1.26, max error ~1.5e-7).
+fn erf_approx(x: f64) -> f64 {
+    let a1 = 0.254829592;
+    let a2 = -0.284496736;
+    let a3 = 1.421413741;
+    let a4 = -1.453152027;
+    let a5 = 1.061405429;
+    let p = 0.3275911;
+    let sign = if x < 0.0 { -1.0 } else { 1.0 };
+    let x = x.abs();
+    let t = 1.0 / (1.0 + p * x);
+    let y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * (-x * x).exp();
+    sign * y
+}
+
 impl IsolatedEquilibrium for KingIC {
-    fn distribution_function(&self, energy: f64, angular_momentum: f64) -> f64 {
-        todo!("numerically integrate King DF via Poisson-Boltzmann")
+    fn distribution_function(&self, energy: f64, _angular_momentum: f64) -> f64 {
+        if energy >= self.e0 {
+            return 0.0;
+        }
+        let sigma2 = self.velocity_dispersion * self.velocity_dispersion;
+        let arg = (self.e0 - energy) / sigma2;
+        if arg > 500.0 {
+            return 0.0; // overflow guard
+        }
+        self.norm_a * (arg.exp() - 1.0)
     }
 
     fn density_profile(&self, r: f64) -> f64 {
-        todo!("numerically integrate King DF for density")
+        interpolate_table(&self.r_table, &self.rho_table, r)
     }
 
     fn potential(&self, r: f64) -> f64 {
-        todo!("numerically integrate King Poisson-Boltzmann for potential")
+        interpolate_table(&self.r_table, &self.phi_table, r)
     }
 }
 
-/// Hernquist (1990): ρ ∝ 1/(r(r+a)³). More realistic halo profile.
+/// Linear interpolation on a sorted table.
+fn interpolate_table(x_table: &[f64], y_table: &[f64], x: f64) -> f64 {
+    if x_table.is_empty() {
+        return 0.0;
+    }
+    if x <= x_table[0] {
+        return y_table[0];
+    }
+    if x >= *x_table.last().unwrap() {
+        return *y_table.last().unwrap();
+    }
+    // Binary search for interval
+    let mut lo = 0;
+    let mut hi = x_table.len() - 1;
+    while hi - lo > 1 {
+        let mid = (lo + hi) / 2;
+        if x_table[mid] <= x {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let t = (x - x_table[lo]) / (x_table[hi] - x_table[lo]);
+    y_table[lo] + t * (y_table[hi] - y_table[lo])
+}
+
+/// Hernquist (1990): ρ ∝ 1/(r(r+a)³). More realistic cuspy halo profile.
+/// Closed-form DF from Hernquist 1990, eq. 17.
 pub struct HernquistIC {
     pub mass: f64,
     pub scale_radius: f64,
@@ -111,8 +288,31 @@ impl HernquistIC {
 }
 
 impl IsolatedEquilibrium for HernquistIC {
-    fn distribution_function(&self, energy: f64, angular_momentum: f64) -> f64 {
-        todo!("Hernquist DF via Eddington inversion")
+    fn distribution_function(&self, energy: f64, _angular_momentum: f64) -> f64 {
+        if energy >= 0.0 {
+            return 0.0;
+        }
+        use std::f64::consts::PI;
+        let m = self.mass;
+        let a = self.scale_radius;
+        let g = self.g;
+        // Hernquist (1990), eq. 17:
+        // f(E) = M / (8√2·π³·(GMa)^{3/2}) · 1/(1-q²)^{5/2}
+        //        · [3·arcsin(q) + q√(1-q²)·(1-2q²)·(8q⁴-8q²-3)]
+        // where q = √(-E·a/(GM))
+        let gm = g * m;
+        let q2 = -energy * a / gm;
+        if q2 <= 0.0 || q2 >= 1.0 {
+            return 0.0;
+        }
+        let q = q2.sqrt();
+        let omq2 = 1.0 - q2; // 1 - q²
+        let sqrt_omq2 = omq2.sqrt();
+        let prefactor = m / (8.0 * 2.0_f64.sqrt() * PI.powi(3) * (gm * a).powf(1.5));
+        let bracket =
+            3.0 * q.asin() + q * sqrt_omq2 * (1.0 - 2.0 * q2) * (8.0 * q2 * q2 - 8.0 * q2 - 3.0);
+        let f = prefactor * bracket / omq2.powf(2.5);
+        f.max(0.0)
     }
 
     fn density_profile(&self, r: f64) -> f64 {
@@ -126,39 +326,142 @@ impl IsolatedEquilibrium for HernquistIC {
     }
 }
 
-/// NFW (Navarro-Frenk-White): ρ ∝ 1/(r(r+rs)²).
-/// No analytic DF — use Eddington inversion numerically.
+/// NFW (Navarro-Frenk-White): ρ ∝ 1/(r/r_s · (1+r/r_s)²).
+/// DF computed via numerical Eddington inversion.
 pub struct NfwIC {
     pub mass: f64,
     pub scale_radius: f64,
     pub concentration: f64,
     pub g: f64,
+    /// Characteristic density ρ_s (derived from mass, r_s, concentration).
+    rho_s: f64,
+    /// Tabulated DF: (E, f(E)) pairs.
+    df_table_e: Vec<f64>,
+    df_table_f: Vec<f64>,
 }
 
 impl NfwIC {
     pub fn new(mass: f64, scale_radius: f64, concentration: f64, g: f64) -> Self {
+        use std::f64::consts::PI;
+        let rs = scale_radius;
+        let c = concentration;
+
+        // ρ_s from mass within r_vir = c·r_s:
+        // M = 4π ρ_s r_s³ [ln(1+c) - c/(1+c)]
+        let ln_factor = (1.0 + c).ln() - c / (1.0 + c);
+        let rho_s = mass / (4.0 * PI * rs.powi(3) * ln_factor);
+
+        // Build DF table via Eddington inversion:
+        // f(E) = 1/(√8·π²) ∫₀ᴱ (d²ρ/dΦ²) / √(E-Φ) dΦ
+        // We need ρ(Φ) by inverting Φ(r), then d²ρ/dΦ² numerically.
+
+        // 1. Tabulate r, Φ(r), ρ(r) from r_min to r_max
+        let r_vir = c * rs;
+        let r_min = 0.001 * rs;
+        let r_max = 10.0 * r_vir;
+        let n_tab = 2000;
+
+        let phi_of_r =
+            |r: f64| -> f64 { -4.0 * PI * g * rho_s * rs.powi(3) * (1.0 + r / rs).ln() / r };
+        let rho_of_r = |r: f64| -> f64 {
+            let x = r / rs;
+            rho_s / (x * (1.0 + x).powi(2))
+        };
+
+        // Build (Φ, ρ) table sorted by Φ (Φ increases with r, going from negative to 0)
+        let mut phi_rho: Vec<(f64, f64)> = (0..n_tab)
+            .map(|i| {
+                let log_r =
+                    (r_min.ln()) + (r_max.ln() - r_min.ln()) * i as f64 / (n_tab - 1) as f64;
+                let r = log_r.exp();
+                (phi_of_r(r), rho_of_r(r))
+            })
+            .collect();
+        phi_rho.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        // Remove duplicates in Φ
+        phi_rho.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-30);
+
+        let phi_tab: Vec<f64> = phi_rho.iter().map(|&(p, _)| p).collect();
+        let rho_tab: Vec<f64> = phi_rho.iter().map(|&(_, r)| r).collect();
+
+        // 2. Compute d²ρ/dΦ² numerically (central differences)
+        let n = phi_tab.len();
+        let mut d2rho_dphi2 = vec![0.0f64; n];
+        for i in 1..n - 1 {
+            let dp1 = phi_tab[i + 1] - phi_tab[i];
+            let dp0 = phi_tab[i] - phi_tab[i - 1];
+            let drho1 = (rho_tab[i + 1] - rho_tab[i]) / dp1;
+            let drho0 = (rho_tab[i] - rho_tab[i - 1]) / dp0;
+            d2rho_dphi2[i] = 2.0 * (drho1 - drho0) / (dp1 + dp0);
+        }
+
+        // 3. Eddington integral: f(E) = 1/(√8·π²) ∫_{Φ_min}^{E} d²ρ/dΦ² / √(E-Φ) dΦ
+        let phi_min = phi_tab[0];
+        let phi_max = *phi_tab.last().unwrap();
+        let n_e = 200;
+        let mut df_table_e = Vec::with_capacity(n_e);
+        let mut df_table_f = Vec::with_capacity(n_e);
+
+        for ie in 0..n_e {
+            let e = phi_min + (phi_max - phi_min) * (ie as f64 + 0.5) / n_e as f64;
+            // Integrate from phi_min to E
+            let mut integral = 0.0;
+            for i in 1..n {
+                if phi_tab[i] > e {
+                    break;
+                }
+                let phi_mid = 0.5 * (phi_tab[i - 1] + phi_tab[i]);
+                let d2 = 0.5 * (d2rho_dphi2[i - 1] + d2rho_dphi2[i]);
+                let dphi = phi_tab[i] - phi_tab[i - 1];
+                let diff = e - phi_mid;
+                if diff > 0.0 {
+                    integral += d2 / diff.sqrt() * dphi;
+                }
+            }
+            let f_e = integral / (8.0_f64.sqrt() * PI * PI);
+            df_table_e.push(e);
+            df_table_f.push(f_e.max(0.0));
+        }
+
         Self {
             mass,
             scale_radius,
             concentration,
             g,
+            rho_s,
+            df_table_e,
+            df_table_f,
         }
     }
 }
 
 impl IsolatedEquilibrium for NfwIC {
-    fn distribution_function(&self, energy: f64, angular_momentum: f64) -> f64 {
-        todo!(
-            "Eddington integral: f(E) = 1/sqrt(8*pi^2) * d/dE int dPhi/sqrt(E-Phi) * d^2rho/dPhi^2"
-        )
+    fn distribution_function(&self, energy: f64, _angular_momentum: f64) -> f64 {
+        if energy >= 0.0 || self.df_table_e.is_empty() {
+            return 0.0;
+        }
+        interpolate_table(&self.df_table_e, &self.df_table_f, energy).max(0.0)
     }
 
     fn density_profile(&self, r: f64) -> f64 {
-        todo!("rho(r) = rho_s / (r/rs * (1 + r/rs)^2)")
+        let x = r / self.scale_radius;
+        if x < 1e-30 {
+            return self.rho_s * 1e30; // diverges at r=0
+        }
+        self.rho_s / (x * (1.0 + x).powi(2))
     }
 
     fn potential(&self, r: f64) -> f64 {
-        todo!("Phi(r) = -4*pi*G*rho_s*rs^3/r * ln(1 + r/rs)")
+        use std::f64::consts::PI;
+        if r < 1e-30 {
+            return -4.0 * PI * self.g * self.rho_s * self.scale_radius * self.scale_radius * 100.0;
+        }
+        -4.0 * PI
+            * self.g
+            * self.rho_s
+            * self.scale_radius.powi(3)
+            * (1.0 + r / self.scale_radius).ln()
+            / r
     }
 }
 

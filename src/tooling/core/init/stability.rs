@@ -31,16 +31,36 @@ impl DiskStabilityIC {
         perturbation_pattern_speed: f64,
         perturbation_amplitude: f64,
     ) -> Self {
-        todo!()
+        Self {
+            disk_surface_density,
+            disk_velocity_dispersion,
+            bulge: None,
+            halo_potential: None,
+            perturbation_mode_m,
+            perturbation_pattern_speed,
+            perturbation_amplitude,
+        }
     }
 
     /// Toomre Q(R) = σ_R κ / (3.36 G Σ). Q > 1 means locally stable.
-    pub fn toomre_q(&self, radius: f64) -> f64 {
-        todo!("requires epicyclic frequency kappa(R)")
+    ///
+    /// Requires the epicyclic frequency κ(R) = √(R dΩ²/dR + 4Ω²),
+    /// which needs the full circular velocity curve from the combined
+    /// disk+bulge+halo potential. Not yet implemented.
+    pub fn toomre_q(&self, _radius: f64) -> f64 {
+        todo!("requires epicyclic frequency κ(R) from combined disk+bulge+halo potential")
     }
 
     /// Sample onto 6D grid: construct f(E, Lz) for disk, superpose azimuthal perturbation.
-    pub fn sample_on_grid(&self, domain: &Domain) -> PhaseSpaceSnapshot {
-        todo!("construct f(E,Lz) for disk + superpose azimuthal mode perturbation")
+    ///
+    /// Constructing the disk DF f(E, Lz) requires:
+    /// 1. Computing the total potential Φ(R, z) from disk + bulge + halo
+    /// 2. Inverting Σ(R), σ_R(R) to obtain f(E, Lz) via Shu (1969) or Dehnen (1999)
+    /// 3. Superposing the (m, Ω_p) perturbation mode.
+    ///    This is highly specialized and not yet implemented.
+    pub fn sample_on_grid(&self, _domain: &Domain) -> PhaseSpaceSnapshot {
+        todo!(
+            "construct f(E,Lz) for disk via Shu/Dehnen inversion + superpose azimuthal mode perturbation"
+        )
     }
 }
