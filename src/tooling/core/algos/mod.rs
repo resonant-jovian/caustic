@@ -1,5 +1,6 @@
 pub(crate) mod amr;
 pub(crate) mod global;
+pub mod ht;
 pub(crate) mod hybrid;
 pub mod lagrangian;
 pub(crate) mod sheet;

@@ -33,11 +33,21 @@ pub use tooling::core::solver::PoissonSolver;
 pub use tooling::core::types::*;
 
 // Concrete implementations — needed by phasma and other binary consumers
+pub use tooling::core::algos::ht::HtTensor;
 pub use tooling::core::algos::lagrangian::SemiLagrangian;
+pub use tooling::core::conditions::{
+    CasimirDriftCondition, CausticFormationCondition, CflViolationCondition, ExitCondition,
+    MassLossCondition, SteadyStateCondition, VirialRelaxedCondition, WallClockCondition,
+};
 pub use tooling::core::diagnostics::GlobalDiagnostics;
-pub use tooling::core::init::cosmological::ZeldovichIC;
+pub use tooling::core::init::arbitrary::CustomICArray;
+pub use tooling::core::init::cosmological::{ZeldovichIC, ZeldovichSingleMode};
 pub use tooling::core::init::domain::{SpatialBoundType, VelocityBoundType};
-pub use tooling::core::init::isolated::{HernquistIC, KingIC, NfwIC, PlummerIC, sample_on_grid};
+pub use tooling::core::init::isolated::{
+    HernquistIC, IsolatedEquilibrium, KingIC, NfwIC, PlummerIC, sample_on_grid,
+};
+pub use tooling::core::init::mergers::MergerIC;
+pub use tooling::core::output::exit::standard::ExitEvaluator;
 pub use tooling::core::poisson::fft::{FftIsolated, FftPoisson};
 pub use tooling::core::time::lie::LieSplitting;
 pub use tooling::core::time::strang::StrangSplitting;

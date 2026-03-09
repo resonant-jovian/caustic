@@ -8,6 +8,12 @@ pub struct SemiLagrangian {
     pub interpolation_order: usize,
 }
 
+impl Default for SemiLagrangian {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SemiLagrangian {
     pub fn new() -> Self {
         Self {
