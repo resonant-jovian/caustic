@@ -1316,7 +1316,9 @@ mod tests {
             shape,
             time: 0.0,
         };
-        let tt = TensorTrain::from_snapshot(&snap, 10, 1e-12, &domain);
+        // Use 1e-8 tolerance: values up to 4096, so machine-eps noise ~4e-13
+        // makes 1e-12 too tight for rank truncation
+        let tt = TensorTrain::from_snapshot(&snap, 10, 1e-8, &domain);
 
         // Verify evaluation matches original
         let mut max_err = 0.0f64;
