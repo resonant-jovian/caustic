@@ -22,7 +22,7 @@ realfft = "3.5.0"    # Real-to-complex FFT (Hermitian symmetry)
 tracing = "0.1"      # Zero-cost instrumentation spans
 faer = "0.24.0"      # SVD, QR, LU — pure Rust, SIMD-accelerated
 ndarray = "0.17.2"   # n-dimensional array containers for transfer tensors
-# hdf5-metno = { version = "0.12.3", optional = true }   # behind `[features] hdf5 = [...]`
+hdf5-metno = { version = "0.12.3", optional = true }
 
 # Optional allocator / profiling deps behind feature flags
 dhat = { version = "0.3", optional = true }
@@ -31,10 +31,11 @@ mimalloc = { version = "0.1", optional = true }
 tracing-tracy = { version = "0.11", optional = true }
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8.2", features = ["html_reports"] }
 
 [features]
 default = []
+hdf5 = ["dep:hdf5-metno"]
 jemalloc = ["dep:tikv-jemallocator"]
 mimalloc-alloc = ["dep:mimalloc"]
 dhat-heap = ["dep:dhat"]

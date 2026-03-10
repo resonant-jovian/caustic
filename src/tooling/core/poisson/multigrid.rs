@@ -31,7 +31,7 @@ impl PoissonSolver for Multigrid {
     }
 }
 
-fn smooth(phi: &mut Vec<f64>, rhs: &[f64], shape: [usize; 3], n: usize) {
+fn smooth(phi: &mut [f64], rhs: &[f64], shape: [usize; 3], n: usize) {
     todo!("Gauss-Seidel red-black smoothing")
 }
 
