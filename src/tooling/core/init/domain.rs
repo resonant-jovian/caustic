@@ -117,18 +117,14 @@ impl Domain {
         [2.0 * lv1 / nv1, 2.0 * lv2 / nv2, 2.0 * lv3 / nv3]
     }
 
-    /// Total number of 6D cells: Nx³ × Nv³. Warn if > ~10⁹.
+    /// Total number of 6D cells: Nx³ × Nv³.
     pub fn total_cells(&self) -> usize {
-        let result = (self.spatial_res.x1 as usize)
+        (self.spatial_res.x1 as usize)
             * (self.spatial_res.x2 as usize)
             * (self.spatial_res.x3 as usize)
             * (self.velocity_res.v1 as usize)
             * (self.velocity_res.v2 as usize)
-            * (self.velocity_res.v3 as usize);
-        if result > 1_000_000_000 {
-            eprintln!("Warning: total_cells = {} > 10^9", result);
-        }
-        result
+            * (self.velocity_res.v3 as usize)
     }
 }
 
@@ -141,6 +137,12 @@ pub struct DomainBuilder {
     time_range: Option<TimeRange>,
     spatial_bc: Option<SpatialBoundType>,
     velocity_bc: Option<VelocityBoundType>,
+}
+
+impl Default for DomainBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DomainBuilder {

@@ -9,6 +9,7 @@ use super::super::{
 use super::lagrangian::sl_shift_1d;
 use rayon::prelude::*;
 use rust_decimal::prelude::ToPrimitive;
+use std::any::Any;
 
 /// Stores f on a uniform (Nx1×Nx2×Nx3×Nv1×Nv2×Nv3) grid as a flat `Vec<f64>`.
 /// Index order: x1 fastest-changing outer, v3 fastest-changing inner (row-major).
@@ -569,5 +570,9 @@ impl PhaseSpaceRepr for UniformGrid6D {
             shape: [nx1, nx2, nx3, nv1, nv2, nv3],
             time,
         }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }

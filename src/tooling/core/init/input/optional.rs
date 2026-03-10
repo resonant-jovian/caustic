@@ -53,6 +53,9 @@ pub enum RepresentationKind {
     Hybrid,
 }
 
+/// External potential callback: Φ_ext(x, t) → f64.
+pub type ExternalPotentialFn = Box<dyn Fn([f64; 3], f64) -> f64 + Send + Sync>;
+
 /// Optional solver configuration. All fields have spec-default values.
 pub struct OptionalParams {
     /// Integration timestep. Adaptive by default (delta_t = 0 means adaptive).
@@ -62,7 +65,7 @@ pub struct OptionalParams {
     /// Minimum adaptive timestep before CFL exit. Default 1e-10.
     pub dt_min: f64,
     /// Optional time-dependent external potential Φ_ext(x,t). None = self-gravity only.
-    pub phi_external: Option<Box<dyn Fn([f64; 3], f64) -> f64 + Send + Sync>>,
+    pub phi_external: Option<ExternalPotentialFn>,
     /// Operator splitting order. Default Strang (2nd order).
     pub splitting_method: SplittingMethod,
     /// Poisson solver. Default FftPeriodic.

@@ -1,6 +1,8 @@
 //! The `PhaseSpaceRepr` trait — the central abstraction of the library.
 //! All phase-space storage strategies implement this.
 
+use std::any::Any;
+
 use super::types::{
     AccelerationField, DensityField, DisplacementField, PhaseSpaceSnapshot, StreamCountField,
     Tensor,
@@ -57,4 +59,7 @@ pub trait PhaseSpaceRepr: Send + Sync {
     fn to_snapshot(&self, time: f64) -> PhaseSpaceSnapshot {
         panic!("to_snapshot must be implemented by PhaseSpaceRepr impl")
     }
+
+    /// Downcast to concrete type for implementation-specific queries (e.g. HT rank data).
+    fn as_any(&self) -> &dyn Any;
 }

@@ -99,16 +99,22 @@ fn rk4_step(r: f64, y: f64, dy: f64, h: f64, rhs: &dyn Fn(f64, f64, f64) -> f64)
 }
 
 impl KingIC {
-    pub fn new(mass: f64, king_parameter_w0: f64, velocity_dispersion: f64, g: f64) -> Self {
+    /// Create a King model with the given total mass, concentration W₀, core radius, and G.
+    ///
+    /// The `scale_radius` sets the physical King core radius r₀. The velocity
+    /// dispersion σ is derived self-consistently from the Poisson-Boltzmann ODE
+    /// so that 4πGρ₀ r₀² = 9σ².
+    pub fn new(mass: f64, king_parameter_w0: f64, scale_radius: f64, g: f64) -> Self {
         use std::f64::consts::PI;
-        let sigma = velocity_dispersion;
         let w0 = king_parameter_w0;
+        let r0 = scale_radius; // physical King core radius
 
         // Solve the dimensionless Poisson-Boltzmann equation:
-        //   W''(r) + (2/r)W'(r) = -9/sigma² * rho(W)
-        // where W(r) = (Φ(r_t) - Φ(r))/σ² is the dimensionless potential
-        // and rho(W) = e^W * erf(sqrt(W)) - sqrt(4W/π) * (1 + 2W/3)
-        // Boundary conditions: W(0) = W₀, W'(0) = 0
+        //   W''(ξ) + (2/ξ)W'(ξ) = -9 * king_rho(W)
+        // where ξ = r/r₀ is the dimensionless radius,
+        // W = (E₀ − Φ)/σ² is the dimensionless potential,
+        // and king_rho(W) = e^W erf(√W) − √(4W/π)(1 + 2W/3).
+        // Boundary conditions: W(0) = W₀, W'(0) = 0.
 
         let n_steps = 10000;
         let r_max_guess = 100.0; // will stop when W <= 0
@@ -136,13 +142,16 @@ impl KingIC {
         r_table.push(0.0);
         w_table.push(w0);
 
-        // ODE: W'' = -2/r * W' - 9 * king_rho(W)
+        // ODE: W'' = -2/ξ * W' - 9 * king_rho(W)/king_rho(W₀)
+        // The density must be normalized by the central value so that
+        // ρ̃(W₀) = 1, giving the standard King dimensionless equation.
+        let rho_w0 = king_rho(w0);
         let rhs = |r: f64, w: f64, dw: f64| -> f64 {
             if r < 1e-30 {
-                // L'Hôpital: at r=0, W'' = -3 * king_rho(W)
-                return -3.0 * king_rho(w);
+                // L'Hôpital: at ξ=0, W'' = -3 × ρ̃(W) = -3 × king_rho(W)/king_rho(W₀)
+                return -3.0 * king_rho(w) / rho_w0;
             }
-            -2.0 / r * dw - 9.0 * king_rho(w)
+            -2.0 / r * dw - 9.0 * king_rho(w) / rho_w0
         };
 
         for _ in 0..n_steps {
@@ -157,39 +166,49 @@ impl KingIC {
             }
         }
 
-        let r_t = *r_table.last().unwrap(); // tidal radius
+        // The ODE was solved in dimensionless units ξ = r/r₀ where r₀ is the
+        // King core radius. The coefficient 9 in the ODE comes from choosing
+        // ξ = r/r₀ with 4πGρ₀ r₀² = 9σ².
+        //
+        // Given r₀ = scale_radius (user parameter), we derive σ and ρ₀.
 
-        // Convert dimensionless W(r) to physical quantities
-        // Central potential: Φ(0) = -W₀ σ²,  Φ(r_t) = 0 (tidal boundary)
-        // Physical: Φ(r) = σ²(W(r) - W₀) ... but we set E₀ = Φ(r_t) = 0
-        // Actually: Φ(r) = -σ² * W(r) + Φ(r_t), and E₀ = Φ(r_t)
-
-        // Density normalisation: integrate ρ to get total mass
-        // ρ(r) ∝ king_rho(W(r)) — normalise to get total mass M
-        let mut mass_integral = 0.0;
+        // Dimensionless mass integral: M_d = ∫₀^{ξ_t} 4πξ² king_rho(W(ξ)) dξ
+        let mut mass_integral_d = 0.0;
         for i in 1..r_table.len() {
-            let r_mid = 0.5 * (r_table[i - 1] + r_table[i]);
+            let xi_mid = 0.5 * (r_table[i - 1] + r_table[i]);
             let rho_mid = king_rho(0.5 * (w_table[i - 1] + w_table[i]));
-            let dr = r_table[i] - r_table[i - 1];
-            mass_integral += 4.0 * PI * r_mid * r_mid * rho_mid * dr;
+            let dxi = r_table[i] - r_table[i - 1];
+            mass_integral_d += 4.0 * PI * xi_mid * xi_mid * rho_mid * dxi;
         }
 
-        let rho_scale = if mass_integral > 1e-30 {
-            mass / mass_integral
+        // Physical central density from mass normalization:
+        //   M = (ρ₀/king_rho(W₀)) × r₀³ × M_d
+        //   → ρ₀ = M × king_rho(W₀) / (r₀³ × M_d)
+        let king_rho_w0 = king_rho(w0);
+        let rho_0 = if mass_integral_d > 1e-30 && king_rho_w0 > 1e-30 {
+            mass * king_rho_w0 / (r0 * r0 * r0 * mass_integral_d)
         } else {
             1.0
         };
 
-        // Build physical density table
+        // Velocity dispersion from self-consistency: 4πGρ₀ r₀² = 9σ²
+        let sigma = (4.0 * PI * g * rho_0 * r0 * r0 / 9.0).sqrt();
+
+        // Density scale: ρ(r) = rho_scale × king_rho(W(r/r₀))
+        let rho_scale = rho_0 / king_rho_w0;
+
+        // Convert r_table from dimensionless ξ to physical r = ξ × r₀
+        let r_table: Vec<f64> = r_table.iter().map(|&xi| xi * r0).collect();
+
+        // Physical density table
         let rho_table: Vec<f64> = w_table.iter().map(|&w| rho_scale * king_rho(w)).collect();
 
-        // Build physical potential table: Φ(r) = -σ² * W(r)
-        // (with convention Φ(r_t) = 0)
+        // Physical potential: Φ(r) = -σ² W(r/r₀), with Φ(r_t) = 0 (tidal boundary)
         let phi_table: Vec<f64> = w_table.iter().map(|&w| -sigma * sigma * w).collect();
         let e0 = 0.0; // E₀ = Φ(r_t) = 0
 
-        // DF normalisation: f(E) = A * (exp((E₀-E)/σ²) - 1)  for E < E₀
-        // A determined by consistency with density
+        // DF normalisation: ρ(r) = (2πσ²)^{3/2} A × king_rho(W)
+        // → A = rho_scale / (2πσ²)^{3/2}
         let norm_a = rho_scale / (2.0 * PI * sigma * sigma).powf(1.5);
 
         Self {

@@ -3,6 +3,7 @@
 
 use super::super::{init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
 use super::{sheet::SheetTracker, uniform::UniformGrid6D};
+use std::any::Any;
 
 /// Hybrid representation combining SheetTracker and UniformGrid6D.
 pub struct HybridRepr {
@@ -50,5 +51,9 @@ impl PhaseSpaceRepr for HybridRepr {
     }
     fn velocity_distribution(&self, position: &[f64; 3]) -> Vec<f64> {
         todo!("hybrid: combine sheet particle velocities and grid velocity slice")
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }

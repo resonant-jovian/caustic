@@ -150,6 +150,16 @@ impl SimulationBuilder {
         self
     }
 
+    pub fn poisson_solver_boxed(mut self, p: Box<dyn PoissonSolver>) -> Self {
+        self.poisson = Some(p);
+        self
+    }
+
+    pub fn integrator_boxed(mut self, i: Box<dyn TimeIntegrator>) -> Self {
+        self.integrator = Some(i);
+        self
+    }
+
     pub fn initial_conditions(mut self, ic: PhaseSpaceSnapshot) -> Self {
         self.ic = Some(ic);
         self
