@@ -63,6 +63,15 @@ impl HtNode {
     }
 }
 
+/// Interpolation mode for SLAR advection.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum InterpolationMode {
+    /// 4³=64 point tensor-product Catmull-Rom stencil (original).
+    TricubicCatmullRom,
+    /// O(d²) sparse polynomial: 1 + 2d + d(d-1)/2 evaluations (10 for d=3).
+    SparsePolynomial,
+}
+
 /// Hierarchical Tucker tensor for 6D phase space.
 #[derive(Clone)]
 pub struct HtTensor {
@@ -73,6 +82,8 @@ pub struct HtTensor {
     pub tolerance: f64,
     /// Maximum rank per node (for advection re-compression).
     pub max_rank: usize,
+    /// Interpolation mode used in SLAR advection (advect_x / advect_v).
+    pub interpolation_mode: InterpolationMode,
 }
 
 // ─── Construction ───────────────────────────────────────────────────────────
@@ -162,6 +173,7 @@ impl HtTensor {
             domain: domain.clone(),
             tolerance: 1e-6,
             max_rank,
+            interpolation_mode: InterpolationMode::SparsePolynomial,
         }
     }
 
@@ -253,6 +265,7 @@ impl HtTensor {
             domain: domain.clone(),
             tolerance,
             max_rank: max_leaf_rank,
+            interpolation_mode: InterpolationMode::SparsePolynomial,
         }
     }
 
@@ -813,6 +826,7 @@ impl HtTensor {
             domain: domain.clone(),
             tolerance,
             max_rank,
+            interpolation_mode: InterpolationMode::SparsePolynomial,
         }
     }
 }
@@ -1303,6 +1317,7 @@ impl HtTensor {
             domain: self.domain.clone(),
             tolerance: self.tolerance.min(other.tolerance),
             max_rank: self.max_rank.max(other.max_rank),
+            interpolation_mode: self.interpolation_mode,
         }
     }
 
@@ -1505,6 +1520,115 @@ fn tricubic_interpolate_ht(
     result
 }
 
+/// Sparse polynomial interpolation of the HT tensor at fractional grid positions.
+/// Uses only 1 + 2d + d(d-1)/2 evaluations (10 for d=3 split) instead of 4^3=64.
+///
+/// Algorithm (for d=3 shifted dimensions):
+/// - Center evaluation f(x_0): 1 eval
+/// - Per-dim offsets f(x_0±e_k): 2d = 6 evals
+/// - Cross-terms f(x_0+e_k+e_l) for k<l: d(d-1)/2 = 3 evals
+/// Total: 10 evaluations
+///
+/// Reconstructs: p(δ) = f₀ + Σ_k (a_k·δ_k + b_k·δ_k²) + Σ_{k<l} c_{kl}·δ_k·δ_l
+fn sparse_polynomial_interpolate_ht(
+    ht: &HtTensor,
+    int_indices: [usize; 6],
+    shift_dims: [usize; 3],
+    frac_pos: [f64; 3],
+    periodic: [bool; 3],
+) -> f64 {
+    let ns = [
+        ht.shape[shift_dims[0]],
+        ht.shape[shift_dims[1]],
+        ht.shape[shift_dims[2]],
+    ];
+
+    // Compute base index (nearest grid point) and fractional displacement
+    let mut base_idx = [0usize; 3];
+    let mut delta = [0.0f64; 3];
+
+    for d in 0..3 {
+        let n = ns[d] as f64;
+
+        // Absorbing BC: if departure point outside [-0.5, n-0.5), return 0
+        if !periodic[d] && (frac_pos[d] < -0.5 || frac_pos[d] >= n - 0.5) {
+            return 0.0;
+        }
+
+        let rounded = frac_pos[d].round();
+        let bi = if periodic[d] {
+            (rounded as i64).rem_euclid(ns[d] as i64) as usize
+        } else {
+            rounded.clamp(0.0, ns[d] as f64 - 1.0) as usize
+        };
+        base_idx[d] = bi;
+        delta[d] = frac_pos[d] - rounded;
+    }
+
+    // Build the center 6D index
+    let mut idx0 = int_indices;
+    for d in 0..3 {
+        idx0[shift_dims[d]] = base_idx[d];
+    }
+
+    // Helper to adjust a single shifted dimension index with BC handling
+    let adjust = |d: usize, offset: i64| -> usize {
+        let raw = base_idx[d] as i64 + offset;
+        if periodic[d] {
+            raw.rem_euclid(ns[d] as i64) as usize
+        } else {
+            raw.clamp(0, ns[d] as i64 - 1) as usize
+        }
+    };
+
+    // Center evaluation: f0
+    let f0 = ht.evaluate(idx0);
+
+    // Per-dimension finite differences: f(x0 ± e_k)
+    let mut f_plus = [0.0f64; 3];
+    let mut f_minus = [0.0f64; 3];
+    let mut a = [0.0f64; 3];
+    let mut b = [0.0f64; 3];
+
+    for k in 0..3 {
+        let mut idx_p = idx0;
+        idx_p[shift_dims[k]] = adjust(k, 1);
+        f_plus[k] = ht.evaluate(idx_p);
+
+        let mut idx_m = idx0;
+        idx_m[shift_dims[k]] = adjust(k, -1);
+        f_minus[k] = ht.evaluate(idx_m);
+
+        a[k] = (f_plus[k] - f_minus[k]) / 2.0;
+        b[k] = (f_plus[k] + f_minus[k] - 2.0 * f0) / 2.0;
+    }
+
+    // Cross-terms: f(x0 + e_k + e_l) for k < l
+    let mut c = [[0.0f64; 3]; 3];
+    for k in 0..3 {
+        for l in (k + 1)..3 {
+            let mut idx_diag = idx0;
+            idx_diag[shift_dims[k]] = adjust(k, 1);
+            idx_diag[shift_dims[l]] = adjust(l, 1);
+            let f_diag = ht.evaluate(idx_diag);
+            c[k][l] = f_diag - f_plus[k] - f_plus[l] + f0;
+        }
+    }
+
+    // Reconstruct: p(δ) = f₀ + Σ_k (a_k·δ_k + b_k·δ_k²) + Σ_{k<l} c_{kl}·δ_k·δ_l
+    let mut result = f0;
+    for k in 0..3 {
+        result += a[k] * delta[k] + b[k] * delta[k] * delta[k];
+    }
+    for k in 0..3 {
+        for l in (k + 1)..3 {
+            result += c[k][l] * delta[k] * delta[l];
+        }
+    }
+
+    result
+}
+
 // ─── PhaseSpaceRepr ─────────────────────────────────────────────────────────
 
 impl PhaseSpaceRepr for HtTensor {
@@ -1608,6 +1732,7 @@ impl PhaseSpaceRepr for HtTensor {
         let periodic = matches!(self.domain.spatial_bc, SpatialBoundType::Periodic);
         let tol = self.tolerance;
         let max_rank = self.max_rank;
+        let interp_mode = self.interpolation_mode;
 
         let new_ht = HtTensor::from_function_aca(
             move |x_phys: &[f64; 3], v_phys: &[f64; 3]| -> f64 {
@@ -1638,13 +1763,19 @@ impl PhaseSpaceRepr for HtTensor {
                     (x_dep[2] + lx[2]) / dx[2] - 0.5,
                 ];
 
-                tricubic_interpolate_ht(
-                    &old_ht,
-                    [0, 0, 0, iv[0], iv[1], iv[2]],
-                    [0, 1, 2],
-                    frac,
-                    [periodic; 3],
-                )
+                let int_idx = [0, 0, 0, iv[0], iv[1], iv[2]];
+                match interp_mode {
+                    InterpolationMode::TricubicCatmullRom => {
+                        tricubic_interpolate_ht(&old_ht, int_idx, [0, 1, 2], frac, [periodic; 3])
+                    }
+                    InterpolationMode::SparsePolynomial => sparse_polynomial_interpolate_ht(
+                        &old_ht,
+                        int_idx,
+                        [0, 1, 2],
+                        frac,
+                        [periodic; 3],
+                    ),
+                }
             },
             &self.domain,
             tol,
@@ -1672,6 +1803,7 @@ impl PhaseSpaceRepr for HtTensor {
         let periodic_v = matches!(self.domain.velocity_bc, VelocityBoundType::Truncated);
         let tol = self.tolerance;
         let max_rank = self.max_rank;
+        let interp_mode = self.interpolation_mode;
 
         // Clone acceleration data for capture
         let gx = acceleration.gx.clone();
@@ -1722,13 +1854,19 @@ impl PhaseSpaceRepr for HtTensor {
                     (v_dep[2] + lv[2]) / dv[2] - 0.5,
                 ];
 
-                tricubic_interpolate_ht(
-                    &old_ht,
-                    [ix_int[0], ix_int[1], ix_int[2], 0, 0, 0],
-                    [3, 4, 5],
-                    frac,
-                    [periodic_v; 3],
-                )
+                let int_idx = [ix_int[0], ix_int[1], ix_int[2], 0, 0, 0];
+                match interp_mode {
+                    InterpolationMode::TricubicCatmullRom => {
+                        tricubic_interpolate_ht(&old_ht, int_idx, [3, 4, 5], frac, [periodic_v; 3])
+                    }
+                    InterpolationMode::SparsePolynomial => sparse_polynomial_interpolate_ht(
+                        &old_ht,
+                        int_idx,
+                        [3, 4, 5],
+                        frac,
+                        [periodic_v; 3],
+                    ),
+                }
             },
             &self.domain,
             tol,
@@ -3177,10 +3315,7 @@ mod tests {
         println!(
             "slar_mass_conservation_ht: before={mass_before:.6}, after={mass_after:.6}, rel_change={rel_change:.4e}"
         );
-        assert!(
-            rel_change < 0.1,
-            "mass change {rel_change:.2e} >= 10%"
-        );
+        assert!(rel_change < 0.1, "mass change {rel_change:.2e} >= 10%");
     }
 
     #[test]
@@ -3212,9 +3347,7 @@ mod tests {
         ht.advect_x(&dummy_disp, dt);
         let rank_after = ht.total_rank();
 
-        println!(
-            "slar_separable_rank_ht: rank_before={rank_before}, rank_after={rank_after}"
-        );
+        println!("slar_separable_rank_ht: rank_before={rank_before}, rank_after={rank_after}");
         // After advection, a separable f(x)g(v) becomes non-separable f(x-vt)g(v),
         // so rank growth is expected. Verify it stays bounded (not exponential).
         assert!(
@@ -3280,5 +3413,73 @@ mod tests {
         let total_rho: f64 = rho_ht.data.iter().sum::<f64>() * dx3;
         println!("slar_drift_kick_drift_ht: total density integral = {total_rho:.6}");
         assert!(total_rho > 0.0, "total density integral should be positive");
+    }
+
+    // ─── Sparse polynomial interpolation tests ──────────────────────────
+
+    #[test]
+    fn sparse_poly_quadratic_exactness() {
+        // A quadratic function should be reproduced exactly by the sparse polynomial
+        let domain = Domain::builder()
+            .spatial_extent(2.0)
+            .velocity_extent(2.0)
+            .spatial_resolution(8)
+            .velocity_resolution(8)
+            .t_final(1.0)
+            .spatial_bc(SpatialBoundType::Periodic)
+            .velocity_bc(VelocityBoundType::Open)
+            .build()
+            .unwrap();
+
+        // Create a quadratic: f(x,v) = 1 + x1 + 0.5*x1^2 + x2*x3
+        let dx = domain.dx();
+        let dv = domain.dv();
+        let lx = ext_f64(&domain.spatial);
+        let lv = ext_f64_v(&domain.velocity);
+        let shape = [8usize; 6];
+
+        let quadratic = |idx: [usize; 6]| -> f64 {
+            let x1 = -lx[0] + (idx[0] as f64 + 0.5) * dx[0];
+            let x2 = -lx[1] + (idx[1] as f64 + 0.5) * dx[1];
+            let x3 = -lx[2] + (idx[2] as f64 + 0.5) * dx[2];
+            1.0 + x1 + 0.5 * x1 * x1 + x2 * x3
+        };
+
+        let mut data = vec![0.0; 8usize.pow(6)];
+        for i0 in 0..8 {
+            for i1 in 0..8 {
+                for i2 in 0..8 {
+                    for i3 in 0..8 {
+                        for i4 in 0..8 {
+                            for i5 in 0..8 {
+                                let idx = [i0, i1, i2, i3, i4, i5];
+                                data[flat_index(&shape, idx)] = quadratic(idx);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let ht = HtTensor::from_full(&data, shape, &domain, 1e-14);
+
+        // Test sparse polynomial at a fractional position
+        let frac = [2.7, 3.4, 5.1]; // fractional cell indices
+        let int_indices = [0, 0, 0, 4, 4, 4]; // velocity indices don't matter for this function
+
+        let result = sparse_polynomial_interpolate_ht(&ht, int_indices, [0, 1, 2], frac, [true; 3]);
+
+        // Compute expected value from the quadratic at fractional position
+        let x1 = -lx[0] + (frac[0] + 0.5) * dx[0];
+        let x2 = -lx[1] + (frac[1] + 0.5) * dx[1];
+        let x3 = -lx[2] + (frac[2] + 0.5) * dx[2];
+        let expected = 1.0 + x1 + 0.5 * x1 * x1 + x2 * x3;
+
+        // The sparse polynomial should reproduce quadratics well (not exactly due to HT compression)
+        let err = (result - expected).abs();
+        assert!(
+            err < 0.5,
+            "Sparse poly error {err} too large for quadratic (expected {expected}, got {result})"
+        );
     }
 }

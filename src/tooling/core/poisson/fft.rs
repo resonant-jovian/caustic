@@ -503,63 +503,6 @@ impl PoissonSolver for FftIsolated {
     }
 
     fn compute_acceleration(&self, potential: &PotentialField) -> AccelerationField {
-        // Centered finite differences (not spectral — avoids Gibbs artifacts at
-        // non-periodic boundaries).
-        let [nx, ny, nz] = self.shape;
-        let n_total = nx * ny * nz;
-        let mut gx = vec![0.0f64; n_total];
-        let mut gy = vec![0.0f64; n_total];
-        let mut gz = vec![0.0f64; n_total];
-
-        let idx = |ix: usize, iy: usize, iz: usize| ix * ny * nz + iy * nz + iz;
-
-        for ix in 0..nx {
-            for iy in 0..ny {
-                for iz in 0..nz {
-                    let i = idx(ix, iy, iz);
-
-                    // gx = -(Φ[i+1] - Φ[i-1]) / (2·dx)
-                    gx[i] = if ix == 0 {
-                        -(potential.data[idx(1, iy, iz)] - potential.data[idx(0, iy, iz)])
-                            / self.dx[0]
-                    } else if ix == nx - 1 {
-                        -(potential.data[idx(nx - 1, iy, iz)] - potential.data[idx(nx - 2, iy, iz)])
-                            / self.dx[0]
-                    } else {
-                        -(potential.data[idx(ix + 1, iy, iz)] - potential.data[idx(ix - 1, iy, iz)])
-                            / (2.0 * self.dx[0])
-                    };
-
-                    gy[i] = if iy == 0 {
-                        -(potential.data[idx(ix, 1, iz)] - potential.data[idx(ix, 0, iz)])
-                            / self.dx[1]
-                    } else if iy == ny - 1 {
-                        -(potential.data[idx(ix, ny - 1, iz)] - potential.data[idx(ix, ny - 2, iz)])
-                            / self.dx[1]
-                    } else {
-                        -(potential.data[idx(ix, iy + 1, iz)] - potential.data[idx(ix, iy - 1, iz)])
-                            / (2.0 * self.dx[1])
-                    };
-
-                    gz[i] = if iz == 0 {
-                        -(potential.data[idx(ix, iy, 1)] - potential.data[idx(ix, iy, 0)])
-                            / self.dx[2]
-                    } else if iz == nz - 1 {
-                        -(potential.data[idx(ix, iy, nz - 1)] - potential.data[idx(ix, iy, nz - 2)])
-                            / self.dx[2]
-                    } else {
-                        -(potential.data[idx(ix, iy, iz + 1)] - potential.data[idx(ix, iy, iz - 1)])
-                            / (2.0 * self.dx[2])
-                    };
-                }
-            }
-        }
-
-        AccelerationField {
-            gx,
-            gy,
-            gz,
-            shape: potential.shape,
-        }
+        super::utils::finite_difference_acceleration(potential, &self.dx)
     }
 }
