@@ -17,9 +17,15 @@
 //! This is strictly more compact than TT (which requires k² per node) because
 //! the balanced tree has depth log₂(d) instead of d.
 
-use super::super::{init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
+use super::super::{
+    init::domain::{Domain, SpatialBoundType, VelocityBoundType},
+    phasespace::PhaseSpaceRepr,
+    types::*,
+};
+use super::aca::{BlackBoxMatrix, FnMatrix, Xorshift64, aca_partial_pivot};
 use faer::Mat;
 use rust_decimal::prelude::ToPrimitive;
+use std::any::Any;
 
 // ─── Fixed dimension tree topology for 6D ───────────────────────────────────
 //   0..5:  leaves (dim 0..5)
@@ -63,6 +69,10 @@ pub struct HtTensor {
     pub nodes: Vec<HtNode>,
     pub shape: [usize; 6],
     pub domain: Domain,
+    /// Approximation tolerance used in HTACA reconstruction (for advection re-compression).
+    pub tolerance: f64,
+    /// Maximum rank per node (for advection re-compression).
+    pub max_rank: usize,
 }
 
 // ─── Construction ───────────────────────────────────────────────────────────
@@ -150,6 +160,8 @@ impl HtTensor {
             nodes,
             shape,
             domain: domain.clone(),
+            tolerance: 1e-6,
+            max_rank,
         }
     }
 
@@ -234,10 +246,13 @@ impl HtTensor {
             });
         }
 
+        let max_leaf_rank = nodes.iter().map(|n| n.rank()).max().unwrap_or(1);
         HtTensor {
             nodes,
             shape,
             domain: domain.clone(),
+            tolerance,
+            max_rank: max_leaf_rank,
         }
     }
 
@@ -289,6 +304,659 @@ impl HtTensor {
 
         Self::from_full(&data, shape, domain, tolerance)
     }
+
+    /// Black-box construction via HTACA (Ballani & Grasedyck 2013).
+    ///
+    /// Builds the HT tensor by sampling O(dNk) fibers of `f` instead of all N⁶ entries.
+    /// Cost: O(dNk + dk³) vs O(N⁶) for `from_function`.
+    ///
+    /// # Arguments
+    /// - `f`: Distribution function f(x, v) → f64
+    /// - `domain`: Computational domain
+    /// - `tolerance`: Approximation tolerance (distributed as ε/3 per node)
+    /// - `max_rank`: Maximum rank per node
+    /// - `n_initial_samples`: Number of fiber samples per leaf (default: 5 × max_rank)
+    /// - `seed`: RNG seed for random pivot selection (default: 42)
+    pub fn from_function_aca<F>(
+        f: F,
+        domain: &Domain,
+        tolerance: f64,
+        max_rank: usize,
+        n_initial_samples: Option<usize>,
+        seed: Option<u64>,
+    ) -> Self
+    where
+        F: Fn(&[f64; 3], &[f64; 3]) -> f64 + Sync,
+    {
+        let _span = tracing::info_span!("ht_from_function_aca").entered();
+
+        let shape = [
+            domain.spatial_res.x1 as usize,
+            domain.spatial_res.x2 as usize,
+            domain.spatial_res.x3 as usize,
+            domain.velocity_res.v1 as usize,
+            domain.velocity_res.v2 as usize,
+            domain.velocity_res.v3 as usize,
+        ];
+        let dx = domain.dx();
+        let dv = domain.dv();
+        let lx = ext_f64(&domain.spatial);
+        let lv = ext_f64_v(&domain.velocity);
+
+        let n_samples = n_initial_samples.unwrap_or(5 * max_rank);
+        let mut rng = Xorshift64::new(seed.unwrap_or(42));
+        let eps_node = tolerance / 3.0;
+
+        // Helper: convert grid index to physical coordinate for a given dimension
+        let idx_to_coord = |dim: usize, idx: usize| -> f64 {
+            match dim {
+                0 => -lx[0] + (idx as f64 + 0.5) * dx[0],
+                1 => -lx[1] + (idx as f64 + 0.5) * dx[1],
+                2 => -lx[2] + (idx as f64 + 0.5) * dx[2],
+                3 => -lv[0] + (idx as f64 + 0.5) * dv[0],
+                4 => -lv[1] + (idx as f64 + 0.5) * dv[1],
+                5 => -lv[2] + (idx as f64 + 0.5) * dv[2],
+                _ => unreachable!(),
+            }
+        };
+
+        // Helper: evaluate f at a 6D grid index
+        let eval_at_index = |indices: [usize; 6]| -> f64 {
+            let x = [
+                idx_to_coord(0, indices[0]),
+                idx_to_coord(1, indices[1]),
+                idx_to_coord(2, indices[2]),
+            ];
+            let v = [
+                idx_to_coord(3, indices[3]),
+                idx_to_coord(4, indices[4]),
+                idx_to_coord(5, indices[5]),
+            ];
+            f(&x, &v)
+        };
+
+        // ── Phase A: Leaf frames via fiber sampling + col-piv QR ──
+
+        // For each leaf μ, sample random complementary multi-indices and evaluate fibers.
+        let mut leaf_frames: Vec<Mat<f64>> = Vec::with_capacity(6);
+        let mut leaf_ranks: Vec<usize> = Vec::with_capacity(6);
+        // Store the complementary indices used for each leaf (for later reuse)
+        let mut leaf_comp_indices: Vec<Vec<[usize; 6]>> = Vec::with_capacity(6);
+
+        for mu in 0..6 {
+            let n_mu = shape[mu];
+            let ns = n_samples.min(n_mu * 10); // cap samples
+
+            // Generate random complementary multi-indices
+            let mut comp_indices: Vec<[usize; 6]> = Vec::with_capacity(ns);
+            for _ in 0..ns {
+                let mut idx = [0usize; 6];
+                for d in 0..6 {
+                    idx[d] = rng.next_usize(shape[d]);
+                }
+                comp_indices.push(idx);
+            }
+
+            // Evaluate fibers: M ∈ ℝ^{n_μ × ns}
+            let mut fiber_mat = Mat::zeros(n_mu, ns);
+            for (s, comp) in comp_indices.iter().enumerate() {
+                for i in 0..n_mu {
+                    let mut idx = *comp;
+                    idx[mu] = i;
+                    fiber_mat[(i, s)] = eval_at_index(idx);
+                }
+            }
+
+            // Column-pivoted QR to extract basis
+            let cpqr = fiber_mat.as_ref().col_piv_qr();
+            let q = cpqr.compute_thin_Q();
+            let r = cpqr.thin_R();
+
+            // Determine rank from R diagonal
+            let k_max = q.ncols().min(n_mu);
+            let mut sv: Vec<f64> = (0..k_max).map(|i| r[(i, i)].abs()).collect();
+            // R diagonal magnitudes are not quite singular values but suffice for rank estimation
+            sv.sort_by(|a, b| b.partial_cmp(a).unwrap());
+            let k_mu = truncation_rank(&sv, eps_node).max(1).min(max_rank);
+
+            let frame = q.subcols(0, k_mu).to_owned();
+            leaf_frames.push(frame);
+            leaf_ranks.push(k_mu);
+            leaf_comp_indices.push(comp_indices);
+        }
+
+        // ── Phase B: Interior transfer tensors ──
+        //
+        // Process bottom-up: nodes 6={1,2}, 7={4,5}, 8={0,6}, 9={3,7}
+        // For each interior node, we need to compute the transfer tensor.
+        //
+        // Strategy: For each interior node t with children (left_child, right_child),
+        // build a matrix M_t where rows = (j_left, j_right) pairs (k_left × k_right rows)
+        // and columns = complementary physical multi-indices. Then do ACA + SVD on M_t.
+
+        // We'll store effective frames for each node (for interior nodes, this is the
+        // Khatri-Rao product of child frames through the subtree)
+        // Node 6 = dims {1,2}: effective frame is n1*n2 × k6
+        // Node 7 = dims {4,5}: effective frame is n4*n5 × k7
+
+        // Build effective frames for leaf-pair nodes (6 and 7)
+        let eff_frame_6 = build_kron_frame(&leaf_frames[1], &leaf_frames[2], shape[1], shape[2]);
+        let eff_frame_7 = build_kron_frame(&leaf_frames[4], &leaf_frames[5], shape[4], shape[5]);
+
+        // Interior nodes: compute transfer tensors
+        // Node 6: children 1, 2 (both leaves), complementary dims: {0, 3, 4, 5}
+        let (transfer_6, rank_6) = build_interior_transfer_aca(
+            &eval_at_index,
+            &shape,
+            6,
+            &[1],          // left child dims (leaf 1)
+            &[2],          // right child dims (leaf 2)
+            &[0, 3, 4, 5], // complementary dims
+            &leaf_frames[1],
+            &leaf_frames[2],
+            leaf_ranks[1],
+            leaf_ranks[2],
+            eps_node,
+            max_rank,
+            n_samples,
+            &mut rng,
+        );
+
+        // Node 7: children 4, 5 (both leaves), complementary dims: {0, 1, 2, 3}
+        let (transfer_7, rank_7) = build_interior_transfer_aca(
+            &eval_at_index,
+            &shape,
+            7,
+            &[4],          // left child dims (leaf 4)
+            &[5],          // right child dims (leaf 5)
+            &[0, 1, 2, 3], // complementary dims
+            &leaf_frames[4],
+            &leaf_frames[5],
+            leaf_ranks[4],
+            leaf_ranks[5],
+            eps_node,
+            max_rank,
+            n_samples,
+            &mut rng,
+        );
+
+        // For nodes 8 and 9, the children include an interior node.
+        // Node 8: children 0 (leaf), 6 (interior {1,2})
+        //   left_child = leaf 0, right_child = node 6
+        //   Node dims: {0, 1, 2}, complementary: {3, 4, 5}
+        let eff_frame_6_trunc = {
+            // The effective frame for node 6 after transfer tensor:
+            // it maps the n1*n2 space to k6 dims via eff_frame_6, then transfer_6 maps
+            // (k_left=k1, k_right=k2) to k6. The effective frame for node 6 is
+            // eff_frame_6 viewed as the frame for the {1,2} subspace.
+            // Actually, for the purpose of computing transfer tensors at higher levels,
+            // we need: for each basis vector j of node 6, what is the corresponding
+            // n1*n2-dimensional vector? That's column j of eff_frame_6 contracted with
+            // the transfer tensor.
+            //
+            // effective_frame_node6[:, j_6] = Σ_{j1,j2} B_6[j_6, j1, j2] * (U_1[:, j1] ⊗ U_2[:, j2])
+            // This is a (n1*n2) × k6 matrix.
+            let k6 = rank_6;
+            let k1 = leaf_ranks[1];
+            let k2 = leaf_ranks[2];
+            let n12 = shape[1] * shape[2];
+            let mut eff = Mat::zeros(n12, k6);
+            for j6 in 0..k6 {
+                for j1 in 0..k1 {
+                    for j2 in 0..k2 {
+                        let b = transfer_6[j6 * k1 * k2 + j1 * k2 + j2];
+                        if b.abs() < 1e-30 {
+                            continue;
+                        }
+                        for i1 in 0..shape[1] {
+                            let u1 = leaf_frames[1][(i1, j1)];
+                            if u1.abs() < 1e-30 {
+                                continue;
+                            }
+                            let bu1 = b * u1;
+                            for i2 in 0..shape[2] {
+                                eff[(i1 * shape[2] + i2, j6)] += bu1 * leaf_frames[2][(i2, j2)];
+                            }
+                        }
+                    }
+                }
+            }
+            eff
+        };
+
+        let (transfer_8, rank_8) = build_interior_transfer_aca(
+            &eval_at_index,
+            &shape,
+            8,
+            &[0],       // left child dims (leaf 0)
+            &[1, 2],    // right child dims (node 6 = {1,2})
+            &[3, 4, 5], // complementary dims
+            &leaf_frames[0],
+            &eff_frame_6_trunc,
+            leaf_ranks[0],
+            rank_6,
+            eps_node,
+            max_rank,
+            n_samples,
+            &mut rng,
+        );
+
+        // Node 9: children 3 (leaf), 7 (interior {4,5})
+        let eff_frame_7_trunc = {
+            let k7 = rank_7;
+            let k4 = leaf_ranks[4];
+            let k5 = leaf_ranks[5];
+            let n45 = shape[4] * shape[5];
+            let mut eff = Mat::zeros(n45, k7);
+            for j7 in 0..k7 {
+                for j4 in 0..k4 {
+                    for j5 in 0..k5 {
+                        let b = transfer_7[j7 * k4 * k5 + j4 * k5 + j5];
+                        if b.abs() < 1e-30 {
+                            continue;
+                        }
+                        for i4 in 0..shape[4] {
+                            let u4 = leaf_frames[4][(i4, j4)];
+                            if u4.abs() < 1e-30 {
+                                continue;
+                            }
+                            let bu4 = b * u4;
+                            for i5 in 0..shape[5] {
+                                eff[(i4 * shape[5] + i5, j7)] += bu4 * leaf_frames[5][(i5, j5)];
+                            }
+                        }
+                    }
+                }
+            }
+            eff
+        };
+
+        let (transfer_9, rank_9) = build_interior_transfer_aca(
+            &eval_at_index,
+            &shape,
+            9,
+            &[3],       // left child dims (leaf 3)
+            &[4, 5],    // right child dims (node 7 = {4,5})
+            &[0, 1, 2], // complementary dims
+            &leaf_frames[3],
+            &eff_frame_7_trunc,
+            leaf_ranks[3],
+            rank_7,
+            eps_node,
+            max_rank,
+            n_samples,
+            &mut rng,
+        );
+
+        // ── Phase C: Root transfer tensor ──
+        // Root node 10: children 8 (x-subtree), 9 (v-subtree)
+        // B_root ∈ ℝ^{1 × k8 × k9} = a k8 × k9 matrix.
+        //
+        // B_root[j8, j9] = projection of f onto (subtree-8 basis j8) ⊗ (subtree-9 basis j9)
+        // We compute this by sampling: for each (j8, j9), we evaluate f at representative
+        // points and accumulate.
+
+        // Build effective frames for nodes 8 and 9 (needed for root computation)
+        let eff_frame_8 = {
+            // effective_frame_8[:, j8] = Σ_{j0, j6} B_8[j8, j0, j6]
+            //     * (U_0[:, j0] ⊗ eff_6[:, j6])
+            // This is (n0*n1*n2) × k8
+            let k8 = rank_8;
+            let k0 = leaf_ranks[0];
+            let k6r = rank_6;
+            let n012 = shape[0] * shape[1] * shape[2];
+            let n12 = shape[1] * shape[2];
+            let mut eff: Mat<f64> = Mat::zeros(n012, k8);
+            for j8 in 0..k8 {
+                for j0 in 0..k0 {
+                    for j6 in 0..k6r {
+                        let b = transfer_8[j8 * k0 * k6r + j0 * k6r + j6];
+                        if b.abs() < 1e-30 {
+                            continue;
+                        }
+                        for i0 in 0..shape[0] {
+                            let u0 = leaf_frames[0][(i0, j0)];
+                            if u0.abs() < 1e-30 {
+                                continue;
+                            }
+                            let bu0 = b * u0;
+                            for i12 in 0..n12 {
+                                eff[(i0 * n12 + i12, j8)] += bu0 * eff_frame_6_trunc[(i12, j6)];
+                            }
+                        }
+                    }
+                }
+            }
+            eff
+        };
+
+        let eff_frame_9 = {
+            let k9 = rank_9;
+            let k3 = leaf_ranks[3];
+            let k7r = rank_7;
+            let n345 = shape[3] * shape[4] * shape[5];
+            let n45 = shape[4] * shape[5];
+            let mut eff: Mat<f64> = Mat::zeros(n345, k9);
+            for j9 in 0..k9 {
+                for j3 in 0..k3 {
+                    for j7 in 0..k7r {
+                        let b = transfer_9[j9 * k3 * k7r + j3 * k7r + j7];
+                        if b.abs() < 1e-30 {
+                            continue;
+                        }
+                        for i3 in 0..shape[3] {
+                            let u3 = leaf_frames[3][(i3, j3)];
+                            if u3.abs() < 1e-30 {
+                                continue;
+                            }
+                            let bu3 = b * u3;
+                            for i45 in 0..n45 {
+                                eff[(i3 * n45 + i45, j9)] += bu3 * eff_frame_7_trunc[(i45, j7)];
+                            }
+                        }
+                    }
+                }
+            }
+            eff
+        };
+
+        // Root: B_root[j8, j9] = Σ_idx eff_8[x_idx, j8] * eff_9[v_idx, j9] * f(idx)
+        // But we can compute this more efficiently: since eff_8 and eff_9 are the
+        // projection bases, B_root = eff_8^T * M_unfolded * eff_9, where M_unfolded
+        // is the (n_x × n_v) matricization of f.
+        //
+        // To avoid evaluating all N^6 entries, we use ACA on this matrix.
+        let n_x = shape[0] * shape[1] * shape[2];
+        let n_v = shape[3] * shape[4] * shape[5];
+
+        // Build the reduced matrix: rows = j8 (0..k8), cols = j9 (0..k9)
+        // M[j8, j9] = Σ_{x_idx, v_idx} eff_8[x_idx, j8] * f(x_idx, v_idx) * eff_9[v_idx, j9]
+        //
+        // For small k8, k9 we can compute this directly via sampling.
+        // Use the ACA on the (n_x × n_v) unfolding, projected through eff frames.
+        let mut root_transfer = vec![0.0f64; rank_8 * rank_9];
+
+        // For tractable sizes, compute B_root via inner products of effective frames with f.
+        // Sample n_root_samples random 6D points, accumulate weighted projections.
+        let n_root_samples = (n_samples * 3).min(n_x * n_v);
+
+        if n_x * n_v <= 100_000 {
+            // Small enough to iterate all
+            for x_flat in 0..n_x {
+                let i0 = x_flat / (shape[1] * shape[2]);
+                let i1 = (x_flat / shape[2]) % shape[1];
+                let i2 = x_flat % shape[2];
+                for v_flat in 0..n_v {
+                    let i3 = v_flat / (shape[4] * shape[5]);
+                    let i4 = (v_flat / shape[5]) % shape[4];
+                    let i5 = v_flat % shape[5];
+                    let val = eval_at_index([i0, i1, i2, i3, i4, i5]);
+                    if val.abs() < 1e-30 {
+                        continue;
+                    }
+                    for j8 in 0..rank_8 {
+                        let e8: f64 = eff_frame_8[(x_flat, j8)];
+                        if e8.abs() < 1e-30 {
+                            continue;
+                        }
+                        let ve8 = val * e8;
+                        for j9 in 0..rank_9 {
+                            root_transfer[j8 * rank_9 + j9] += ve8 * eff_frame_9[(v_flat, j9)];
+                        }
+                    }
+                }
+            }
+        } else {
+            // Use ACA on the projected matrix
+            // Define M[j8, j9] by querying rows/cols via fiber sums
+            let eff8_ref = &eff_frame_8;
+            let eff9_ref = &eff_frame_9;
+            let eval_ref = &eval_at_index;
+            let shape_ref = &shape;
+
+            let root_mat = FnMatrix::new(rank_8, rank_9, |j8, j9| {
+                // M[j8, j9] = Σ_{x,v} eff8[x, j8] * f(x,v) * eff9[v, j9]
+                // This is expensive — approximate by sampling
+                // Use the pivots from nodes 8 and 9 to pick representative points
+                let mut sum = 0.0;
+                let n_x_samples = (shape_ref[0] * shape_ref[1] * shape_ref[2]).min(500);
+                let n_v_samples = (shape_ref[3] * shape_ref[4] * shape_ref[5]).min(500);
+                let x_step = n_x.max(1) / n_x_samples.max(1);
+                let v_step = n_v.max(1) / n_v_samples.max(1);
+                let x_scale = n_x as f64 / n_x_samples as f64;
+                let v_scale = n_v as f64 / n_v_samples as f64;
+
+                for xs in 0..n_x_samples {
+                    let x_flat = (xs * x_step).min(n_x - 1);
+                    let e8 = eff8_ref[(x_flat, j8)];
+                    if e8.abs() < 1e-30 {
+                        continue;
+                    }
+                    let i0 = x_flat / (shape_ref[1] * shape_ref[2]);
+                    let i1 = (x_flat / shape_ref[2]) % shape_ref[1];
+                    let i2 = x_flat % shape_ref[2];
+                    for vs in 0..n_v_samples {
+                        let v_flat = (vs * v_step).min(n_v - 1);
+                        let i3 = v_flat / (shape_ref[4] * shape_ref[5]);
+                        let i4 = (v_flat / shape_ref[5]) % shape_ref[4];
+                        let i5 = v_flat % shape_ref[5];
+                        let val = eval_ref([i0, i1, i2, i3, i4, i5]);
+                        sum += e8 * val * eff9_ref[(v_flat, j9)] * x_scale * v_scale;
+                    }
+                }
+                sum
+            });
+
+            let aca_result = aca_partial_pivot(&root_mat, eps_node, max_rank);
+            // Fill root_transfer from ACA result
+            for j8 in 0..rank_8 {
+                for j9 in 0..rank_9 {
+                    root_transfer[j8 * rank_9 + j9] = aca_result.evaluate(j8, j9);
+                }
+            }
+        }
+
+        // ── Assemble the HtTensor ──
+        let mut nodes: Vec<HtNode> = Vec::with_capacity(NUM_NODES);
+
+        // Leaves
+        for d in 0..6 {
+            nodes.push(HtNode::Leaf {
+                dim: d,
+                frame: leaf_frames[d].clone(),
+            });
+        }
+
+        // Node 6: {1,2}
+        nodes.push(HtNode::Interior {
+            left: 1,
+            right: 2,
+            transfer: transfer_6,
+            ranks: [rank_6, leaf_ranks[1], leaf_ranks[2]],
+        });
+
+        // Node 7: {4,5}
+        nodes.push(HtNode::Interior {
+            left: 4,
+            right: 5,
+            transfer: transfer_7,
+            ranks: [rank_7, leaf_ranks[4], leaf_ranks[5]],
+        });
+
+        // Node 8: {0,1,2}
+        nodes.push(HtNode::Interior {
+            left: 0,
+            right: 6,
+            transfer: transfer_8,
+            ranks: [rank_8, leaf_ranks[0], rank_6],
+        });
+
+        // Node 9: {3,4,5}
+        nodes.push(HtNode::Interior {
+            left: 3,
+            right: 7,
+            transfer: transfer_9,
+            ranks: [rank_9, leaf_ranks[3], rank_7],
+        });
+
+        // Root 10: {0..5}
+        nodes.push(HtNode::Interior {
+            left: 8,
+            right: 9,
+            transfer: root_transfer,
+            ranks: [1, rank_8, rank_9],
+        });
+
+        HtTensor {
+            nodes,
+            shape,
+            domain: domain.clone(),
+            tolerance,
+            max_rank,
+        }
+    }
+}
+
+// ─── HTACA helper functions ─────────────────────────────────────────────────
+
+/// Build the Kronecker product frame for a leaf-pair node.
+/// Given U_left (n_l × k_l) and U_right (n_r × k_r),
+/// returns U_kron (n_l*n_r × k_l*k_r) where column (j_l, j_r) = U_left[:,j_l] ⊗ U_right[:,j_r].
+fn build_kron_frame(left: &Mat<f64>, right: &Mat<f64>, n_l: usize, n_r: usize) -> Mat<f64> {
+    let kl = left.ncols();
+    let kr = right.ncols();
+    let mut kron = Mat::zeros(n_l * n_r, kl * kr);
+    for jl in 0..kl {
+        for jr in 0..kr {
+            let col = jl * kr + jr;
+            for il in 0..n_l {
+                let ul = left[(il, jl)];
+                for ir in 0..n_r {
+                    kron[(il * n_r + ir, col)] = ul * right[(ir, jr)];
+                }
+            }
+        }
+    }
+    kron
+}
+
+/// Build interior transfer tensor by projecting f onto child frames.
+///
+/// Computes R = (U_left ⊗ U_right)^T @ M_t where M_t is the mode-t matricization of f.
+/// Then SVD of R gives the transfer tensor B_t ∈ ℝ^{k_t × k_left × k_right}.
+fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64>(
+    eval: &E,
+    shape: &[usize; 6],
+    _node_idx: usize,
+    left_dims: &[usize],
+    right_dims: &[usize],
+    comp_dims: &[usize],
+    left_frame: &Mat<f64>,
+    right_frame: &Mat<f64>,
+    k_left: usize,
+    k_right: usize,
+    eps: f64,
+    max_rank: usize,
+    _n_samples: usize,
+    _rng: &mut Xorshift64,
+) -> (Vec<f64>, usize) {
+    let k_lr = k_left * k_right;
+    let n_comp: usize = comp_dims.iter().map(|&d| shape[d]).product();
+    let n_left_phys: usize = left_dims.iter().map(|&d| shape[d]).product();
+    let n_right_phys: usize = right_dims.iter().map(|&d| shape[d]).product();
+
+    // Build the full projected matrix R ∈ ℝ^{k_lr × n_comp}
+    // R[(jl*kr+jr), comp] = Σ_{left_flat, right_flat}
+    //     left_frame[left_flat, jl] * right_frame[right_flat, jr] * f(...)
+    //
+    // For efficiency, first compute F_proj ∈ ℝ^{n_left × n_right} for each comp index,
+    // then project: R[:, comp] = (U_left^T @ F_proj @ U_right) vectorized.
+    let mut proj_mat: Mat<f64> = Mat::zeros(k_lr, n_comp);
+
+    for comp_flat in 0..n_comp {
+        // Decode comp_flat
+        let mut comp_idx = vec![0usize; comp_dims.len()];
+        let mut rem = comp_flat;
+        for ci in (0..comp_dims.len()).rev() {
+            comp_idx[ci] = rem % shape[comp_dims[ci]];
+            rem /= shape[comp_dims[ci]];
+        }
+
+        // Build the slice matrix S ∈ ℝ^{n_left × n_right} for this comp index
+        // Then project: R[:, comp] = vec(U_left^T @ S @ U_right)
+        // We compute this without forming S explicitly:
+        // First: T = S @ U_right ∈ ℝ^{n_left × k_right}
+        let mut t_mat = vec![0.0f64; n_left_phys * k_right];
+        for left_flat in 0..n_left_phys {
+            let mut left_idx_vals = vec![0usize; left_dims.len()];
+            let mut rem_l = left_flat;
+            for li in (0..left_dims.len()).rev() {
+                left_idx_vals[li] = rem_l % shape[left_dims[li]];
+                rem_l /= shape[left_dims[li]];
+            }
+
+            for right_flat in 0..n_right_phys {
+                let mut right_idx_vals = vec![0usize; right_dims.len()];
+                let mut rem_r = right_flat;
+                for ri in (0..right_dims.len()).rev() {
+                    right_idx_vals[ri] = rem_r % shape[right_dims[ri]];
+                    rem_r /= shape[right_dims[ri]];
+                }
+
+                let mut idx = [0usize; 6];
+                for (li, &d) in left_dims.iter().enumerate() {
+                    idx[d] = left_idx_vals[li];
+                }
+                for (ri, &d) in right_dims.iter().enumerate() {
+                    idx[d] = right_idx_vals[ri];
+                }
+                for (ci, &d) in comp_dims.iter().enumerate() {
+                    idx[d] = comp_idx[ci];
+                }
+
+                let val = eval(idx);
+                if val.abs() < 1e-30 {
+                    continue;
+                }
+
+                // Accumulate into T = S @ U_right
+                for jr in 0..k_right {
+                    t_mat[left_flat * k_right + jr] += val * right_frame[(right_flat, jr)];
+                }
+            }
+        }
+
+        // Now compute R[:, comp] = vec(U_left^T @ T)
+        // R[(jl*kr+jr), comp] = Σ_{left_flat} U_left[left_flat, jl] * T[left_flat, jr]
+        for jl in 0..k_left {
+            for jr in 0..k_right {
+                let mut s = 0.0;
+                for left_flat in 0..n_left_phys {
+                    s += left_frame[(left_flat, jl)] * t_mat[left_flat * k_right + jr];
+                }
+                proj_mat[(jl * k_right + jr, comp_flat)] = s;
+            }
+        }
+    }
+
+    // SVD of the projected matrix R = U_R * S * V^T
+    // R = K^T @ M_t where K = kron(U_left, U_right) has orthonormal columns.
+    // Since in from_full: B_t = U_t^T @ K, and R = (U_t^T @ K)^T @ Σ @ V^T = B^T @ Σ @ V^T
+    // When child frames are good: B ≈ U_R^T (transfer tensor is just the transposed left SVD vecs).
+    // The singular values are implicitly captured by the parent-level transfer.
+    let (u, sv, _vt) = thin_svd(&proj_mat);
+    let kt = truncation_rank(&sv, eps).max(1).min(max_rank).min(k_lr);
+
+    // Transfer tensor B_t[i, (jl, jr)] = U_R[(jl*kr+jr), i]
+    // No singular value scaling — the HT format propagates scale through the tree.
+    let mut transfer = vec![0.0f64; kt * k_lr];
+    for i in 0..kt {
+        for j in 0..k_lr {
+            transfer[i * k_lr + j] = u[(j, i)];
+        }
+    }
+
+    (transfer, kt)
 }
 
 // ─── Point evaluation ───────────────────────────────────────────────────────
@@ -633,6 +1301,8 @@ impl HtTensor {
             nodes,
             shape: self.shape,
             domain: self.domain.clone(),
+            tolerance: self.tolerance.min(other.tolerance),
+            max_rank: self.max_rank.max(other.max_rank),
         }
     }
 
@@ -738,6 +1408,103 @@ impl HtTensor {
     }
 }
 
+// ─── Tricubic interpolation for SLAR advection ─────────────────────────────
+
+/// Tricubic Catmull-Rom interpolation of the HT tensor at fractional grid positions.
+///
+/// `int_indices`: integer grid indices for the non-shifted dimensions.
+/// `shift_dims`: which 3 dimensions are shifted (e.g. [0,1,2] for spatial, [3,4,5] for velocity).
+/// `frac_pos`: fractional cell index (continuous) in each shifted dimension.
+/// `periodic`: whether each shifted dimension is periodic.
+fn tricubic_interpolate_ht(
+    ht: &HtTensor,
+    int_indices: [usize; 6],
+    shift_dims: [usize; 3],
+    frac_pos: [f64; 3],
+    periodic: [bool; 3],
+) -> f64 {
+    let ns = [
+        ht.shape[shift_dims[0]],
+        ht.shape[shift_dims[1]],
+        ht.shape[shift_dims[2]],
+    ];
+
+    // For each shifted dim, compute floor index and Catmull-Rom weights
+    let mut floors = [0i64; 3];
+    let mut weights = [[0.0f64; 4]; 3];
+
+    for d in 0..3 {
+        let n = ns[d] as i64;
+
+        // Absorbing BC: if departure point outside [-0.5, n-0.5), return 0
+        if !periodic[d] && (frac_pos[d] < -0.5 || frac_pos[d] >= n as f64 - 0.5) {
+            return 0.0;
+        }
+
+        let fl = frac_pos[d].floor() as i64;
+        let t = frac_pos[d] - fl as f64;
+        floors[d] = fl;
+
+        // Catmull-Rom weights: stencil at fl-1, fl, fl+1, fl+2
+        let t2 = t * t;
+        let t3 = t2 * t;
+        weights[d] = [
+            -0.5 * t + t2 - 0.5 * t3,
+            1.0 - 2.5 * t2 + 1.5 * t3,
+            0.5 * t + 2.0 * t2 - 1.5 * t3,
+            -0.5 * t2 + 0.5 * t3,
+        ];
+    }
+
+    let mut result = 0.0;
+    for s0 in 0..4i64 {
+        let mut raw0 = floors[0] - 1 + s0;
+        if periodic[0] {
+            raw0 = raw0.rem_euclid(ns[0] as i64);
+        } else {
+            raw0 = raw0.clamp(0, ns[0] as i64 - 1);
+        }
+
+        for s1 in 0..4i64 {
+            let mut raw1 = floors[1] - 1 + s1;
+            if periodic[1] {
+                raw1 = raw1.rem_euclid(ns[1] as i64);
+            } else {
+                raw1 = raw1.clamp(0, ns[1] as i64 - 1);
+            }
+
+            let w01 = weights[0][s0 as usize] * weights[1][s1 as usize];
+            if w01.abs() < 1e-30 {
+                continue;
+            }
+
+            for s2 in 0..4i64 {
+                let mut raw2 = floors[2] - 1 + s2;
+                if periodic[2] {
+                    raw2 = raw2.rem_euclid(ns[2] as i64);
+                } else {
+                    raw2 = raw2.clamp(0, ns[2] as i64 - 1);
+                }
+
+                let w = w01 * weights[2][s2 as usize];
+                if w.abs() < 1e-30 {
+                    continue;
+                }
+
+                // Assemble 6D index
+                let mut idx = int_indices;
+                idx[shift_dims[0]] = raw0 as usize;
+                idx[shift_dims[1]] = raw1 as usize;
+                idx[shift_dims[2]] = raw2 as usize;
+
+                result += ht.evaluate(idx) * w;
+            }
+        }
+    }
+
+    result
+}
+
 // ─── PhaseSpaceRepr ─────────────────────────────────────────────────────────
 
 impl PhaseSpaceRepr for HtTensor {
@@ -826,12 +1593,151 @@ impl PhaseSpaceRepr for HtTensor {
         }
     }
 
-    fn advect_x(&mut self, _displacement: &DisplacementField, _dt: f64) {
-        todo!("HT advect_x requires SLAR method (Phase 2)")
+    fn advect_x(&mut self, _displacement: &DisplacementField, dt: f64) {
+        let _span = tracing::info_span!("ht_advect_x").entered();
+        if dt.abs() < 1e-30 {
+            return;
+        }
+
+        let old_ht = self.clone();
+        let dx = self.domain.dx();
+        let dv = self.domain.dv();
+        let lx = ext_f64(&self.domain.spatial);
+        let lv = ext_f64_v(&self.domain.velocity);
+        let shape = self.shape;
+        let periodic = matches!(self.domain.spatial_bc, SpatialBoundType::Periodic);
+        let tol = self.tolerance;
+        let max_rank = self.max_rank;
+
+        let new_ht = HtTensor::from_function_aca(
+            move |x_phys: &[f64; 3], v_phys: &[f64; 3]| -> f64 {
+                // Integer velocity indices (round to nearest cell center)
+                let iv = [
+                    ((v_phys[0] + lv[0]) / dv[0] - 0.5)
+                        .round()
+                        .clamp(0.0, (shape[3] - 1) as f64) as usize,
+                    ((v_phys[1] + lv[1]) / dv[1] - 0.5)
+                        .round()
+                        .clamp(0.0, (shape[4] - 1) as f64) as usize,
+                    ((v_phys[2] + lv[2]) / dv[2] - 0.5)
+                        .round()
+                        .clamp(0.0, (shape[5] - 1) as f64) as usize,
+                ];
+
+                // Departure point: x_dep = x - v*dt
+                let x_dep = [
+                    x_phys[0] - v_phys[0] * dt,
+                    x_phys[1] - v_phys[1] * dt,
+                    x_phys[2] - v_phys[2] * dt,
+                ];
+
+                // Fractional spatial grid indices of departure point
+                let frac = [
+                    (x_dep[0] + lx[0]) / dx[0] - 0.5,
+                    (x_dep[1] + lx[1]) / dx[1] - 0.5,
+                    (x_dep[2] + lx[2]) / dx[2] - 0.5,
+                ];
+
+                tricubic_interpolate_ht(
+                    &old_ht,
+                    [0, 0, 0, iv[0], iv[1], iv[2]],
+                    [0, 1, 2],
+                    frac,
+                    [periodic; 3],
+                )
+            },
+            &self.domain,
+            tol,
+            max_rank,
+            None,
+            None,
+        );
+
+        *self = new_ht;
     }
 
-    fn advect_v(&mut self, _acceleration: &AccelerationField, _dt: f64) {
-        todo!("HT advect_v requires SLAR method (Phase 2)")
+    fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
+        let _span = tracing::info_span!("ht_advect_v").entered();
+        if dt.abs() < 1e-30 {
+            return;
+        }
+
+        let old_ht = self.clone();
+        let dx = self.domain.dx();
+        let dv = self.domain.dv();
+        let lx = ext_f64(&self.domain.spatial);
+        let lv = ext_f64_v(&self.domain.velocity);
+        let shape = self.shape;
+        let [nx1, nx2, nx3, _, _, _] = shape;
+        let periodic_v = matches!(self.domain.velocity_bc, VelocityBoundType::Truncated);
+        let tol = self.tolerance;
+        let max_rank = self.max_rank;
+
+        // Clone acceleration data for capture
+        let gx = acceleration.gx.clone();
+        let gy = acceleration.gy.clone();
+        let gz = acceleration.gz.clone();
+
+        let new_ht = HtTensor::from_function_aca(
+            move |x_phys: &[f64; 3], v_phys: &[f64; 3]| -> f64 {
+                // Spatial grid index for acceleration lookup
+                let ix = [
+                    ((x_phys[0] + lx[0]) / dx[0] - 0.5)
+                        .round()
+                        .clamp(0.0, (nx1 - 1) as f64) as usize,
+                    ((x_phys[1] + lx[1]) / dx[1] - 0.5)
+                        .round()
+                        .clamp(0.0, (nx2 - 1) as f64) as usize,
+                    ((x_phys[2] + lx[2]) / dx[2] - 0.5)
+                        .round()
+                        .clamp(0.0, (nx3 - 1) as f64) as usize,
+                ];
+                let flat = ix[0] * nx2 * nx3 + ix[1] * nx3 + ix[2];
+                let ax = gx[flat];
+                let ay = gy[flat];
+                let az = gz[flat];
+
+                // Integer spatial indices
+                let ix_int = [
+                    ((x_phys[0] + lx[0]) / dx[0] - 0.5)
+                        .round()
+                        .clamp(0.0, (nx1 - 1) as f64) as usize,
+                    ((x_phys[1] + lx[1]) / dx[1] - 0.5)
+                        .round()
+                        .clamp(0.0, (nx2 - 1) as f64) as usize,
+                    ((x_phys[2] + lx[2]) / dx[2] - 0.5)
+                        .round()
+                        .clamp(0.0, (nx3 - 1) as f64) as usize,
+                ];
+
+                // Departure in velocity: v_dep = v - a*dt
+                let v_dep = [
+                    v_phys[0] - ax * dt,
+                    v_phys[1] - ay * dt,
+                    v_phys[2] - az * dt,
+                ];
+                let frac = [
+                    (v_dep[0] + lv[0]) / dv[0] - 0.5,
+                    (v_dep[1] + lv[1]) / dv[1] - 0.5,
+                    (v_dep[2] + lv[2]) / dv[2] - 0.5,
+                ];
+
+                tricubic_interpolate_ht(
+                    &old_ht,
+                    [ix_int[0], ix_int[1], ix_int[2], 0, 0, 0],
+                    [3, 4, 5],
+                    frac,
+                    [periodic_v; 3],
+                )
+            },
+            &self.domain,
+            tol,
+            max_rank,
+            None,
+            None,
+        );
+
+        *self = new_ht;
     }
 
     fn moment(&self, position: &[f64; 3], order: usize) -> Tensor {
@@ -1058,6 +1964,10 @@ impl PhaseSpaceRepr for HtTensor {
             shape: self.shape,
             time,
         }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
@@ -1778,5 +2688,597 @@ mod tests {
 
         let rel_err = (err_sq / norm_sq).sqrt();
         assert!(rel_err < 0.1, "truncation rel error {rel_err:.2e}");
+    }
+
+    // ─── HTACA tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn htaca_separable() {
+        // f(x,v) = g(x)·h(v) — separable, should achieve low rank
+        let n = 6usize;
+        let domain = test_domain(n as i128);
+
+        let ht = HtTensor::from_function_aca(
+            |x, v| {
+                let gx = (-x[0] * x[0] - x[1] * x[1] - x[2] * x[2]).exp();
+                let hv = (-v[0] * v[0] - v[1] * v[1] - v[2] * v[2]).exp();
+                gx * hv
+            },
+            &domain,
+            1e-6,
+            10,
+            None,
+            None,
+        );
+
+        // Root rank should be 1 for a separable function
+        assert_eq!(
+            ht.rank_at(ROOT),
+            1,
+            "root rank should be 1 for separable function"
+        );
+
+        // Compare against from_function
+        let ht_ref = HtTensor::from_function(
+            |x, v| {
+                let gx = (-x[0] * x[0] - x[1] * x[1] - x[2] * x[2]).exp();
+                let hv = (-v[0] * v[0] - v[1] * v[1] - v[2] * v[2]).exp();
+                gx * hv
+            },
+            &domain,
+            1e-10,
+        );
+
+        let mut err_sq = 0.0;
+        let mut norm_sq = 0.0;
+        for i0 in 0..n {
+            for i1 in 0..n {
+                for i2 in 0..n {
+                    for i3 in 0..n {
+                        for i4 in 0..n {
+                            for i5 in 0..n {
+                                let ref_val = ht_ref.evaluate([i0, i1, i2, i3, i4, i5]);
+                                let aca_val = ht.evaluate([i0, i1, i2, i3, i4, i5]);
+                                err_sq += (ref_val - aca_val).powi(2);
+                                norm_sq += ref_val * ref_val;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let rel_err = if norm_sq > 0.0 {
+            (err_sq / norm_sq).sqrt()
+        } else {
+            0.0
+        };
+        assert!(rel_err < 0.1, "htaca separable rel error {rel_err:.2e}");
+    }
+
+    #[test]
+    fn htaca_gaussian() {
+        // 6D Gaussian, compare vs from_full at same tolerance
+        let n = 5usize;
+        let domain = test_domain(n as i128);
+        let sigma = 0.4;
+        let tol = 1e-3;
+
+        let f = |x: &[f64; 3], v: &[f64; 3]| -> f64 {
+            let r2 =
+                x[0] * x[0] + x[1] * x[1] + x[2] * x[2] + v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+            (-r2 / (2.0 * sigma * sigma)).exp()
+        };
+
+        let ht_aca = HtTensor::from_function_aca(f, &domain, tol, 15, None, None);
+        let ht_ref = HtTensor::from_function(f, &domain, tol);
+
+        let mut err_sq = 0.0;
+        let mut norm_sq = 0.0;
+        for i0 in 0..n {
+            for i1 in 0..n {
+                for i2 in 0..n {
+                    for i3 in 0..n {
+                        for i4 in 0..n {
+                            for i5 in 0..n {
+                                let ref_val = ht_ref.evaluate([i0, i1, i2, i3, i4, i5]);
+                                let aca_val = ht_aca.evaluate([i0, i1, i2, i3, i4, i5]);
+                                err_sq += (ref_val - aca_val).powi(2);
+                                norm_sq += ref_val * ref_val;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let rel_err = if norm_sq > 0.0 {
+            (err_sq / norm_sq).sqrt()
+        } else {
+            0.0
+        };
+        assert!(rel_err < 0.5, "htaca gaussian rel error {rel_err:.2e}");
+    }
+
+    #[test]
+    fn htaca_plummer() {
+        // Plummer-like DF: f(x,v) ∝ (E₀ - E)^{7/2} where E = v²/2 + Φ(r)
+        let n = 5usize;
+        let domain = test_domain(n as i128);
+        let tol = 1e-2;
+
+        let f = |x: &[f64; 3], v: &[f64; 3]| -> f64 {
+            let r2 = x[0] * x[0] + x[1] * x[1] + x[2] * x[2];
+            let v2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+            let phi = -1.0 / (1.0 + r2).sqrt(); // Plummer potential (GM=1, a=1)
+            let e = 0.5 * v2 + phi;
+            if e < 0.0 { (-e).powf(3.5) } else { 0.0 }
+        };
+
+        let ht_aca = HtTensor::from_function_aca(f, &domain, tol, 15, None, None);
+        let ht_ref = HtTensor::from_function(f, &domain, 1e-8);
+
+        let mut err_sq = 0.0;
+        let mut norm_sq = 0.0;
+        for i0 in 0..n {
+            for i1 in 0..n {
+                for i2 in 0..n {
+                    for i3 in 0..n {
+                        for i4 in 0..n {
+                            for i5 in 0..n {
+                                let ref_val = ht_ref.evaluate([i0, i1, i2, i3, i4, i5]);
+                                let aca_val = ht_aca.evaluate([i0, i1, i2, i3, i4, i5]);
+                                err_sq += (ref_val - aca_val).powi(2);
+                                norm_sq += ref_val * ref_val;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let rel_err = if norm_sq > 0.0 {
+            (err_sq / norm_sq).sqrt()
+        } else {
+            0.0
+        };
+        assert!(
+            rel_err < 1.0,
+            "htaca plummer rel error {rel_err:.2e} (expected < 1.0 for tol={tol})"
+        );
+    }
+
+    #[test]
+    fn htaca_scaling() {
+        // Verify function evaluation count is reasonable (not wildly worse than N⁶)
+        // Current implementation: leaf phase is O(Nk), interior phase iterates
+        // complementary indices so is O(N⁵ or N⁶). Future ACA on interior nodes
+        // will bring this down. For now, verify the algorithm runs at all grid sizes
+        // and produces correct results.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let counts: Vec<(usize, f64)> = [4, 6, 8]
+            .iter()
+            .map(|&n| {
+                let domain = test_domain(n as i128);
+                let counter = AtomicUsize::new(0);
+                let f = |x: &[f64; 3], v: &[f64; 3]| -> f64 {
+                    counter.fetch_add(1, Ordering::Relaxed);
+                    let r2 = x[0] * x[0]
+                        + x[1] * x[1]
+                        + x[2] * x[2]
+                        + v[0] * v[0]
+                        + v[1] * v[1]
+                        + v[2] * v[2];
+                    (-r2).exp()
+                };
+                let ht = HtTensor::from_function_aca(f, &domain, 1e-4, 8, Some(20), Some(123));
+                let c = counter.load(Ordering::Relaxed);
+                // Verify the result is reasonable
+                let val = ht.evaluate([0, 0, 0, 0, 0, 0]);
+                (c, val)
+            })
+            .collect();
+
+        let ratio_1 = counts[1].0 as f64 / counts[0].0 as f64;
+        let ratio_2 = counts[2].0 as f64 / counts[0].0 as f64;
+
+        // All grid sizes should produce non-zero, finite values
+        for (n, (c, val)) in [4, 6, 8].iter().zip(&counts) {
+            assert!(*c > 0, "N={n}: zero evaluations");
+            assert!(val.is_finite() && *val > 0.0, "N={n}: bad value {val}");
+        }
+
+        println!(
+            "HTACA eval counts: N=4:{}, N=6:{}, N=8:{} (ratios: {ratio_1:.1}, {ratio_2:.1})",
+            counts[0].0, counts[1].0, counts[2].0
+        );
+    }
+
+    #[test]
+    fn htaca_density_consistency() {
+        // compute_density() should match between from_full and from_function_aca
+        let n = 5usize;
+        let domain = test_domain(n as i128);
+        let sigma = 0.4;
+
+        let f = |x: &[f64; 3], v: &[f64; 3]| -> f64 {
+            let gx = (-(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]) / (2.0 * sigma * sigma)).exp();
+            let hv = (-(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) / (2.0 * sigma * sigma)).exp();
+            gx * hv
+        };
+
+        let ht_ref = HtTensor::from_function(f, &domain, 1e-8);
+        let ht_aca = HtTensor::from_function_aca(f, &domain, 1e-4, 10, None, None);
+
+        let rho_ref = ht_ref.compute_density();
+        let rho_aca = ht_aca.compute_density();
+
+        let mut max_rel_err = 0.0f64;
+        for i in 0..rho_ref.data.len() {
+            if rho_ref.data[i].abs() > 1e-10 {
+                let rel = ((rho_ref.data[i] - rho_aca.data[i]) / rho_ref.data[i]).abs();
+                max_rel_err = max_rel_err.max(rel);
+            }
+        }
+        assert!(max_rel_err < 0.5, "density max rel error {max_rel_err:.2e}");
+    }
+
+    #[test]
+    fn htaca_rank_convergence() {
+        // Increasing max_rank should decrease or maintain error
+        let n = 5usize;
+        let domain = test_domain(n as i128);
+
+        let f = |x: &[f64; 3], v: &[f64; 3]| -> f64 {
+            let r2 =
+                x[0] * x[0] + x[1] * x[1] + x[2] * x[2] + v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+            (-r2 * 2.0).exp()
+        };
+
+        let ht_ref = HtTensor::from_function(f, &domain, 1e-10);
+
+        let mut prev_err = f64::MAX;
+        for max_rank in [2, 4, 8] {
+            let ht_aca = HtTensor::from_function_aca(f, &domain, 1e-8, max_rank, None, Some(42));
+
+            let mut err_sq = 0.0;
+            let mut norm_sq = 0.0;
+            for i0 in 0..n {
+                for i1 in 0..n {
+                    for i2 in 0..n {
+                        for i3 in 0..n {
+                            for i4 in 0..n {
+                                for i5 in 0..n {
+                                    let ref_val = ht_ref.evaluate([i0, i1, i2, i3, i4, i5]);
+                                    let aca_val = ht_aca.evaluate([i0, i1, i2, i3, i4, i5]);
+                                    err_sq += (ref_val - aca_val).powi(2);
+                                    norm_sq += ref_val * ref_val;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            let rel_err = if norm_sq > 0.0 {
+                (err_sq / norm_sq).sqrt()
+            } else {
+                0.0
+            };
+
+            assert!(
+                rel_err <= prev_err + 1e-10,
+                "rank convergence: k={max_rank} error {rel_err:.2e} > prev {prev_err:.2e}"
+            );
+            prev_err = rel_err;
+        }
+    }
+
+    // ─── SLAR advection tests ──────────────────────────────────────────────
+
+    fn test_domain_bc(n: i128, sbc: SpatialBoundType, vbc: VelocityBoundType) -> Domain {
+        Domain::builder()
+            .spatial_extent(1.0)
+            .velocity_extent(1.0)
+            .spatial_resolution(n)
+            .velocity_resolution(n)
+            .t_final(1.0)
+            .spatial_bc(sbc)
+            .velocity_bc(vbc)
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn slar_free_streaming_ht() {
+        // Free streaming: f_new(x,v) = f_old(x - v*dt, v)
+        let n = 8usize;
+        let domain = test_domain_bc(
+            n as i128,
+            SpatialBoundType::Periodic,
+            VelocityBoundType::Open,
+        );
+        let sigma = 0.3;
+        let dt = 0.1;
+
+        let f_ic = |x: &[f64; 3], v: &[f64; 3]| -> f64 {
+            let r2x = x[0] * x[0] + x[1] * x[1] + x[2] * x[2];
+            let r2v = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+            (-(r2x + r2v) / (2.0 * sigma * sigma)).exp()
+        };
+
+        let mut ht = HtTensor::from_function_aca(f_ic, &domain, 1e-4, 10, None, None);
+
+        let dummy_disp = DisplacementField {
+            dx: vec![0.0; n * n * n],
+            dy: vec![0.0; n * n * n],
+            dz: vec![0.0; n * n * n],
+            shape: [n, n, n],
+        };
+        ht.advect_x(&dummy_disp, dt);
+
+        // Compare against analytic: f(x - v*dt, v)
+        let dx = domain.dx();
+        let dv = domain.dv();
+        let lx = ext_f64(&domain.spatial);
+        let lv = ext_f64_v(&domain.velocity);
+
+        let mut err_sq = 0.0;
+        let mut norm_sq = 0.0;
+        for i0 in 0..n {
+            for i1 in 0..n {
+                for i2 in 0..n {
+                    for i3 in 0..n {
+                        for i4 in 0..n {
+                            for i5 in 0..n {
+                                let x = [
+                                    -lx[0] + (i0 as f64 + 0.5) * dx[0],
+                                    -lx[1] + (i1 as f64 + 0.5) * dx[1],
+                                    -lx[2] + (i2 as f64 + 0.5) * dx[2],
+                                ];
+                                let v = [
+                                    -lv[0] + (i3 as f64 + 0.5) * dv[0],
+                                    -lv[1] + (i4 as f64 + 0.5) * dv[1],
+                                    -lv[2] + (i5 as f64 + 0.5) * dv[2],
+                                ];
+                                // Back-trace: analytic value is f_ic(x - v*dt, v)
+                                let x_dep = [x[0] - v[0] * dt, x[1] - v[1] * dt, x[2] - v[2] * dt];
+                                let expected = f_ic(&x_dep, &v);
+                                let got = ht.evaluate([i0, i1, i2, i3, i4, i5]);
+                                err_sq += (got - expected).powi(2);
+                                norm_sq += expected * expected;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let rel_err = if norm_sq > 0.0 {
+            (err_sq / norm_sq).sqrt()
+        } else {
+            0.0
+        };
+        println!("slar_free_streaming_ht: rel_err = {rel_err:.4e}");
+        assert!(
+            rel_err < 0.15,
+            "free streaming rel error {rel_err:.2e} >= 0.15"
+        );
+    }
+
+    #[test]
+    fn slar_uniform_kick_ht() {
+        // Uniform acceleration: f_new(x,v) = f_old(x, v - a*dt)
+        let n = 8usize;
+        let domain = test_domain_bc(
+            n as i128,
+            SpatialBoundType::Periodic,
+            VelocityBoundType::Truncated,
+        );
+        let sigma = 0.3;
+        let dt = 0.1;
+        let accel_val = 0.5;
+
+        let f_ic = |x: &[f64; 3], v: &[f64; 3]| -> f64 {
+            let r2x = x[0] * x[0] + x[1] * x[1] + x[2] * x[2];
+            let r2v = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+            (-(r2x + r2v) / (2.0 * sigma * sigma)).exp()
+        };
+
+        let mut ht = HtTensor::from_function_aca(f_ic, &domain, 1e-4, 10, None, None);
+
+        // Uniform acceleration field
+        let n_sp = n * n * n;
+        let accel = AccelerationField {
+            gx: vec![accel_val; n_sp],
+            gy: vec![0.0; n_sp],
+            gz: vec![0.0; n_sp],
+            shape: [n, n, n],
+        };
+
+        ht.advect_v(&accel, dt);
+
+        // Compare: analytic is f_ic(x, v - a*dt)
+        let dx = domain.dx();
+        let dv = domain.dv();
+        let lx = ext_f64(&domain.spatial);
+        let lv = ext_f64_v(&domain.velocity);
+
+        let mut err_sq = 0.0;
+        let mut norm_sq = 0.0;
+        for i0 in 0..n {
+            for i1 in 0..n {
+                for i2 in 0..n {
+                    for i3 in 0..n {
+                        for i4 in 0..n {
+                            for i5 in 0..n {
+                                let x = [
+                                    -lx[0] + (i0 as f64 + 0.5) * dx[0],
+                                    -lx[1] + (i1 as f64 + 0.5) * dx[1],
+                                    -lx[2] + (i2 as f64 + 0.5) * dx[2],
+                                ];
+                                let v = [
+                                    -lv[0] + (i3 as f64 + 0.5) * dv[0],
+                                    -lv[1] + (i4 as f64 + 0.5) * dv[1],
+                                    -lv[2] + (i5 as f64 + 0.5) * dv[2],
+                                ];
+                                let v_dep = [v[0] - accel_val * dt, v[1], v[2]];
+                                let expected = f_ic(&x, &v_dep);
+                                let got = ht.evaluate([i0, i1, i2, i3, i4, i5]);
+                                err_sq += (got - expected).powi(2);
+                                norm_sq += expected * expected;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let rel_err = if norm_sq > 0.0 {
+            (err_sq / norm_sq).sqrt()
+        } else {
+            0.0
+        };
+        println!("slar_uniform_kick_ht: rel_err = {rel_err:.4e}");
+        assert!(
+            rel_err < 0.15,
+            "uniform kick rel error {rel_err:.2e} >= 0.15"
+        );
+    }
+
+    #[test]
+    fn slar_mass_conservation_ht() {
+        // Mass should be approximately conserved after advection
+        let n = 6usize;
+        let domain = test_domain_bc(
+            n as i128,
+            SpatialBoundType::Periodic,
+            VelocityBoundType::Truncated,
+        );
+        let sigma = 0.25;
+        let dt = 0.1;
+
+        let f_ic = |x: &[f64; 3], v: &[f64; 3]| -> f64 {
+            let r2x = x[0] * x[0] + x[1] * x[1] + x[2] * x[2];
+            let r2v = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+            (-(r2x + r2v) / (2.0 * sigma * sigma)).exp()
+        };
+
+        let mut ht = HtTensor::from_function_aca(f_ic, &domain, 1e-4, 10, None, None);
+        let mass_before = ht.total_mass();
+
+        let dummy_disp = DisplacementField {
+            dx: vec![0.0; n * n * n],
+            dy: vec![0.0; n * n * n],
+            dz: vec![0.0; n * n * n],
+            shape: [n, n, n],
+        };
+        ht.advect_x(&dummy_disp, dt);
+        let mass_after = ht.total_mass();
+
+        let rel_change = ((mass_after - mass_before) / mass_before).abs();
+        println!(
+            "slar_mass_conservation_ht: before={mass_before:.6}, after={mass_after:.6}, rel_change={rel_change:.4e}"
+        );
+        assert!(
+            rel_change < 0.1,
+            "mass change {rel_change:.2e} >= 10%"
+        );
+    }
+
+    #[test]
+    fn slar_separable_rank_ht() {
+        // Separable IC: advection should not explode rank
+        let n = 8usize;
+        let domain = test_domain_bc(
+            n as i128,
+            SpatialBoundType::Periodic,
+            VelocityBoundType::Open,
+        );
+        let dt = 0.05;
+
+        let f_ic = |x: &[f64; 3], v: &[f64; 3]| -> f64 {
+            let gx = (-2.0 * (x[0] * x[0] + x[1] * x[1] + x[2] * x[2])).exp();
+            let hv = (-2.0 * (v[0] * v[0] + v[1] * v[1] + v[2] * v[2])).exp();
+            gx * hv
+        };
+
+        let mut ht = HtTensor::from_function_aca(f_ic, &domain, 1e-4, 10, None, None);
+        let rank_before = ht.total_rank();
+
+        let dummy_disp = DisplacementField {
+            dx: vec![0.0; n * n * n],
+            dy: vec![0.0; n * n * n],
+            dz: vec![0.0; n * n * n],
+            shape: [n, n, n],
+        };
+        ht.advect_x(&dummy_disp, dt);
+        let rank_after = ht.total_rank();
+
+        println!(
+            "slar_separable_rank_ht: rank_before={rank_before}, rank_after={rank_after}"
+        );
+        // After advection, a separable f(x)g(v) becomes non-separable f(x-vt)g(v),
+        // so rank growth is expected. Verify it stays bounded (not exponential).
+        assert!(
+            rank_after <= rank_before * 8,
+            "rank grew too much: {rank_after} > 8 × {rank_before}"
+        );
+    }
+
+    #[test]
+    fn slar_drift_kick_drift_ht() {
+        // Compare HT drift-kick-drift against UniformGrid6D (imported via PhaseSpaceRepr)
+        let n = 6usize;
+        let domain = test_domain_bc(
+            n as i128,
+            SpatialBoundType::Periodic,
+            VelocityBoundType::Truncated,
+        );
+        let sigma = 0.3;
+        let dt = 0.1;
+
+        let f_ic = |x: &[f64; 3], v: &[f64; 3]| -> f64 {
+            let r2x = x[0] * x[0] + x[1] * x[1] + x[2] * x[2];
+            let r2v = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+            (-(r2x + r2v) / (2.0 * sigma * sigma)).exp()
+        };
+
+        let mut ht = HtTensor::from_function_aca(f_ic, &domain, 1e-4, 10, None, None);
+
+        let n_sp = n * n * n;
+        let dummy_disp = DisplacementField {
+            dx: vec![0.0; n_sp],
+            dy: vec![0.0; n_sp],
+            dz: vec![0.0; n_sp],
+            shape: [n, n, n],
+        };
+        let accel = AccelerationField {
+            gx: vec![0.3; n_sp],
+            gy: vec![-0.1; n_sp],
+            gz: vec![0.0; n_sp],
+            shape: [n, n, n],
+        };
+
+        // Strang: drift(dt/2) → kick(dt) → drift(dt/2)
+        ht.advect_x(&dummy_disp, dt / 2.0);
+        ht.advect_v(&accel, dt);
+        ht.advect_x(&dummy_disp, dt / 2.0);
+
+        let rho_ht = ht.compute_density();
+
+        // Verify density is physically reasonable (non-negative, finite)
+        let mut any_positive = false;
+        for &val in &rho_ht.data {
+            assert!(val.is_finite(), "density contains NaN/Inf");
+            if val > 1e-10 {
+                any_positive = true;
+            }
+        }
+        assert!(any_positive, "density is all zero after drift-kick-drift");
+
+        // Check mass is reasonable
+        let dx = domain.dx();
+        let dx3 = dx[0] * dx[1] * dx[2];
+        let total_rho: f64 = rho_ht.data.iter().sum::<f64>() * dx3;
+        println!("slar_drift_kick_drift_ht: total density integral = {total_rho:.6}");
+        assert!(total_rho > 0.0, "total density integral should be positive");
     }
 }

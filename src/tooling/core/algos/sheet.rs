@@ -6,6 +6,7 @@ use super::super::{
     phasespace::PhaseSpaceRepr,
     types::*,
 };
+use std::any::Any;
 
 /// One Lagrangian tracer particle on the dark matter sheet.
 pub struct SheetParticle {
@@ -70,5 +71,9 @@ impl PhaseSpaceRepr for SheetTracker {
     }
     fn velocity_distribution(&self, position: &[f64; 3]) -> Vec<f64> {
         todo!("sheet tracker: collect velocities of particles near position")
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }

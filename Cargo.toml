@@ -16,19 +16,18 @@ anyhow = "1.0.102"  # Error handling
 thiserror = "2.0.18" # Error handling
 rustfft = "6.4.1"   # FFT Poisson solver
 rayon = "1.11.0"     # data-parallel loops over 6D grid
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
 realfft = "3.5.0"    # Real-to-complex FFT (Hermitian symmetry)
-tracing = "0.1"      # Zero-cost instrumentation spans
+tracing = "0.1.44"   # Zero-cost instrumentation spans
 faer = "0.24.0"      # SVD, QR, LU — pure Rust, SIMD-accelerated
-ndarray = "0.17.2"   # n-dimensional array containers for transfer tensors
 hdf5-metno = { version = "0.12.3", optional = true }
 
 # Optional allocator / profiling deps behind feature flags
-dhat = { version = "0.3", optional = true }
-tikv-jemallocator = { version = "0.6", optional = true }
-mimalloc = { version = "0.1", optional = true }
-tracing-tracy = { version = "0.11", optional = true }
+dhat = { version = "0.3.3", optional = true }
+tikv-jemallocator = { version = "0.6.1", optional = true }
+mimalloc = { version = "0.1.48", optional = true }
+tracing-tracy = { version = "0.11.4", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }

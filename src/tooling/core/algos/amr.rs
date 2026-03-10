@@ -1,6 +1,7 @@
 //! Adaptive mesh refinement in 6D. Refines cells where f is large or has steep gradients.
 
 use super::super::{init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
+use std::any::Any;
 
 /// One AMR leaf cell in 6D phase space.
 pub struct AmrCell {
@@ -61,5 +62,9 @@ impl PhaseSpaceRepr for AmrGrid {
     }
     fn velocity_distribution(&self, position: &[f64; 3]) -> Vec<f64> {
         todo!("AMR: collect f values from velocity leaf cells at given position")
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }

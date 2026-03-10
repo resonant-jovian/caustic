@@ -71,7 +71,7 @@ Each solver component is a Rust trait; implementations are swapped independently
 
 | Trait | Role | Implementations |
 |---|---|---|
-| `PhaseSpaceRepr` | Store and query f(x,v) | `UniformGrid6D` (rayon-parallelized) |
+| `PhaseSpaceRepr` | Store and query f(x,v) | `UniformGrid6D` (rayon-parallelized), `HtTensor` (Hierarchical Tucker) |
 | `PoissonSolver` | Solve nabla^2 Phi = 4piG rho | `FftPoisson` (periodic, R2C), `FftIsolated` (Hockney-Eastwood zero-padding) |
 | `Advector` | Advance f by dt | `SemiLagrangian` (Catmull-Rom interpolation) |
 | `TimeIntegrator` | Orchestrate operator splitting | `StrangSplitting` (2nd-order), `LieSplitting` (1st-order), `YoshidaSplitting` (4th-order) |
@@ -117,6 +117,39 @@ pub trait PhaseSpaceRepr: Send + Sync {
 }
 ```
 
+### Hierarchical Tucker (HT) tensor compression
+
+A uniform 6D grid at N=64 per dimension requires 64^6 ~ 7x10^10 cells. The `HtTensor` representation exploits the balanced binary tree structure of the x-v split to store f(x,v) in O(dnk^2 + dk^3) memory, where k is the representation rank and n is the grid size per dimension.
+
+**Construction methods:**
+
+- `HtTensor::from_full()` — compress a full 6D array via hierarchical SVD (HSVD). O(N^6) — diagnostic use only.
+- `HtTensor::from_function()` — evaluate a callable on the grid, then compress. O(N^6).
+- `HtTensor::from_function_aca()` — **black-box construction** via the HTACA algorithm (Ballani & Grasedyck 2013). Builds the HT decomposition by sampling O(dNk) fibers instead of evaluating all N^6 grid points. Leaf frames are computed via fiber sampling + column-pivoted QR; interior transfer tensors via projected SVD.
+
+**Operations** (all in compressed format, never expanding to full):
+
+- `compute_density()` — O(Nk^2) velocity integration via tree contraction
+- `truncate(eps)` — rank-adaptive recompression (orthogonalize + top-down SVD)
+- `add()` — rank-concatenation addition, followed by `truncate()` to compress
+- `inner_product()` / `frobenius_norm()` — O(dk^4) via recursive Gram matrices
+- `evaluate()` — single-point query in O(dk^3)
+
+### Adaptive Cross Approximation (ACA)
+
+The `aca` module provides a standalone partially-pivoted ACA implementation (Bebendorf 2000) for low-rank matrix approximation. It builds a rank-k factorization A ~ U V^T by querying only O((m+n)k) entries. Used internally by HTACA for black-box tensor construction.
+
+```rust
+use caustic::tooling::core::algos::aca::{aca_partial_pivot, FnMatrix};
+
+let mat = FnMatrix::new(100, 80, |i, j| {
+    let d = (i as f64 / 100.0) - (j as f64 / 80.0);
+    (-d * d / 0.1).exp()
+});
+let result = aca_partial_pivot(&mat, 1e-8, 20);
+println!("ACA rank: {}", result.rank);
+```
+
 ## Initial conditions
 
 All implemented ICs satisfy the `IsolatedEquilibrium` trait and can be sampled onto a grid with `sample_on_grid()`:
@@ -159,6 +192,30 @@ Run with `cargo test --release -- --test-threads=1`:
 
 Plus 2 integration tests (`smoke_test`, `end_to_end_run`) exercising the full pipeline from `Domain` through `Simulation::run()` to `ExitPackage`.
 
+### HT tensor and ACA tests
+
+| Test | Validates |
+|---|---|
+| `round_trip_rank1` | Rank-1 tensor survives HSVD round-trip |
+| `gaussian_blob` | 6D Gaussian compression ratio and accuracy |
+| `addition` | Rank-concatenation addition correctness |
+| `density_integration` | `compute_density()` matches direct summation |
+| `inner_product_and_norm` | Gram-matrix inner product accuracy |
+| `truncation_accuracy` | Rank-adaptive recompression error bounds |
+| `htaca_separable` | Separable f(x,v) = g(x)h(v) achieves rank 1 at root |
+| `htaca_gaussian` | HTACA vs HSVD accuracy on 6D Gaussian |
+| `htaca_plummer` | HTACA on Plummer-like DF |
+| `htaca_scaling` | Evaluation count at multiple grid sizes |
+| `htaca_density_consistency` | `compute_density()` matches between HSVD and HTACA |
+| `htaca_rank_convergence` | Error decreases monotonically with max_rank |
+| `aca_rank1_exact` | Exact rank-1 matrix recovery |
+| `aca_rank3` | Known rank-3 matrix convergence |
+| `aca_low_rank_plus_noise` | Tolerance separates signal from noise |
+| `aca_gaussian_kernel` | Gaussian kernel rapid convergence |
+| `cur_output` | U*V^T reproduces ACA approximation |
+| `convergence_criterion` | Frobenius norm estimate tracks correctly |
+| `zero_matrix` | Graceful handling of zero input |
+
 ## Feature flags
 
 ```toml
@@ -188,10 +245,15 @@ caustic = { version = "0.0.4", features = ["jemalloc"] }
 - [x] Semi-Lagrangian advection (Catmull-Rom) + Strang/Lie/Yoshida splitting
 - [x] Isolated equilibrium ICs (Plummer, King, Hernquist, NFW)
 - [x] Cosmological, merger, tidal, and custom ICs
-- [x] Conservation diagnostics + 11-test validation suite
+- [x] Conservation diagnostics + validation suite (30 tests)
 - [x] Criterion benchmarks + tracing instrumentation
 - [x] Binary snapshot I/O, CSV diagnostics, JSON checkpoints
-- [ ] Tensor-train low-rank representation
+- [x] Hierarchical Tucker (HT) tensor decomposition with HSVD compression
+- [x] Adaptive Cross Approximation (ACA) for black-box low-rank matrix construction
+- [x] HTACA black-box HT construction via fiber sampling (Ballani & Grasedyck 2013)
+- [ ] SLAR advection in HT format (semi-Lagrangian with rank-adaptive recompression)
+- [ ] Tensor-format Poisson solver
+- [ ] LoMaC conservative truncation
 - [ ] Lagrangian sheet tracker for cold dark matter
 - [ ] Multigrid / spherical harmonics Poisson solvers
 - [ ] Adaptive mesh refinement

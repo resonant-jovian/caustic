@@ -2,6 +2,7 @@
 //! Exploits low-rank structure of smooth distribution functions.
 
 use super::super::{init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
+use std::any::Any;
 
 /// Low-rank tensor-train: f ≈ G₁ ×₁ G₂ ×₂ G₃ ×₃ G₄ ×₄ G₅ ×₅ G₆.
 pub struct TensorTrain {
@@ -59,5 +60,9 @@ impl PhaseSpaceRepr for TensorTrain {
     }
     fn velocity_distribution(&self, position: &[f64; 3]) -> Vec<f64> {
         todo!("tensor-train: contract spatial cores at position, return velocity slice")
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }

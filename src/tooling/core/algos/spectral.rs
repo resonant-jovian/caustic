@@ -2,6 +2,7 @@
 //! f(x,v,t) = Σₙ aₙ(x,t) Hₙ(v). Memory O(Nₓ³ × N_modes).
 
 use super::super::{init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
+use std::any::Any;
 
 /// Spectral-in-velocity representation using Hermite polynomial basis.
 pub struct SpectralV {
@@ -55,5 +56,9 @@ impl PhaseSpaceRepr for SpectralV {
     }
     fn velocity_distribution(&self, position: &[f64; 3]) -> Vec<f64> {
         todo!("spectral: reconstruct f(v|x) from Hermite coefficients at x")
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }

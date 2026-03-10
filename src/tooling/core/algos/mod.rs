@@ -1,3 +1,4 @@
+pub mod aca;
 pub(crate) mod amr;
 pub(crate) mod global;
 pub mod ht;
