@@ -1037,7 +1037,12 @@ impl HtTensor {
     }
 
     fn orthogonalize_node(&mut self, node_idx: usize) {
-        let node = self.nodes[node_idx].clone();
+        // Take ownership of the node to avoid cloning (replaced with dummy leaf)
+        let dummy = HtNode::Leaf {
+            dim: 0,
+            frame: Mat::new(),
+        };
+        let node = std::mem::replace(&mut self.nodes[node_idx], dummy);
         match node {
             HtNode::Leaf { dim, frame } => {
                 let (q, r) = qr_decompose(&frame);
@@ -1136,12 +1141,17 @@ impl HtTensor {
     }
 
     fn truncate_node(&mut self, node_idx: usize, eps: f64) {
-        let node = self.nodes[node_idx].clone();
+        let dummy = HtNode::Leaf {
+            dim: 0,
+            frame: Mat::new(),
+        };
+        let node = std::mem::replace(&mut self.nodes[node_idx], dummy);
         match node {
-            HtNode::Leaf { dim, frame } => {
-                let (u, s, vt) = thin_svd(&frame);
+            HtNode::Leaf { dim, ref frame } => {
+                let (u, s, vt) = thin_svd(frame);
                 let new_rank = truncation_rank(&s, eps).max(1);
                 if new_rank >= frame.ncols() {
+                    self.nodes[node_idx] = node;
                     return;
                 }
                 let new_frame = u.subcols(0, new_rank).to_owned();
@@ -1155,14 +1165,15 @@ impl HtTensor {
             HtNode::Interior {
                 left,
                 right,
-                transfer,
+                ref transfer,
                 ranks,
             } if node_idx != ROOT => {
                 let [kt, kl, kr] = ranks;
-                let mat = vec_to_mat(&transfer, kt, kl * kr);
+                let mat = vec_to_mat(transfer, kt, kl * kr);
                 let (u, s, vt) = thin_svd(&mat);
                 let new_rank = truncation_rank(&s, eps).max(1);
                 if new_rank >= kt {
+                    self.nodes[node_idx] = node;
                     return;
                 }
                 let new_t = mat_to_vec(&u, new_rank, kl * kr);
@@ -1175,18 +1186,21 @@ impl HtTensor {
                 };
                 self.absorb_r_into_parent(parent_of(node_idx), node_idx, &sv);
             }
-            _ => {}
+            other => {
+                self.nodes[node_idx] = other;
+            }
         }
     }
 
     fn truncate_node_fixed(&mut self, node_idx: usize, max_rank: usize) {
-        let node = self.nodes[node_idx].clone();
+        let dummy = HtNode::Leaf {
+            dim: 0,
+            frame: Mat::new(),
+        };
+        let node = std::mem::replace(&mut self.nodes[node_idx], dummy);
         match node {
-            HtNode::Leaf { dim, frame } => {
-                if frame.ncols() <= max_rank {
-                    return;
-                }
-                let (u, s, vt) = thin_svd(&frame);
+            HtNode::Leaf { dim, ref frame } if frame.ncols() > max_rank => {
+                let (u, s, vt) = thin_svd(frame);
                 let r = max_rank.min(u.ncols());
                 let sv = s_times_vt(&s, &vt, r);
                 self.nodes[node_idx] = HtNode::Leaf {
@@ -1198,14 +1212,11 @@ impl HtTensor {
             HtNode::Interior {
                 left,
                 right,
-                transfer,
+                ref transfer,
                 ranks,
-            } if node_idx != ROOT => {
+            } if node_idx != ROOT && ranks[0] > max_rank => {
                 let [kt, kl, kr] = ranks;
-                if kt <= max_rank {
-                    return;
-                }
-                let mat = vec_to_mat(&transfer, kt, kl * kr);
+                let mat = vec_to_mat(transfer, kt, kl * kr);
                 let (u, s, vt) = thin_svd(&mat);
                 let r = max_rank.min(u.ncols());
                 let sv = s_times_vt(&s, &vt, r);
@@ -1217,7 +1228,9 @@ impl HtTensor {
                 };
                 self.absorb_r_into_parent(parent_of(node_idx), node_idx, &sv);
             }
-            _ => {}
+            other => {
+                self.nodes[node_idx] = other;
+            }
         }
     }
 }
@@ -1527,7 +1540,7 @@ fn tricubic_interpolate_ht(
 /// - Center evaluation f(x_0): 1 eval
 /// - Per-dim offsets f(x_0±e_k): 2d = 6 evals
 /// - Cross-terms f(x_0+e_k+e_l) for k<l: d(d-1)/2 = 3 evals
-/// Total: 10 evaluations
+///   Total: 10 evaluations
 ///
 /// Reconstructs: p(δ) = f₀ + Σ_k (a_k·δ_k + b_k·δ_k²) + Σ_{k<l} c_{kl}·δ_k·δ_l
 fn sparse_polynomial_interpolate_ht(

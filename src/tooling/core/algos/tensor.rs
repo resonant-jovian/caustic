@@ -518,7 +518,7 @@ impl TensorTrain {
         // Gram matrix G_{k} has shape (r_self_k, r_other_k)
         // Initialize: G_0 = [[1]] (since r_0 = 1 for both)
         let mut gram = vec![1.0f64]; // 1x1 matrix
-        let mut gr_rows = 1usize;
+        let mut _gr_rows = 1usize;
         let mut gr_cols = 1usize;
 
         for k in 0..6 {
@@ -552,7 +552,7 @@ impl TensorTrain {
                 }
             }
             gram = new_gram;
-            gr_rows = new_rows;
+            _gr_rows = new_rows;
             gr_cols = new_cols;
         }
         gram[0]
@@ -1316,7 +1316,9 @@ mod tests {
             shape,
             time: 0.0,
         };
-        let tt = TensorTrain::from_snapshot(&snap, 10, 1e-12, &domain);
+        // Use 1e-8 tolerance: values up to 4096, so machine-eps noise ~4e-13
+        // makes 1e-12 too tight for rank truncation
+        let tt = TensorTrain::from_snapshot(&snap, 10, 1e-8, &domain);
 
         // Verify evaluation matches original
         let mut max_err = 0.0f64;

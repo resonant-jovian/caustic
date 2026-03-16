@@ -6,7 +6,7 @@ use super::super::{
     phasespace::PhaseSpaceRepr,
     types::*,
 };
-use super::lagrangian::sl_shift_1d;
+use super::lagrangian::{sl_shift_1d, sl_shift_1d_into};
 use rayon::prelude::*;
 use rust_decimal::prelude::ToPrimitive;
 use std::any::Any;
@@ -144,10 +144,21 @@ impl PhaseSpaceRepr for UniformGrid6D {
         };
 
         let n_vel = nv1 * nv2 * nv3;
-        let src = self.data.clone();
+        // Take ownership of data to avoid a full clone; the parallel iterator
+        // reads from `src` and writes results into a new vec.
+        let src = std::mem::take(&mut self.data);
+        let n_total = src.len();
+        let n_sp = nx1 * nx2 * nx3;
+        let max_n = nx1.max(nx2).max(nx3);
 
         // Each velocity cell can be shifted independently in parallel.
-        // Collect results per velocity cell, then scatter back.
+        // Build new data directly instead of scatter-back.
+        let mut new_data = vec![0.0f64; n_total];
+
+        // Process each velocity cell in parallel, writing into new_data slices.
+        // We partition new_data by velocity cell: new_data is indexed by
+        // [ix1][ix2][ix3][iv1][iv2][iv3], so velocity cells are interleaved.
+        // Collect shifted blocks and scatter back.
         let shifted_blocks: Vec<(usize, Vec<f64>)> = (0..n_vel)
             .into_par_iter()
             .map(|vi| {
@@ -160,8 +171,9 @@ impl PhaseSpaceRepr for UniformGrid6D {
                 let vz = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
                 let disp = [vx * dt, vy * dt, vz * dt];
 
-                // Local spatial buffer for this velocity cell
-                let n_sp = nx1 * nx2 * nx3;
+                // Pre-allocate reusable line buffers
+                let mut line = vec![0.0f64; max_n];
+                let mut shifted = vec![0.0f64; max_n];
                 let mut local = vec![0.0f64; n_sp];
 
                 // Extract spatial slice for this velocity cell
@@ -177,10 +189,18 @@ impl PhaseSpaceRepr for UniformGrid6D {
                 // Shift along x1
                 for ix2 in 0..nx2 {
                     for ix3 in 0..nx3 {
-                        let line: Vec<f64> = (0..nx1)
-                            .map(|ix1| local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3])
-                            .collect();
-                        let shifted = sl_shift_1d(&line, disp[0], dx[0], nx1, lx[0], periodic);
+                        for ix1 in 0..nx1 {
+                            line[ix1] = local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3];
+                        }
+                        sl_shift_1d_into(
+                            &line[..nx1],
+                            disp[0],
+                            dx[0],
+                            nx1,
+                            lx[0],
+                            periodic,
+                            &mut shifted,
+                        );
                         for ix1 in 0..nx1 {
                             local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3] = shifted[ix1];
                         }
@@ -190,10 +210,18 @@ impl PhaseSpaceRepr for UniformGrid6D {
                 // Shift along x2
                 for ix1 in 0..nx1 {
                     for ix3 in 0..nx3 {
-                        let line: Vec<f64> = (0..nx2)
-                            .map(|ix2| local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3])
-                            .collect();
-                        let shifted = sl_shift_1d(&line, disp[1], dx[1], nx2, lx[1], periodic);
+                        for ix2 in 0..nx2 {
+                            line[ix2] = local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3];
+                        }
+                        sl_shift_1d_into(
+                            &line[..nx2],
+                            disp[1],
+                            dx[1],
+                            nx2,
+                            lx[1],
+                            periodic,
+                            &mut shifted,
+                        );
                         for ix2 in 0..nx2 {
                             local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3] = shifted[ix2];
                         }
@@ -203,10 +231,18 @@ impl PhaseSpaceRepr for UniformGrid6D {
                 // Shift along x3
                 for ix1 in 0..nx1 {
                     for ix2 in 0..nx2 {
-                        let line: Vec<f64> = (0..nx3)
-                            .map(|ix3| local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3])
-                            .collect();
-                        let shifted = sl_shift_1d(&line, disp[2], dx[2], nx3, lx[2], periodic);
+                        for ix3 in 0..nx3 {
+                            line[ix3] = local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3];
+                        }
+                        sl_shift_1d_into(
+                            &line[..nx3],
+                            disp[2],
+                            dx[2],
+                            nx3,
+                            lx[2],
+                            periodic,
+                            &mut shifted,
+                        );
                         for ix3 in 0..nx3 {
                             local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3] = shifted[ix3];
                         }
@@ -227,11 +263,12 @@ impl PhaseSpaceRepr for UniformGrid6D {
                 for ix2 in 0..nx2 {
                     for ix3 in 0..nx3 {
                         let si = ix1 * nx2 * nx3 + ix2 * nx3 + ix3;
-                        self.data[flat_idx([ix1, ix2, ix3], iv)] = local[si];
+                        new_data[flat_idx([ix1, ix2, ix3], iv)] = local[si];
                     }
                 }
             }
         }
+        self.data = new_data;
     }
 
     fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
@@ -253,9 +290,11 @@ impl PhaseSpaceRepr for UniformGrid6D {
         };
 
         let n_spatial = nx1 * nx2 * nx3;
-        let src = self.data.clone();
+        let n_vel = nv1 * nv2 * nv3;
+        let max_nv = nv1.max(nv2).max(nv3);
+        let src = std::mem::take(&mut self.data);
+        let n_total = src.len();
 
-        // Each spatial cell can be shifted independently in velocity
         let shifted_blocks: Vec<(usize, Vec<f64>)> = (0..n_spatial)
             .into_par_iter()
             .map(|si| {
@@ -269,7 +308,9 @@ impl PhaseSpaceRepr for UniformGrid6D {
                 let az = acceleration.gz[flat_ix];
                 let disp = [ax * dt, ay * dt, az * dt];
 
-                let n_vel = nv1 * nv2 * nv3;
+                // Pre-allocate reusable line buffers
+                let mut line = vec![0.0f64; max_nv];
+                let mut shifted = vec![0.0f64; max_nv];
                 let mut local = vec![0.0f64; n_vel];
 
                 // Extract velocity slice for this spatial cell
@@ -285,10 +326,18 @@ impl PhaseSpaceRepr for UniformGrid6D {
                 // Shift along v1
                 for iv2 in 0..nv2 {
                     for iv3 in 0..nv3 {
-                        let line: Vec<f64> = (0..nv1)
-                            .map(|iv1| local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3])
-                            .collect();
-                        let shifted = sl_shift_1d(&line, disp[0], dv[0], nv1, lv[0], periodic_v);
+                        for iv1 in 0..nv1 {
+                            line[iv1] = local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3];
+                        }
+                        sl_shift_1d_into(
+                            &line[..nv1],
+                            disp[0],
+                            dv[0],
+                            nv1,
+                            lv[0],
+                            periodic_v,
+                            &mut shifted,
+                        );
                         for iv1 in 0..nv1 {
                             local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3] = shifted[iv1];
                         }
@@ -298,10 +347,18 @@ impl PhaseSpaceRepr for UniformGrid6D {
                 // Shift along v2
                 for iv1 in 0..nv1 {
                     for iv3 in 0..nv3 {
-                        let line: Vec<f64> = (0..nv2)
-                            .map(|iv2| local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3])
-                            .collect();
-                        let shifted = sl_shift_1d(&line, disp[1], dv[1], nv2, lv[1], periodic_v);
+                        for iv2 in 0..nv2 {
+                            line[iv2] = local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3];
+                        }
+                        sl_shift_1d_into(
+                            &line[..nv2],
+                            disp[1],
+                            dv[1],
+                            nv2,
+                            lv[1],
+                            periodic_v,
+                            &mut shifted,
+                        );
                         for iv2 in 0..nv2 {
                             local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3] = shifted[iv2];
                         }
@@ -311,10 +368,18 @@ impl PhaseSpaceRepr for UniformGrid6D {
                 // Shift along v3
                 for iv1 in 0..nv1 {
                     for iv2 in 0..nv2 {
-                        let line: Vec<f64> = (0..nv3)
-                            .map(|iv3| local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3])
-                            .collect();
-                        let shifted = sl_shift_1d(&line, disp[2], dv[2], nv3, lv[2], periodic_v);
+                        for iv3 in 0..nv3 {
+                            line[iv3] = local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3];
+                        }
+                        sl_shift_1d_into(
+                            &line[..nv3],
+                            disp[2],
+                            dv[2],
+                            nv3,
+                            lv[2],
+                            periodic_v,
+                            &mut shifted,
+                        );
                         for iv3 in 0..nv3 {
                             local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3] = shifted[iv3];
                         }
@@ -326,6 +391,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
             .collect();
 
         // Scatter results back
+        let mut new_data = vec![0.0f64; n_total];
         for (si, local) in shifted_blocks {
             let ix3 = si % nx3;
             let ix2 = (si / nx3) % nx2;
@@ -335,11 +401,12 @@ impl PhaseSpaceRepr for UniformGrid6D {
                 for iv2 in 0..nv2 {
                     for iv3 in 0..nv3 {
                         let vi = iv1 * nv2 * nv3 + iv2 * nv3 + iv3;
-                        self.data[flat_idx(ix, [iv1, iv2, iv3])] = local[vi];
+                        new_data[flat_idx(ix, [iv1, iv2, iv3])] = local[vi];
                     }
                 }
             }
         }
+        self.data = new_data;
     }
 
     fn moment(&self, position: &[f64; 3], order: usize) -> Tensor {
@@ -570,6 +637,11 @@ impl PhaseSpaceRepr for UniformGrid6D {
             shape: [nx1, nx2, nx3, nv1, nv2, nv3],
             time,
         }
+    }
+
+    fn load_snapshot(&mut self, snap: PhaseSpaceSnapshot) {
+        assert_eq!(snap.data.len(), self.data.len(), "snapshot size mismatch");
+        self.data = snap.data;
     }
 
     fn as_any(&self) -> &dyn Any {

@@ -1,6 +1,8 @@
 //! Geometric multigrid solver for ∇²Φ = 4πGρ. Supports periodic and Dirichlet (isolated/open) BC.
 //! O(N³) per V-cycle, O(N³ log ε) total.
 
+use rayon::prelude::*;
+
 use super::super::{
     init::domain::{Domain, SpatialBoundType},
     solver::PoissonSolver,
@@ -185,74 +187,69 @@ fn residual(
 
     let is_periodic = matches!(bc, SpatialBoundType::Periodic);
 
-    let mut res = vec![0.0; n_total];
-    for ix in 0..nx {
-        for iy in 0..ny {
-            for iz in 0..nz {
-                let i = idx(ix, iy, iz, shape);
+    let res: Vec<f64> = (0..n_total)
+        .into_par_iter()
+        .map(|i| {
+            let ix = i / (ny * nz);
+            let iy = (i / nz) % ny;
+            let iz = i % nz;
 
-                let phi_xm;
-                let phi_xp;
-                let phi_ym;
-                let phi_yp;
-                let phi_zm;
-                let phi_zp;
+            let (phi_xm, phi_xp, phi_ym, phi_yp, phi_zm, phi_zp);
 
-                if is_periodic {
-                    let ixm = if ix == 0 { nx - 1 } else { ix - 1 };
-                    let ixp = if ix == nx - 1 { 0 } else { ix + 1 };
-                    let iym = if iy == 0 { ny - 1 } else { iy - 1 };
-                    let iyp = if iy == ny - 1 { 0 } else { iy + 1 };
-                    let izm = if iz == 0 { nz - 1 } else { iz - 1 };
-                    let izp = if iz == nz - 1 { 0 } else { iz + 1 };
+            if is_periodic {
+                let ixm = if ix == 0 { nx - 1 } else { ix - 1 };
+                let ixp = if ix == nx - 1 { 0 } else { ix + 1 };
+                let iym = if iy == 0 { ny - 1 } else { iy - 1 };
+                let iyp = if iy == ny - 1 { 0 } else { iy + 1 };
+                let izm = if iz == 0 { nz - 1 } else { iz - 1 };
+                let izp = if iz == nz - 1 { 0 } else { iz + 1 };
 
-                    phi_xm = phi[idx(ixm, iy, iz, shape)];
-                    phi_xp = phi[idx(ixp, iy, iz, shape)];
-                    phi_ym = phi[idx(ix, iym, iz, shape)];
-                    phi_yp = phi[idx(ix, iyp, iz, shape)];
-                    phi_zm = phi[idx(ix, iy, izm, shape)];
-                    phi_zp = phi[idx(ix, iy, izp, shape)];
+                phi_xm = phi[idx(ixm, iy, iz, shape)];
+                phi_xp = phi[idx(ixp, iy, iz, shape)];
+                phi_ym = phi[idx(ix, iym, iz, shape)];
+                phi_yp = phi[idx(ix, iyp, iz, shape)];
+                phi_zm = phi[idx(ix, iy, izm, shape)];
+                phi_zp = phi[idx(ix, iy, izp, shape)];
+            } else {
+                phi_xm = if ix > 0 {
+                    phi[idx(ix - 1, iy, iz, shape)]
                 } else {
-                    phi_xm = if ix > 0 {
-                        phi[idx(ix - 1, iy, iz, shape)]
-                    } else {
-                        0.0
-                    };
-                    phi_xp = if ix < nx - 1 {
-                        phi[idx(ix + 1, iy, iz, shape)]
-                    } else {
-                        0.0
-                    };
-                    phi_ym = if iy > 0 {
-                        phi[idx(ix, iy - 1, iz, shape)]
-                    } else {
-                        0.0
-                    };
-                    phi_yp = if iy < ny - 1 {
-                        phi[idx(ix, iy + 1, iz, shape)]
-                    } else {
-                        0.0
-                    };
-                    phi_zm = if iz > 0 {
-                        phi[idx(ix, iy, iz - 1, shape)]
-                    } else {
-                        0.0
-                    };
-                    phi_zp = if iz < nz - 1 {
-                        phi[idx(ix, iy, iz + 1, shape)]
-                    } else {
-                        0.0
-                    };
-                }
-
-                let laplacian = (phi_xm + phi_xp - 2.0 * phi[i]) * inv_dx2_x
-                    + (phi_ym + phi_yp - 2.0 * phi[i]) * inv_dx2_y
-                    + (phi_zm + phi_zp - 2.0 * phi[i]) * inv_dx2_z;
-
-                res[i] = rhs[i] - laplacian;
+                    0.0
+                };
+                phi_xp = if ix < nx - 1 {
+                    phi[idx(ix + 1, iy, iz, shape)]
+                } else {
+                    0.0
+                };
+                phi_ym = if iy > 0 {
+                    phi[idx(ix, iy - 1, iz, shape)]
+                } else {
+                    0.0
+                };
+                phi_yp = if iy < ny - 1 {
+                    phi[idx(ix, iy + 1, iz, shape)]
+                } else {
+                    0.0
+                };
+                phi_zm = if iz > 0 {
+                    phi[idx(ix, iy, iz - 1, shape)]
+                } else {
+                    0.0
+                };
+                phi_zp = if iz < nz - 1 {
+                    phi[idx(ix, iy, iz + 1, shape)]
+                } else {
+                    0.0
+                };
             }
-        }
-    }
+
+            let laplacian = (phi_xm + phi_xp - 2.0 * phi[i]) * inv_dx2_x
+                + (phi_ym + phi_yp - 2.0 * phi[i]) * inv_dx2_y
+                + (phi_zm + phi_zp - 2.0 * phi[i]) * inv_dx2_z;
+
+            rhs[i] - laplacian
+        })
+        .collect();
     res
 }
 
@@ -331,46 +328,41 @@ fn restrict(fine: &[f64], fine_shape: [usize; 3]) -> (Vec<f64>, [usize; 3]) {
 fn prolongate(coarse: &[f64], coarse_shape: [usize; 3], fine_shape: [usize; 3]) -> Vec<f64> {
     let [cnx, cny, cnz] = coarse_shape;
     let [fnx, fny, fnz] = fine_shape;
-    let mut fine = vec![0.0; fnx * fny * fnz];
+    let n_fine = fnx * fny * fnz;
+    let fine: Vec<f64> = (0..n_fine)
+        .into_par_iter()
+        .map(|flat| {
+            let fi = flat / (fny * fnz);
+            let fj = (flat / fnz) % fny;
+            let fk = flat % fnz;
 
-    for fi in 0..fnx {
-        for fj in 0..fny {
-            for fk in 0..fnz {
-                // Coarse cell index and fractional offset.
-                // Fine cell fi corresponds to coarse position fi/2.
-                // The coarse cell center at index ci is at fine position 2*ci.
-                // We use: ci_lo = fi / 2, with fractional part.
-                let (ci0, wx) = coarse_interp_index(fi, cnx);
-                let (cj0, wy) = coarse_interp_index(fj, cny);
-                let (ck0, wz) = coarse_interp_index(fk, cnz);
+            let (ci0, wx) = coarse_interp_index(fi, cnx);
+            let (cj0, wy) = coarse_interp_index(fj, cny);
+            let (ck0, wz) = coarse_interp_index(fk, cnz);
 
-                let ci1 = (ci0 + 1).min(cnx - 1);
-                let cj1 = (cj0 + 1).min(cny - 1);
-                let ck1 = (ck0 + 1).min(cnz - 1);
+            let ci1 = (ci0 + 1).min(cnx - 1);
+            let cj1 = (cj0 + 1).min(cny - 1);
+            let ck1 = (ck0 + 1).min(cnz - 1);
 
-                // Trilinear interpolation
-                let c000 = coarse[idx(ci0, cj0, ck0, coarse_shape)];
-                let c100 = coarse[idx(ci1, cj0, ck0, coarse_shape)];
-                let c010 = coarse[idx(ci0, cj1, ck0, coarse_shape)];
-                let c110 = coarse[idx(ci1, cj1, ck0, coarse_shape)];
-                let c001 = coarse[idx(ci0, cj0, ck1, coarse_shape)];
-                let c101 = coarse[idx(ci1, cj0, ck1, coarse_shape)];
-                let c011 = coarse[idx(ci0, cj1, ck1, coarse_shape)];
-                let c111 = coarse[idx(ci1, cj1, ck1, coarse_shape)];
+            let c000 = coarse[idx(ci0, cj0, ck0, coarse_shape)];
+            let c100 = coarse[idx(ci1, cj0, ck0, coarse_shape)];
+            let c010 = coarse[idx(ci0, cj1, ck0, coarse_shape)];
+            let c110 = coarse[idx(ci1, cj1, ck0, coarse_shape)];
+            let c001 = coarse[idx(ci0, cj0, ck1, coarse_shape)];
+            let c101 = coarse[idx(ci1, cj0, ck1, coarse_shape)];
+            let c011 = coarse[idx(ci0, cj1, ck1, coarse_shape)];
+            let c111 = coarse[idx(ci1, cj1, ck1, coarse_shape)];
 
-                let val = c000 * (1.0 - wx) * (1.0 - wy) * (1.0 - wz)
-                    + c100 * wx * (1.0 - wy) * (1.0 - wz)
-                    + c010 * (1.0 - wx) * wy * (1.0 - wz)
-                    + c110 * wx * wy * (1.0 - wz)
-                    + c001 * (1.0 - wx) * (1.0 - wy) * wz
-                    + c101 * wx * (1.0 - wy) * wz
-                    + c011 * (1.0 - wx) * wy * wz
-                    + c111 * wx * wy * wz;
-
-                fine[idx(fi, fj, fk, fine_shape)] = val;
-            }
-        }
-    }
+            c000 * (1.0 - wx) * (1.0 - wy) * (1.0 - wz)
+                + c100 * wx * (1.0 - wy) * (1.0 - wz)
+                + c010 * (1.0 - wx) * wy * (1.0 - wz)
+                + c110 * wx * wy * (1.0 - wz)
+                + c001 * (1.0 - wx) * (1.0 - wy) * wz
+                + c101 * wx * (1.0 - wy) * wz
+                + c011 * (1.0 - wx) * wy * wz
+                + c111 * wx * wy * wz
+        })
+        .collect();
 
     fine
 }
@@ -401,8 +393,9 @@ fn coarse_interp_index(fi: usize, cn: usize) -> (usize, f64) {
 /// - Recurse (or directly smooth if at coarsest level)
 /// - Prolongate correction, add to phi
 /// - Post-smooth `n_post` sweeps
+#[allow(clippy::too_many_arguments)]
 fn v_cycle(
-    phi: &mut Vec<f64>,
+    phi: &mut [f64],
     rhs: &[f64],
     shape: [usize; 3],
     dx: [f64; 3],

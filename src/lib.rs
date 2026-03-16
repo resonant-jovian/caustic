@@ -47,11 +47,32 @@ pub use tooling::core::init::isolated::{
     HernquistIC, IsolatedEquilibrium, KingIC, NfwIC, PlummerIC, sample_on_grid,
 };
 pub use tooling::core::init::mergers::MergerIC;
+pub use tooling::core::init::stability::DiskStabilityIC;
+pub use tooling::core::init::tidal::TidalIC;
 pub use tooling::core::output::exit::standard::ExitEvaluator;
 pub use tooling::core::poisson::fft::{FftIsolated, FftPoisson};
+pub use tooling::core::poisson::multigrid::Multigrid;
+pub use tooling::core::poisson::spherical::SphericalHarmonicsPoisson;
+pub use tooling::core::poisson::tensor_poisson::TensorPoisson;
+pub use tooling::core::poisson::tree::TreePoisson;
 pub use tooling::core::time::lie::LieSplitting;
 pub use tooling::core::time::strang::StrangSplitting;
+pub use tooling::core::time::unsplit::UnsplitIntegrator;
 pub use tooling::core::time::yoshida::YoshidaSplitting;
+
+// Phase-space representations
+pub use tooling::core::algos::amr::AmrGrid;
+pub use tooling::core::algos::hybrid::HybridRepr;
+pub use tooling::core::algos::sheet::SheetTracker;
+pub use tooling::core::algos::spectral::SpectralV;
+pub use tooling::core::algos::tensor::TensorTrain;
+pub use tooling::core::algos::uniform::UniformGrid6D;
+
+// Conservation framework (Phase 4: LoMaC)
+pub use tooling::core::conservation::conservative_svd;
+pub use tooling::core::conservation::kfvs::{KfvsSolver, MacroState};
+pub use tooling::core::conservation::lomac::LoMaC;
+pub use tooling::core::conservation::rank_adaptive::RankAdaptiveController;
 
 /// Top-level error type for caustic operations.
 #[derive(Debug, thiserror::Error)]

@@ -4,6 +4,7 @@
 //! potential at each grid point via a tree walk with the opening-angle criterion.
 //! Far cells are approximated as monopoles; nearby cells are recursed into.
 
+use rayon::prelude::*;
 use rust_decimal::prelude::ToPrimitive;
 
 use super::super::{init::domain::Domain, solver::PoissonSolver, types::*};
@@ -300,20 +301,17 @@ impl PoissonSolver for TreePoisson {
                 // Empty density field — zero potential
             }
             Some(ref root) => {
-                for ix in 0..nx {
-                    for iy in 0..ny {
-                        for iz in 0..nz {
-                            let idx = ix * ny * nz + iy * nz + iz;
-                            let point = [
-                                origin[0] + (ix as f64 + 0.5) * dx[0],
-                                origin[1] + (iy as f64 + 0.5) * dx[1],
-                                origin[2] + (iz as f64 + 0.5) * dx[2],
-                            ];
-                            phi[idx] =
-                                tree_potential(root, &point, self.opening_angle, g, self.softening);
-                        }
-                    }
-                }
+                phi.par_iter_mut().enumerate().for_each(|(flat, val)| {
+                    let ix = flat / (ny * nz);
+                    let iy = (flat / nz) % ny;
+                    let iz = flat % nz;
+                    let point = [
+                        origin[0] + (ix as f64 + 0.5) * dx[0],
+                        origin[1] + (iy as f64 + 0.5) * dx[1],
+                        origin[2] + (iz as f64 + 0.5) * dx[2],
+                    ];
+                    *val = tree_potential(root, &point, self.opening_angle, g, self.softening);
+                });
             }
         }
 

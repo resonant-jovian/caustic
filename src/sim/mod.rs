@@ -3,6 +3,7 @@
 use crate::tooling::core::{
     advecator::Advector,
     conditions::{ExitReason, TimeLimitCondition},
+    conservation::lomac::LoMaC,
     diagnostics::{Diagnostics, GlobalDiagnostics},
     init::{domain::Domain, input::optional::OptionalParams},
     integrator::TimeIntegrator,
@@ -24,6 +25,10 @@ pub struct Simulation {
     pub io: IOManager,
     pub exit_evaluator: ExitEvaluator,
     pub opts: OptionalParams,
+    /// Optional LoMaC conservation framework. When active, projects the
+    /// distribution function after each time step to restore exact local
+    /// conservation of mass, momentum, and energy.
+    pub lomac: Option<LoMaC>,
     pub g: f64,
     pub time: f64,
     pub step: u64,
@@ -73,6 +78,42 @@ impl Simulation {
         self.integrator
             .advance(&mut *self.repr, &*self.poisson, &*self.advector, dt);
 
+        // LoMaC conservation projection: advance macroscopic state in sync
+        // with kinetic, then project f to restore exact moments.
+        if let Some(ref mut lomac) = self.lomac {
+            let density = self.repr.compute_density();
+            let potential = self.poisson.solve(&density, self.g);
+            let accel = self.poisson.compute_acceleration(&potential);
+
+            // Build per-cell acceleration vectors for KFVS
+            let [nx, ny, nz] = density.shape;
+            let n = nx * ny * nz;
+            let acc: Vec<[f64; 3]> = accel
+                .gx
+                .iter()
+                .zip(accel.gy.iter())
+                .zip(accel.gz.iter())
+                .map(|((&gx, &gy), &gz)| [gx, gy, gz])
+                .collect();
+
+            // Get the current kinetic data, apply LoMaC, write back
+            let snapshot = self.repr.to_snapshot(self.time);
+            let corrected = lomac.apply(dt, &acc, &snapshot.data);
+
+            // Update the representation with the corrected distribution
+            let corrected_snap = PhaseSpaceSnapshot {
+                data: corrected,
+                shape: snapshot.shape,
+                time: self.time,
+            };
+            self.repr = Box::new(
+                crate::tooling::core::algos::uniform::UniformGrid6D::from_snapshot(
+                    corrected_snap,
+                    self.domain.clone(),
+                ),
+            );
+        }
+
         self.time += dt;
         self.step += 1;
 
@@ -106,6 +147,7 @@ pub struct SimulationBuilder {
     output_interval: Option<f64>,
     energy_tolerance: Option<f64>,
     g: Option<f64>,
+    enable_lomac: bool,
 }
 
 impl SimulationBuilder {
@@ -122,6 +164,7 @@ impl SimulationBuilder {
             output_interval: None,
             energy_tolerance: None,
             g: None,
+            enable_lomac: false,
         }
     }
 
@@ -132,6 +175,11 @@ impl SimulationBuilder {
 
     pub fn representation(mut self, r: impl PhaseSpaceRepr + 'static) -> Self {
         self.repr = Some(Box::new(r));
+        self
+    }
+
+    pub fn representation_boxed(mut self, r: Box<dyn PhaseSpaceRepr>) -> Self {
+        self.repr = Some(r);
         self
     }
 
@@ -182,6 +230,14 @@ impl SimulationBuilder {
 
     pub fn gravitational_constant(mut self, g: f64) -> Self {
         self.g = Some(g);
+        self
+    }
+
+    /// Enable LoMaC conservation framework. After each time step, projects
+    /// the distribution function to restore exact local conservation of
+    /// mass, momentum, and energy.
+    pub fn lomac(mut self, enable: bool) -> Self {
+        self.enable_lomac = enable;
         self
     }
 
@@ -246,6 +302,35 @@ impl SimulationBuilder {
             exit_evaluator.add_condition(Box::new(EnergyDriftCondition { tolerance: tol }));
         }
 
+        // Initialize LoMaC if requested
+        let lomac = if self.enable_lomac {
+            let dv = domain.dv();
+            let lv = [
+                domain.velocity.v1.to_f64().unwrap(),
+                domain.velocity.v2.to_f64().unwrap(),
+                domain.velocity.v3.to_f64().unwrap(),
+            ];
+            let v_min = [-lv[0], -lv[1], -lv[2]];
+            let spatial_shape = [
+                domain.spatial_res.x1 as usize,
+                domain.spatial_res.x2 as usize,
+                domain.spatial_res.x3 as usize,
+            ];
+            let velocity_shape = [
+                domain.velocity_res.v1 as usize,
+                domain.velocity_res.v2 as usize,
+                domain.velocity_res.v3 as usize,
+            ];
+            let mut lom = LoMaC::new(spatial_shape, velocity_shape, dx, dv, v_min);
+
+            // Initialize from the IC distribution
+            let snapshot = repr.to_snapshot(0.0);
+            lom.initialize_from_kinetic(&snapshot.data);
+            Some(lom)
+        } else {
+            None
+        };
+
         Ok(Simulation {
             domain,
             repr,
@@ -256,6 +341,7 @@ impl SimulationBuilder {
             io: IOManager::new("output", OutputFormat::Binary),
             exit_evaluator,
             opts: self.opts.unwrap_or_default(),
+            lomac,
             g,
             time: 0.0,
             step: 0,

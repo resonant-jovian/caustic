@@ -22,7 +22,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-caustic = "0.0.4"
+caustic = "0.0.6"
 ```
 
 ### Minimal example: Plummer sphere equilibrium
@@ -65,16 +65,62 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Conservation-aware simulation with LoMaC
+
+```rust
+let mut sim = Simulation::builder()
+    .domain(domain)
+    .poisson_solver(FftPoisson::new(&domain))
+    .advector(SemiLagrangian::new())
+    .integrator(StrangSplitting::new(1.0))
+    .initial_conditions(snap)
+    .time_final(50.0)
+    .lomac(true)  // enable local macroscopic conservation
+    .build()?;
+```
+
 ## Architecture
 
 Each solver component is a Rust trait; implementations are swapped independently:
 
 | Trait | Role | Implementations |
 |---|---|---|
-| `PhaseSpaceRepr` | Store and query f(x,v) | `UniformGrid6D` (rayon-parallelized), `HtTensor` (Hierarchical Tucker) |
-| `PoissonSolver` | Solve nabla^2 Phi = 4piG rho | `FftPoisson` (periodic, R2C), `FftIsolated` (Hockney-Eastwood zero-padding) |
-| `Advector` | Advance f by dt | `SemiLagrangian` (Catmull-Rom interpolation) |
-| `TimeIntegrator` | Orchestrate operator splitting | `StrangSplitting` (2nd-order), `LieSplitting` (1st-order), `YoshidaSplitting` (4th-order) |
+| `PhaseSpaceRepr` | Store and query f(x,v) | `UniformGrid6D`, `HtTensor`, `TensorTrain`, `SheetTracker`, `SpectralV`, `AmrGrid`, `HybridRepr` |
+| `PoissonSolver` | Solve ∇²Φ = 4πGρ | `FftPoisson`, `FftIsolated`, `TensorPoisson`, `Multigrid`, `SphericalHarmonicsPoisson`, `TreePoisson` |
+| `Advector` | Advance f by Δt | `SemiLagrangian` (Catmull-Rom + sparse polynomial) |
+| `TimeIntegrator` | Orchestrate timestep | `StrangSplitting` (2nd), `YoshidaSplitting` (4th), `LieSplitting` (1st), `UnsplitIntegrator` (RK2/3/4) |
+
+### Phase-space representations
+
+| Representation | Memory | Description |
+|---|---|---|
+| `UniformGrid6D` | O(N⁶) | Brute-force 6D grid, rayon-parallelized. Reference implementation. |
+| `HtTensor` | O(dNk² + dk³) | Hierarchical Tucker tensor decomposition. Black-box construction via HTACA. SLAR advection. |
+| `TensorTrain` | O(dNr²) | TT-SVD decomposition with cross approximation advection. |
+| `SheetTracker` | O(N³) | Lagrangian cold dark matter sheet. CIC density deposit. Caustic detection. |
+| `SpectralV` | O(N³M³) | Hermite spectral basis in velocity; finite-difference in space. |
+| `AmrGrid` | adaptive | Adaptive mesh refinement in 6D with gradient-based refinement. |
+| `HybridRepr` | adaptive | Sheet/grid hybrid with caustic-aware interface switching. |
+
+### Poisson solvers
+
+| Solver | BC | Complexity | Description |
+|---|---|---|---|
+| `FftPoisson` | Periodic | O(N³ log N) | Real-to-complex FFT via `realfft`, rayon-parallelized. |
+| `FftIsolated` | Isolated | O(N³ log N) | Hockney-Eastwood zero-padding on (2N)³ grid. |
+| `TensorPoisson` | Isolated | O(N³ log N) | Braess-Hackbusch exponential sum Green's function + dense 3D FFT. |
+| `Multigrid` | Periodic/Isolated | O(N³) | V-cycle with red-black Gauss-Seidel smoothing, rayon-parallelized. |
+| `SphericalHarmonicsPoisson` | Isolated | O(l²_max N) | Legendre decomposition + radial ODE integration. |
+| `TreePoisson` | Isolated | O(N³ log N³) | Barnes-Hut octree with multipole expansion, rayon-parallelized. |
+
+### Time integrators
+
+| Integrator | Order | Description |
+|---|---|---|
+| `StrangSplitting` | 2 | Drift(Δt/2) → kick(Δt) → drift(Δt/2). Symplectic. |
+| `YoshidaSplitting` | 4 | 3-substep Yoshida coefficients, 7 sub-steps total. Symplectic. |
+| `LieSplitting` | 1 | Drift(Δt) → kick(Δt). For testing/comparison only. |
+| `UnsplitIntegrator` | 2/3/4 | Method-of-lines RK on full Vlasov PDE. No splitting error. Re-solves Poisson at each stage. |
 
 ### The `PhaseSpaceRepr` trait
 
@@ -82,84 +128,71 @@ The central abstraction. All phase-space storage strategies implement this inter
 
 ```rust
 pub trait PhaseSpaceRepr: Send + Sync {
-    /// Integrate f over all velocities: rho(x) = integral f dv^3.
     fn compute_density(&self) -> DensityField;
-
-    /// Drift sub-step: advect f in spatial coordinates by dx = v*dt.
     fn advect_x(&mut self, displacement: &DisplacementField, dt: f64);
-
-    /// Kick sub-step: advect f in velocity coordinates by dv = g*dt.
     fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64);
-
-    /// Compute velocity moment of order n at given spatial position.
     fn moment(&self, position: &[f64; 3], order: usize) -> Tensor;
-
-    /// Total mass M = integral f dx^3 dv^3.
     fn total_mass(&self) -> f64;
-
-    /// Casimir invariant C_2 = integral f^2 dx^3 dv^3.
     fn casimir_c2(&self) -> f64;
-
-    /// Boltzmann entropy S = -integral f ln f dx^3 dv^3.
     fn entropy(&self) -> f64;
-
-    /// Number of distinct velocity streams at each spatial point.
     fn stream_count(&self) -> StreamCountField;
-
-    /// Extract the local velocity distribution f(v|x) at a given position.
     fn velocity_distribution(&self, position: &[f64; 3]) -> Vec<f64>;
-
-    /// Total kinetic energy T = 1/2 integral f v^2 dx^3 dv^3.
     fn total_kinetic_energy(&self) -> f64;
-
-    /// Extract a full 6D snapshot of the current state.
     fn to_snapshot(&self, time: f64) -> PhaseSpaceSnapshot;
+    fn load_snapshot(&mut self, snap: PhaseSpaceSnapshot);
+    fn as_any(&self) -> &dyn Any;
 }
 ```
 
-### Hierarchical Tucker (HT) tensor compression
+## Hierarchical Tucker (HT) tensor compression
 
-A uniform 6D grid at N=64 per dimension requires 64^6 ~ 7x10^10 cells. The `HtTensor` representation exploits the balanced binary tree structure of the x-v split to store f(x,v) in O(dnk^2 + dk^3) memory, where k is the representation rank and n is the grid size per dimension.
+A uniform 6D grid at N=64 per dimension requires 64⁶ ≈ 7×10¹⁰ cells. The `HtTensor` representation exploits the balanced binary tree structure of the x-v split to store f(x,v) in O(dNk² + dk³) memory, where k is the representation rank and N is the grid size per dimension.
 
 **Construction methods:**
 
-- `HtTensor::from_full()` — compress a full 6D array via hierarchical SVD (HSVD). O(N^6) — diagnostic use only.
-- `HtTensor::from_function()` — evaluate a callable on the grid, then compress. O(N^6).
-- `HtTensor::from_function_aca()` — **black-box construction** via the HTACA algorithm (Ballani & Grasedyck 2013). Builds the HT decomposition by sampling O(dNk) fibers instead of evaluating all N^6 grid points. Leaf frames are computed via fiber sampling + column-pivoted QR; interior transfer tensors via projected SVD.
+- `HtTensor::from_full()` — compress a full 6D array via hierarchical SVD (HSVD). O(N⁶).
+- `HtTensor::from_function_aca()` — **black-box construction** via the HTACA algorithm (Ballani & Grasedyck 2013). Builds the HT decomposition by sampling O(dNk) fibers instead of evaluating all N⁶ grid points.
 
 **Operations** (all in compressed format, never expanding to full):
 
-- `compute_density()` — O(Nk^2) velocity integration via tree contraction
+- `compute_density()` — O(Nk²) velocity integration via tree contraction
 - `truncate(eps)` — rank-adaptive recompression (orthogonalize + top-down SVD)
 - `add()` — rank-concatenation addition, followed by `truncate()` to compress
-- `inner_product()` / `frobenius_norm()` — O(dk^4) via recursive Gram matrices
-- `evaluate()` — single-point query in O(dk^3)
+- `inner_product()` / `frobenius_norm()` — O(dk⁴) via recursive Gram matrices
+- `evaluate()` — single-point query in O(dk³)
+- `advect_x()` / `advect_v()` — SLAR (Semi-Lagrangian Adaptive Rank) via HTACA reconstruction
 
-### Adaptive Cross Approximation (ACA)
+## Conservation framework (LoMaC)
 
-The `aca` module provides a standalone partially-pivoted ACA implementation (Bebendorf 2000) for low-rank matrix approximation. It builds a rank-k factorization A ~ U V^T by querying only O((m+n)k) entries. Used internally by HTACA for black-box tensor construction.
+The LoMaC (Local Macroscopic Conservation) framework restores exact conservation of mass, momentum, and energy after each time step. Enable via `.lomac(true)` on the simulation builder.
 
-```rust
-use caustic::tooling::core::algos::aca::{aca_partial_pivot, FnMatrix};
+**Components:**
 
-let mat = FnMatrix::new(100, 80, |i, j| {
-    let d = (i as f64 / 100.0) - (j as f64 / 80.0);
-    (-d * d / 0.1).exp()
-});
-let result = aca_partial_pivot(&mat, 1e-8, 20);
-println!("ACA rank: {}", result.rank);
-```
+- **KFVS** — Kinetic Flux Vector Splitting macroscopic solver with half-Maxwellian fluxes
+- **Conservative SVD** — Moment-preserving projection via Gram matrix inversion
+- **Rank-adaptive controller** — Conservation-aware truncation tolerance with budget management
 
 ## Initial conditions
 
-All implemented ICs satisfy the `IsolatedEquilibrium` trait and can be sampled onto a grid with `sample_on_grid()`:
+**Isolated equilibria** (via `sample_on_grid()`):
 
 - **`PlummerIC`** — Plummer sphere via analytic distribution function f(E)
 - **`KingIC`** — King model via Poisson-Boltzmann ODE (RK4 integration)
 - **`HernquistIC`** — Hernquist profile via closed-form f(E)
 - **`NfwIC`** — NFW profile via numerical Eddington inversion
-- **`ZeldovichSingleMode`** — single-mode Zel'dovich pancake (cosmological)
-- **`MergerIC`** — two-body superposition f = f_1 + f_2 with offsets
+
+**Cosmological:**
+
+- **`ZeldovichSingleMode`** — single-mode Zel'dovich pancake
+- **`ZeldovichIC`** — multi-mode Zel'dovich ICs from Gaussian random field (Harrison-Zel'dovich spectrum, FFT-based, reproducible seeding)
+
+**Disk dynamics:**
+
+- **`DiskStabilityIC`** — exponential disk with Shu (1969) distribution function f(E, L_z), Toomre Q stability parameter, azimuthal perturbation modes (bars, spirals)
+
+**Multi-body and custom:**
+
+- **`MergerIC`** — two-body superposition f = f₁ + f₂ with offsets
 - **`TidalIC`** — progenitor equilibrium model in an external host potential
 - **`CustomIC`** / **`CustomICArray`** — user-provided callable or pre-computed array
 
@@ -168,63 +201,92 @@ All implemented ICs satisfy the `IsolatedEquilibrium` trait and can be sampled o
 Conserved quantities monitored each timestep via `GlobalDiagnostics`:
 
 - Total energy (kinetic + potential), momentum, angular momentum
-- Casimir C_2, Boltzmann entropy
+- Casimir C₂, Boltzmann entropy
 - Virial ratio, total mass in box
 - Density profile (radial binning)
 
-Additional output modules: `VelocityMoments` (surface density, J-factor), `PhaseSpaceDiagnostics` (power spectrum, growth rates), `CausticDetector` (caustic surface detection, first caustic time).
+**Analysis tools:**
+
+- L1/L2/L∞ field norms and error metrics
+- `ConservationSummary` — energy, mass, momentum, C₂ drift tracking
+- `convergence_table` — Richardson extrapolation and convergence order estimation
+- `CausticDetector` — caustic surface detection, first caustic time
+
+## I/O and checkpointing
+
+- Binary snapshot save/load (shape + time + data)
+- CSV diagnostics (time series of all conserved quantities)
+- JSON checkpoint (snapshot + diagnostics history)
+- HT tensor checkpoint (tree structure without dense expansion)
+- **HDF5** (feature-gated): `save_snapshot_hdf5`, `load_snapshot_hdf5`, `save_ht_checkpoint_hdf5`, `load_ht_checkpoint_hdf5`
+
+## Exit conditions
+
+Termination is configurable via the builder API:
+
+| Condition | Description |
+|---|---|
+| `TimeLimitCondition` | Stop at t ≥ t_final |
+| `EnergyDriftCondition` | Stop when \|ΔE/E\| > tolerance |
+| `MassLossCondition` | Stop when mass loss exceeds threshold |
+| `CasimirDriftCondition` | Stop when C₂ drift exceeds threshold |
+| `WallClockCondition` | Stop after wall-clock time limit |
+| `SteadyStateCondition` | Stop when ∥∂f/∂t∥ < ε |
+| `CflViolationCondition` | Stop on CFL violation |
+| `VirialRelaxedCondition` | Stop when virial ratio stabilizes |
+| `CausticFormationCondition` | Stop at first caustic (stream count > 1) |
 
 ## Validation suite
 
-Run with `cargo test --release -- --test-threads=1`:
+**158 tests** — run with `cargo test --release -- --test-threads=1`:
+
+### Physics validation
 
 | Test | Validates |
 |---|---|
-| `free_streaming` | Spatial advection accuracy (G=0, f shifts as f(x-vt, v, 0)) |
+| `free_streaming` | Spatial advection accuracy (G=0, f shifts as f(x−vt, v, 0)) |
 | `uniform_acceleration` | Velocity advection accuracy |
 | `jeans_instability` | Growth rate matches analytic dispersion relation |
 | `jeans_stability` | Sub-Jeans perturbation does not grow |
 | `plummer_equilibrium` | Long-term equilibrium preservation |
+| `king_equilibrium` | King model (W₀=5) equilibrium preservation |
 | `zeldovich_pancake` | Caustic position matches analytic Zel'dovich solution |
 | `spherical_collapse` | Spherical overdensity collapse dynamics |
-| `conservation_laws` | Energy, momentum, C_2 conservation to tolerance |
+| `conservation_laws` | Energy, momentum, C₂ conservation to tolerance |
 | `landau_damping` | Damping rate matches analytic Landau rate |
+| `sheet_1d_density_comparison` | 1D sheet model vs exact Eldridge-Feix dynamics |
 
-Plus 2 integration tests (`smoke_test`, `end_to_end_run`) exercising the full pipeline from `Domain` through `Simulation::run()` to `ExitPackage`.
-
-### HT tensor and ACA tests
+### Convergence tests
 
 | Test | Validates |
 |---|---|
-| `round_trip_rank1` | Rank-1 tensor survives HSVD round-trip |
-| `gaussian_blob` | 6D Gaussian compression ratio and accuracy |
-| `addition` | Rank-concatenation addition correctness |
-| `density_integration` | `compute_density()` matches direct summation |
-| `inner_product_and_norm` | Gram-matrix inner product accuracy |
-| `truncation_accuracy` | Rank-adaptive recompression error bounds |
-| `htaca_separable` | Separable f(x,v) = g(x)h(v) achieves rank 1 at root |
-| `htaca_gaussian` | HTACA vs HSVD accuracy on 6D Gaussian |
-| `htaca_plummer` | HTACA on Plummer-like DF |
-| `htaca_scaling` | Evaluation count at multiple grid sizes |
-| `htaca_density_consistency` | `compute_density()` matches between HSVD and HTACA |
-| `htaca_rank_convergence` | Error decreases monotonically with max_rank |
-| `aca_rank1_exact` | Exact rank-1 matrix recovery |
-| `aca_rank3` | Known rank-3 matrix convergence |
-| `aca_low_rank_plus_noise` | Tolerance separates signal from noise |
-| `aca_gaussian_kernel` | Gaussian kernel rapid convergence |
-| `cur_output` | U*V^T reproduces ACA approximation |
-| `convergence_criterion` | Frobenius norm estimate tracks correctly |
-| `zero_matrix` | Graceful handling of zero input |
+| `density_integration_convergence` | Spatial convergence of density integration |
+| `free_streaming_convergence` | Error decreases with resolution |
+| `convergence_table_structure` | Richardson extrapolation framework |
+
+### Solver cross-validation
+
+| Test | Validates |
+|---|---|
+| `multigrid_vs_fft` | Multigrid matches FftPoisson on periodic problem |
+| `multigrid_convergence_order` | 2nd-order convergence (double N, error /4) |
+| `spherical_vs_fft_isolated` | Spherical harmonics matches FftIsolated |
+| `tree_vs_fft_isolated` | Barnes-Hut tree matches FftIsolated |
+| `tensor_poisson_vs_fft_isolated` | TensorPoisson matches FftIsolated |
+
+Plus integration tests, HT tensor/ACA tests (17), conservation framework tests (15), diagnostics tests (10), and solver-specific unit tests.
 
 ## Feature flags
 
 ```toml
 [dependencies]
-caustic = { version = "0.0.4", features = ["jemalloc"] }
+caustic = { version = "0.0.6", features = ["hdf5"] }
 ```
 
 | Flag | Description |
 |---|---|
+| `hdf5` | HDF5 I/O via `hdf5-metno` (snapshot and HT checkpoint read/write) |
+| `mpi` | MPI domain decomposition via the `mpi` crate (requires MPI installation) |
 | `jemalloc` | jemalloc global allocator via `tikv-jemallocator` |
 | `mimalloc-alloc` | mimalloc global allocator |
 | `dhat-heap` | Heap profiling via `dhat` |
@@ -232,41 +294,19 @@ caustic = { version = "0.0.4", features = ["jemalloc"] }
 
 ## Performance
 
-- **Parallelism**: rayon data parallelism across all hot paths (`compute_density`, `advect_x`, `advect_v`, FFT axes)
+- **Parallelism**: rayon data parallelism across `UniformGrid6D` (density, advection), `FftPoisson` (FFT axes), `TreePoisson` (grid walk), `SheetTracker` (particle advection), `Multigrid` (residual, prolongation)
 - **Release profile**: fat LTO, `codegen-units = 1`, `target-cpu=native` (via `.cargo/config.toml`)
 - **Benchmarks**: criterion benchmarks (`cargo bench`), benchmark binary: `solver_kernels`
 - **Instrumentation**: `tracing::info_span!` on all hot methods (zero overhead without a subscriber)
 - **Profiling profile**: `[profile.profiling]` inherits release with debug symbols for `perf`/`samply`
 
-## Roadmap
-
-- [x] Uniform 6D grid with rayon parallelism
-- [x] FFT Poisson (periodic + Hockney-Eastwood isolated)
-- [x] Semi-Lagrangian advection (Catmull-Rom) + Strang/Lie/Yoshida splitting
-- [x] Isolated equilibrium ICs (Plummer, King, Hernquist, NFW)
-- [x] Cosmological, merger, tidal, and custom ICs
-- [x] Conservation diagnostics + validation suite (30 tests)
-- [x] Criterion benchmarks + tracing instrumentation
-- [x] Binary snapshot I/O, CSV diagnostics, JSON checkpoints
-- [x] Hierarchical Tucker (HT) tensor decomposition with HSVD compression
-- [x] Adaptive Cross Approximation (ACA) for black-box low-rank matrix construction
-- [x] HTACA black-box HT construction via fiber sampling (Ballani & Grasedyck 2013)
-- [ ] SLAR advection in HT format (semi-Lagrangian with rank-adaptive recompression)
-- [ ] Tensor-format Poisson solver
-- [ ] LoMaC conservative truncation
-- [ ] Lagrangian sheet tracker for cold dark matter
-- [ ] Multigrid / spherical harmonics Poisson solvers
-- [ ] Adaptive mesh refinement
-- [ ] GPU acceleration
-- [ ] MPI domain decomposition
-
 ## Companion: phasma
 
-[phasma](https://github.com/resonant-jovian/phasma) is a ratatui-based terminal UI that consumes caustic as a library dependency. It provides interactive parameter editing, live diagnostics rendering, density/phase-space heatmaps, energy conservation plots, and radial profile charts — all from the terminal. phasma contains no solver logic; it delegates entirely to caustic.
+[phasma](https://github.com/resonant-jovian/phasma) is a ratatui-based terminal UI that consumes caustic as a library dependency. It provides interactive parameter editing, live diagnostics rendering, density/phase-space heatmaps, energy conservation plots, radial profile charts, rank monitoring, and Poisson solver analysis — all from the terminal. phasma contains no solver logic; it delegates entirely to caustic.
 
 ## Minimum supported Rust version
 
-Rust edition 2024, targeting **stable Rust 1.75+**.
+Rust edition 2024, targeting **stable Rust 1.85+**.
 
 ## License
 

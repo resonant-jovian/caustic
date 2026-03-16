@@ -60,6 +60,16 @@ pub trait PhaseSpaceRepr: Send + Sync {
         panic!("to_snapshot must be implemented by PhaseSpaceRepr impl")
     }
 
+    /// Replace the current state with data from a dense 6D snapshot.
+    ///
+    /// Required for unsplit (method-of-lines) time integration, which manipulates
+    /// the distribution function directly rather than through drift/kick sub-steps.
+    /// Default implementation panics; not all representations support this efficiently.
+    fn load_snapshot(&mut self, snap: PhaseSpaceSnapshot) {
+        let _ = snap;
+        panic!("load_snapshot not supported by this PhaseSpaceRepr implementation")
+    }
+
     /// Downcast to concrete type for implementation-specific queries (e.g. HT rank data).
     fn as_any(&self) -> &dyn Any;
 }

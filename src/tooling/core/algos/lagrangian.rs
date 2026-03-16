@@ -94,24 +94,46 @@ pub fn sl_shift_1d(
     periodic: bool,
 ) -> Vec<f64> {
     (0..n)
-        .map(|i| {
-            // Center of output cell i: -l + (i + 0.5) * cell_size
-            // Departure point (back-trace): center_i - disp
-            let center_i = -l + (i as f64 + 0.5) * cell_size;
-            let departure_phys = center_i - disp;
-            // Fractional cell index of departure point
-            let departure_idx = (departure_phys + l) / cell_size - 0.5;
-            if periodic {
-                cubic_spline_interpolate(data, departure_idx, n)
-            } else {
-                // Absorbing BC: anything outside [−0.5, n−0.5) maps to zero
-                if departure_idx < -0.5 || departure_idx >= n as f64 - 0.5 {
-                    0.0
-                } else {
-                    let clamped = departure_idx.clamp(0.0, n as f64 - 1.0 - 1e-10);
-                    cubic_spline_interpolate_open(data, clamped, n)
-                }
-            }
-        })
+        .map(|i| sl_shift_1d_at(data, disp, cell_size, n, l, periodic, i))
         .collect()
+}
+
+/// Evaluate the semi-Lagrangian shift for a single output cell index.
+#[inline]
+fn sl_shift_1d_at(
+    data: &[f64],
+    disp: f64,
+    cell_size: f64,
+    n: usize,
+    l: f64,
+    periodic: bool,
+    i: usize,
+) -> f64 {
+    let center_i = -l + (i as f64 + 0.5) * cell_size;
+    let departure_phys = center_i - disp;
+    let departure_idx = (departure_phys + l) / cell_size - 0.5;
+    if periodic {
+        cubic_spline_interpolate(data, departure_idx, n)
+    } else if departure_idx < -0.5 || departure_idx >= n as f64 - 0.5 {
+        0.0
+    } else {
+        let clamped = departure_idx.clamp(0.0, n as f64 - 1.0 - 1e-10);
+        cubic_spline_interpolate_open(data, clamped, n)
+    }
+}
+
+/// Like [`sl_shift_1d`], but writes results into a pre-allocated output buffer,
+/// avoiding allocation. `out` must have length >= `n`.
+pub fn sl_shift_1d_into(
+    data: &[f64],
+    disp: f64,
+    cell_size: f64,
+    n: usize,
+    l: f64,
+    periodic: bool,
+    out: &mut [f64],
+) {
+    for (i, val) in out.iter_mut().enumerate().take(n) {
+        *val = sl_shift_1d_at(data, disp, cell_size, n, l, periodic, i);
+    }
 }

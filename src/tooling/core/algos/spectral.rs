@@ -176,10 +176,12 @@ impl SpectralV {
                                     let psi0 = psi_tables[0][m0][iv1];
                                     for iv2 in 0..nv2 {
                                         let psi01 = psi0 * psi_tables[1][m1][iv2];
-                                        for iv3 in 0..nv3 {
+                                        for (iv3, &psi_v3) in
+                                            psi_tables[2][m2].iter().enumerate().take(nv3)
+                                        {
                                             let vi = iv1 * nv2 * nv3 + iv2 * nv3 + iv3;
                                             let f_val = snap.data[si * n_vel + vi];
-                                            sum += f_val * psi01 * psi_tables[2][m2][iv3];
+                                            sum += f_val * psi01 * psi_v3;
                                         }
                                     }
                                 }
@@ -227,9 +229,9 @@ impl SpectralV {
         for m0 in 0..n_modes {
             for m1 in 0..n_modes {
                 let p01 = psi[m0][0] * psi[m1][1];
-                for m2 in 0..n_modes {
+                for (m2, psi_m2) in psi.iter().enumerate().take(n_modes) {
                     let mi = m0 * n_modes * n_modes + m1 * n_modes + m2;
-                    f_val += self.coefficients[base + mi] * p01 * psi[m2][2];
+                    f_val += self.coefficients[base + mi] * p01 * psi_m2[2];
                 }
             }
         }
@@ -502,11 +504,8 @@ impl PhaseSpaceRepr for SpectralV {
                 }
             }
 
-            // Copy results for next dimension pass
-            self.coefficients = new_coeffs.clone();
-            // Update old_coeffs reference only if we have more dimensions to process
-            // (not needed since we reborrow at top of loop from self.coefficients
-            // via the gradient function)
+            // Move results for next dimension pass (avoids clone)
+            self.coefficients = new_coeffs;
         }
     }
 
@@ -536,8 +535,7 @@ impl PhaseSpaceRepr for SpectralV {
 
             // Apply coupling per velocity dimension using Lie-Trotter splitting:
             // dimension 0 (v1), then dimension 1 (v2), then dimension 2 (v3)
-            for dim in 0..3 {
-                let g = accel[dim];
+            for (dim, &g) in accel.iter().enumerate() {
                 if g.abs() < 1e-30 {
                     continue;
                 }
@@ -787,7 +785,7 @@ impl PhaseSpaceRepr for SpectralV {
 
         let mut counts = vec![0u32; n_spatial];
 
-        for si in 0..n_spatial {
+        for (si, count) in counts.iter_mut().enumerate().take(n_spatial) {
             // Build marginal f(v_x) = integral f(v_x, v_y, v_z) dv_y dv_z
             let marginal: Vec<f64> = (0..nv_sample)
                 .map(|iv1| {
@@ -814,7 +812,7 @@ impl PhaseSpaceRepr for SpectralV {
                     peaks += 1;
                 }
             }
-            counts[si] = peaks;
+            *count = peaks;
         }
 
         StreamCountField {
@@ -937,6 +935,7 @@ impl SpectralV {
     /// using centered finite differences.
     ///
     /// Returns d(a_mode)/dx_dim evaluated at cell (ix, iy, iz).
+    #[allow(clippy::too_many_arguments)]
     fn spatial_gradient_1d(
         &self,
         coeffs: &[f64],

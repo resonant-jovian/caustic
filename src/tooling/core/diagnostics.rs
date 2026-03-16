@@ -1,5 +1,10 @@
 //! `Diagnostics` — computes and stores all conserved quantities and monitoring outputs
 //! at each timestep.
+//!
+//! Includes:
+//! - L1 / L2 / L∞ field norms and field-comparison errors
+//! - Conservation drift monitors (mass, energy, momentum, Casimir)
+//! - Convergence order estimation via Richardson extrapolation
 
 use super::phasespace::PhaseSpaceRepr;
 use super::types::{DensityField, PotentialField};
@@ -85,6 +90,34 @@ impl Diagnostics {
         2.0 * t / w.abs()
     }
 
+    /// Maximum relative drift of a conserved quantity over the full history.
+    ///
+    /// Returns `|Q(t) - Q(0)| / |Q(0)|` for the worst timestep, or 0 if history is empty.
+    pub fn max_relative_drift<F: Fn(&GlobalDiagnostics) -> f64>(&self, quantity: F) -> f64 {
+        if self.history.is_empty() {
+            return 0.0;
+        }
+        let q0 = quantity(&self.history[0]);
+        if q0.abs() < 1e-30 {
+            return 0.0;
+        }
+        self.history
+            .iter()
+            .map(|d| ((quantity(d) - q0) / q0).abs())
+            .fold(0.0f64, f64::max)
+    }
+
+    /// Conservation summary: max relative drifts in mass, energy, and Casimir C₂.
+    pub fn conservation_summary(&self) -> ConservationSummary {
+        ConservationSummary {
+            max_energy_drift: self.max_relative_drift(|d| d.total_energy),
+            max_mass_drift: self.max_relative_drift(|d| d.mass_in_box),
+            max_casimir_drift: self.max_relative_drift(|d| d.casimir_c2),
+            max_entropy_drift: self.max_relative_drift(|d| d.entropy),
+            total_steps: self.history.len(),
+        }
+    }
+
     /// Spherically averaged density profile ρ(r) at current timestep.
     /// Bins density cells by radius from domain centre, returns (r_bin, ρ_avg) pairs.
     pub fn density_profile(density: &DensityField, dx: [f64; 3]) -> Vec<(f64, f64)> {
@@ -125,5 +158,296 @@ impl Diagnostics {
                 (r, rho_avg)
             })
             .collect()
+    }
+}
+
+/// Summary of conservation quality over a simulation run.
+#[derive(Debug, Clone, Copy)]
+pub struct ConservationSummary {
+    pub max_energy_drift: f64,
+    pub max_mass_drift: f64,
+    pub max_casimir_drift: f64,
+    pub max_entropy_drift: f64,
+    pub total_steps: usize,
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Field norms
+// ──────────────────────────────────────────────────────────────────────
+
+/// L1 norm: ‖f‖₁ = Σ|fᵢ|·dV.
+pub fn norm_l1(data: &[f64], cell_volume: f64) -> f64 {
+    data.iter().map(|v| v.abs()).sum::<f64>() * cell_volume
+}
+
+/// L2 norm: ‖f‖₂ = √(Σfᵢ²·dV).
+pub fn norm_l2(data: &[f64], cell_volume: f64) -> f64 {
+    (data.iter().map(|v| v * v).sum::<f64>() * cell_volume).sqrt()
+}
+
+/// L∞ norm: max|fᵢ|.
+pub fn norm_linf(data: &[f64]) -> f64 {
+    data.iter().fold(0.0f64, |m, v| m.max(v.abs()))
+}
+
+/// L1 error between two fields: ‖a − b‖₁ / ‖b‖₁.
+/// Returns absolute L1 error if `reference` is zero everywhere.
+pub fn error_l1(computed: &[f64], reference: &[f64], cell_volume: f64) -> f64 {
+    let diff: Vec<f64> = computed
+        .iter()
+        .zip(reference.iter())
+        .map(|(a, b)| a - b)
+        .collect();
+    let num = norm_l1(&diff, cell_volume);
+    let den = norm_l1(reference, cell_volume);
+    if den > 1e-30 { num / den } else { num }
+}
+
+/// L2 error between two fields: ‖a − b‖₂ / ‖b‖₂.
+pub fn error_l2(computed: &[f64], reference: &[f64], cell_volume: f64) -> f64 {
+    let diff: Vec<f64> = computed
+        .iter()
+        .zip(reference.iter())
+        .map(|(a, b)| a - b)
+        .collect();
+    let num = norm_l2(&diff, cell_volume);
+    let den = norm_l2(reference, cell_volume);
+    if den > 1e-30 { num / den } else { num }
+}
+
+/// L∞ error between two fields: max|aᵢ − bᵢ| / max|bᵢ|.
+pub fn error_linf(computed: &[f64], reference: &[f64]) -> f64 {
+    let diff_max = computed
+        .iter()
+        .zip(reference.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f64, f64::max);
+    let ref_max = norm_linf(reference);
+    if ref_max > 1e-30 {
+        diff_max / ref_max
+    } else {
+        diff_max
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Convergence order estimation
+// ──────────────────────────────────────────────────────────────────────
+
+/// Result of a convergence rate measurement.
+#[derive(Debug, Clone)]
+pub struct ConvergenceResult {
+    /// Resolutions (or rank values) in ascending order.
+    pub parameters: Vec<f64>,
+    /// Corresponding error values.
+    pub errors: Vec<f64>,
+    /// Estimated convergence order from each consecutive pair.
+    pub orders: Vec<f64>,
+    /// Mean convergence order.
+    pub mean_order: f64,
+}
+
+/// Estimate convergence order from a sequence of (parameter, error) pairs.
+///
+/// For spatial convergence: parameters are grid spacings h = L/N (decreasing).
+/// For rank convergence: parameters are 1/R (decreasing).
+///
+/// Order p is estimated via: p = log(e₁/e₂) / log(h₁/h₂).
+///
+/// Pairs should be sorted by decreasing parameter (coarsest first).
+pub fn estimate_convergence_order(pairs: &[(f64, f64)]) -> ConvergenceResult {
+    let parameters: Vec<f64> = pairs.iter().map(|&(h, _)| h).collect();
+    let errors: Vec<f64> = pairs.iter().map(|&(_, e)| e).collect();
+
+    let orders: Vec<f64> = pairs
+        .windows(2)
+        .map(|w| {
+            let (h1, e1) = w[0];
+            let (h2, e2) = w[1];
+            if e1 > 1e-30 && e2 > 1e-30 && (h1 / h2).abs() > 1e-30 {
+                (e1 / e2).ln() / (h1 / h2).ln()
+            } else {
+                f64::NAN
+            }
+        })
+        .collect();
+
+    let valid: Vec<f64> = orders.iter().copied().filter(|o| o.is_finite()).collect();
+    let mean_order = if valid.is_empty() {
+        f64::NAN
+    } else {
+        valid.iter().sum::<f64>() / valid.len() as f64
+    };
+
+    ConvergenceResult {
+        parameters,
+        errors,
+        orders,
+        mean_order,
+    }
+}
+
+/// Richardson extrapolation: given two error values at resolutions h and h/r,
+/// estimate the error at h=0.
+///
+/// `order` is the expected convergence order p.
+/// Returns the extrapolated value: (r^p · f_fine − f_coarse) / (r^p − 1).
+pub fn richardson_extrapolate(
+    coarse_value: f64,
+    fine_value: f64,
+    refinement_ratio: f64,
+    order: f64,
+) -> f64 {
+    let rp = refinement_ratio.powf(order);
+    (rp * fine_value - coarse_value) / (rp - 1.0)
+}
+
+/// Build a 2D convergence table: rows = grid resolutions N, columns = rank values R.
+///
+/// `run_experiment` takes (N, R) and returns the measured error.
+/// Returns a matrix of errors indexed as `table[n_idx][r_idx]`.
+pub fn convergence_table<F: Fn(usize, usize) -> f64>(
+    resolutions: &[usize],
+    ranks: &[usize],
+    run_experiment: F,
+) -> Vec<Vec<f64>> {
+    resolutions
+        .iter()
+        .map(|&n| ranks.iter().map(|&r| run_experiment(n, r)).collect())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn norm_l1_uniform() {
+        let data = vec![1.0; 8];
+        assert!((norm_l1(&data, 0.5) - 4.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn norm_l2_known() {
+        // ‖[3,4]‖₂ with dV=1 = 5
+        let data = vec![3.0, 4.0];
+        assert!((norm_l2(&data, 1.0) - 5.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn norm_linf_picks_max() {
+        let data = vec![1.0, -3.0, 2.5];
+        assert!((norm_linf(&data) - 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn error_l2_identical_is_zero() {
+        let a = vec![1.0, 2.0, 3.0];
+        assert!(error_l2(&a, &a, 1.0) < 1e-14);
+    }
+
+    #[test]
+    fn error_linf_known() {
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![1.0, 2.5, 3.0];
+        // diff = [0, 0.5, 0], max_diff = 0.5, ref_max = 3.0
+        assert!((error_linf(&a, &b) - 0.5 / 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn convergence_order_second_order() {
+        // Second-order method: error ∝ h²
+        // h = 1/N, error = h² = 1/N²
+        let pairs: Vec<(f64, f64)> = [8, 16, 32, 64]
+            .iter()
+            .map(|&n| {
+                let h = 1.0 / n as f64;
+                (h, h * h)
+            })
+            .collect();
+        let result = estimate_convergence_order(&pairs);
+        for &o in &result.orders {
+            assert!((o - 2.0).abs() < 0.01, "Expected order ~2, got {o}");
+        }
+        assert!((result.mean_order - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn convergence_order_fourth_order() {
+        let pairs: Vec<(f64, f64)> = [8, 16, 32]
+            .iter()
+            .map(|&n| {
+                let h = 1.0 / n as f64;
+                (h, h.powi(4))
+            })
+            .collect();
+        let result = estimate_convergence_order(&pairs);
+        assert!(
+            (result.mean_order - 4.0).abs() < 0.01,
+            "Expected order ~4, got {}",
+            result.mean_order
+        );
+    }
+
+    #[test]
+    fn richardson_extrapolation_exact_quadratic() {
+        // f(h) = 1 + 2h² (true value = 1)
+        // coarse: h=1 → f=3, fine: h=0.5 → f=1.5
+        let extrap = richardson_extrapolate(3.0, 1.5, 2.0, 2.0);
+        assert!(
+            (extrap - 1.0).abs() < 1e-12,
+            "Richardson should recover exact value, got {extrap}"
+        );
+    }
+
+    #[test]
+    fn convergence_table_structure() {
+        let ns = [8, 16, 32];
+        let rs = [10, 20];
+        let table = convergence_table(&ns, &rs, |n, r| 1.0 / (n as f64 * r as f64));
+        assert_eq!(table.len(), 3);
+        assert_eq!(table[0].len(), 2);
+        assert!((table[0][0] - 1.0 / 80.0).abs() < 1e-14);
+        assert!((table[2][1] - 1.0 / 640.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn conservation_summary_detects_drift() {
+        let mut diags = Diagnostics {
+            history: Vec::new(),
+        };
+        // Two snapshots: energy drifts by 1%
+        diags.history.push(GlobalDiagnostics {
+            time: 0.0,
+            total_energy: 100.0,
+            kinetic_energy: 60.0,
+            potential_energy: 40.0,
+            virial_ratio: 3.0,
+            total_momentum: [0.0; 3],
+            total_angular_momentum: [0.0; 3],
+            casimir_c2: 1.0,
+            entropy: 0.5,
+            mass_in_box: 10.0,
+        });
+        diags.history.push(GlobalDiagnostics {
+            time: 1.0,
+            total_energy: 101.0,
+            kinetic_energy: 61.0,
+            potential_energy: 40.0,
+            virial_ratio: 3.05,
+            total_momentum: [0.0; 3],
+            total_angular_momentum: [0.0; 3],
+            casimir_c2: 1.0,
+            entropy: 0.5,
+            mass_in_box: 10.0,
+        });
+        let summary = diags.conservation_summary();
+        assert!(
+            (summary.max_energy_drift - 0.01).abs() < 1e-10,
+            "Energy drift should be 1%, got {}",
+            summary.max_energy_drift
+        );
+        assert!(summary.max_mass_drift < 1e-14);
+        assert!(summary.max_casimir_drift < 1e-14);
     }
 }
