@@ -26,6 +26,7 @@ use super::aca::{BlackBoxMatrix, FnMatrix, Xorshift64, aca_partial_pivot};
 use faer::Mat;
 use rust_decimal::prelude::ToPrimitive;
 use std::any::Any;
+use std::sync::Arc;
 
 // ─── Fixed dimension tree topology for 6D ───────────────────────────────────
 //   0..5:  leaves (dim 0..5)
@@ -1818,10 +1819,10 @@ impl PhaseSpaceRepr for HtTensor {
         let max_rank = self.max_rank;
         let interp_mode = self.interpolation_mode;
 
-        // Clone acceleration data for capture
-        let gx = acceleration.gx.clone();
-        let gy = acceleration.gy.clone();
-        let gz = acceleration.gz.clone();
+        // Share acceleration data via Arc (O(1) clone vs O(N³) memcpy)
+        let gx: Arc<[f64]> = Arc::from(acceleration.gx.as_slice());
+        let gy: Arc<[f64]> = Arc::from(acceleration.gy.as_slice());
+        let gz: Arc<[f64]> = Arc::from(acceleration.gz.as_slice());
 
         let new_ht = HtTensor::from_function_aca(
             move |x_phys: &[f64; 3], v_phys: &[f64; 3]| -> f64 {

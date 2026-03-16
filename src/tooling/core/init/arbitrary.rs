@@ -151,18 +151,3 @@ impl CustomICArray {
         })
     }
 }
-
-/// Legacy stub: scalar distribution function prototype.
-pub fn f_init(_x: [f64; 3], _v: [f64; 3]) -> f64 {
-    unimplemented!("use CustomIC instead")
-}
-
-/// Legacy stub: raw 6D array initial condition.
-pub fn f_init_array() -> PhaseSpaceSnapshot {
-    unimplemented!("use CustomICArray instead")
-}
-
-/// Legacy stub: external potential Φ_ext(x, t).
-pub fn phi_external(_x: [f64; 3], _t: f64) -> f64 {
-    unimplemented!("use TidalIC::host_potential instead")
-}

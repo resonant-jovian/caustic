@@ -16,15 +16,62 @@ use std::any::Any;
 pub struct UniformGrid6D {
     pub data: Vec<f64>,
     pub domain: Domain,
+    // Cached derived values (computed once at construction, avoids repeated Decimal→f64).
+    cached_sizes: [usize; 6],
+    cached_lx: [f64; 3],
+    cached_lv: [f64; 3],
+    cached_dx: [f64; 3],
+    cached_dv: [f64; 3],
+}
+
+struct CachedGrid {
+    sizes: [usize; 6],
+    lx: [f64; 3],
+    lv: [f64; 3],
+    dx: [f64; 3],
+    dv: [f64; 3],
+}
+
+impl CachedGrid {
+    fn from_domain(domain: &Domain) -> Self {
+        Self {
+            sizes: [
+                domain.spatial_res.x1 as usize,
+                domain.spatial_res.x2 as usize,
+                domain.spatial_res.x3 as usize,
+                domain.velocity_res.v1 as usize,
+                domain.velocity_res.v2 as usize,
+                domain.velocity_res.v3 as usize,
+            ],
+            lx: [
+                domain.spatial.x1.to_f64().unwrap(),
+                domain.spatial.x2.to_f64().unwrap(),
+                domain.spatial.x3.to_f64().unwrap(),
+            ],
+            lv: [
+                domain.velocity.v1.to_f64().unwrap(),
+                domain.velocity.v2.to_f64().unwrap(),
+                domain.velocity.v3.to_f64().unwrap(),
+            ],
+            dx: domain.dx(),
+            dv: domain.dv(),
+        }
+    }
 }
 
 impl UniformGrid6D {
     /// Allocate Nx³ × Nv³ floats, zero-initialised.
     pub fn new(domain: Domain) -> Self {
         let n = domain.total_cells();
+        let c = CachedGrid::from_domain(&domain);
         Self {
             data: vec![0.0; n],
             domain,
+            cached_sizes: c.sizes,
+            cached_lx: c.lx,
+            cached_lv: c.lv,
+            cached_dx: c.dx,
+            cached_dv: c.dv,
         }
     }
 
@@ -36,15 +83,22 @@ impl UniformGrid6D {
             snap.data.len(),
             domain.total_cells()
         );
+        let c = CachedGrid::from_domain(&domain);
         Self {
             data: snap.data,
             domain,
+            cached_sizes: c.sizes,
+            cached_lx: c.lx,
+            cached_lv: c.lv,
+            cached_dx: c.dx,
+            cached_dv: c.dv,
         }
     }
 
     /// Linear index into flat Vec from (ix1, ix2, ix3, iv1, iv2, iv3) — row-major 6D.
+    #[inline]
     pub fn index(&self, ix: [usize; 3], iv: [usize; 3]) -> usize {
-        let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
+        let [_, nx2, nx3, nv1, nv2, nv3] = self.cached_sizes;
         let s_v3 = 1;
         let s_v2 = nv3;
         let s_v1 = nv2 * nv3;
@@ -54,32 +108,19 @@ impl UniformGrid6D {
         ix[0] * s_x1 + ix[1] * s_x2 + ix[2] * s_x3 + iv[0] * s_v1 + iv[1] * s_v2 + iv[2] * s_v3
     }
 
+    #[inline]
     pub(crate) fn sizes(&self) -> [usize; 6] {
-        let d = &self.domain;
-        [
-            d.spatial_res.x1 as usize,
-            d.spatial_res.x2 as usize,
-            d.spatial_res.x3 as usize,
-            d.velocity_res.v1 as usize,
-            d.velocity_res.v2 as usize,
-            d.velocity_res.v3 as usize,
-        ]
+        self.cached_sizes
     }
 
+    #[inline]
     fn lx(&self) -> [f64; 3] {
-        [
-            self.domain.spatial.x1.to_f64().unwrap(),
-            self.domain.spatial.x2.to_f64().unwrap(),
-            self.domain.spatial.x3.to_f64().unwrap(),
-        ]
+        self.cached_lx
     }
 
+    #[inline]
     fn lv(&self) -> [f64; 3] {
-        [
-            self.domain.velocity.v1.to_f64().unwrap(),
-            self.domain.velocity.v2.to_f64().unwrap(),
-            self.domain.velocity.v3.to_f64().unwrap(),
-        ]
+        self.cached_lv
     }
 }
 
@@ -87,7 +128,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
     fn compute_density(&self) -> DensityField {
         let _span = tracing::info_span!("compute_density").entered();
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
-        let dv = self.domain.dv();
+        let dv = self.cached_dv;
         let dv3 = dv[0] * dv[1] * dv[2];
 
         let s_v3 = 1usize;
@@ -126,10 +167,10 @@ impl PhaseSpaceRepr for UniformGrid6D {
     fn advect_x(&mut self, _displacement: &DisplacementField, dt: f64) {
         let _span = tracing::info_span!("advect_x").entered();
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
-        let dx = self.domain.dx();
-        let dv = self.domain.dv();
-        let lx = self.lx();
-        let lv = self.lv();
+        let dx = self.cached_dx;
+        let dv = self.cached_dv;
+        let lx = self.cached_lx;
+        let lv = self.cached_lv;
         let periodic = matches!(self.domain.spatial_bc, SpatialBoundType::Periodic);
 
         let s_v3 = 1usize;
@@ -274,8 +315,8 @@ impl PhaseSpaceRepr for UniformGrid6D {
     fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
         let _span = tracing::info_span!("advect_v").entered();
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
-        let dv = self.domain.dv();
-        let lv = self.lv();
+        let dv = self.cached_dv;
+        let lv = self.cached_lv;
         let periodic_v = matches!(self.domain.velocity_bc, VelocityBoundType::Truncated);
 
         let s_v3 = 1usize;
@@ -411,10 +452,10 @@ impl PhaseSpaceRepr for UniformGrid6D {
 
     fn moment(&self, position: &[f64; 3], order: usize) -> Tensor {
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
-        let dx = self.domain.dx();
-        let dv = self.domain.dv();
-        let lx = self.lx();
-        let lv = self.lv();
+        let dx = self.cached_dx;
+        let dv = self.cached_dv;
+        let lx = self.cached_lx;
+        let lv = self.cached_lv;
         let dv3 = dv[0] * dv[1] * dv[2];
 
         let ix1 = ((position[0] + lx[0]) / dx[0])
@@ -503,24 +544,24 @@ impl PhaseSpaceRepr for UniformGrid6D {
     }
 
     fn total_mass(&self) -> f64 {
-        let dx = self.domain.dx();
-        let dv = self.domain.dv();
+        let dx = self.cached_dx;
+        let dv = self.cached_dv;
         let dx3 = dx[0] * dx[1] * dx[2];
         let dv3 = dv[0] * dv[1] * dv[2];
         self.data.par_iter().sum::<f64>() * dx3 * dv3
     }
 
     fn casimir_c2(&self) -> f64 {
-        let dx = self.domain.dx();
-        let dv = self.domain.dv();
+        let dx = self.cached_dx;
+        let dv = self.cached_dv;
         let dx3 = dx[0] * dx[1] * dx[2];
         let dv3 = dv[0] * dv[1] * dv[2];
         self.data.par_iter().map(|&f| f * f).sum::<f64>() * dx3 * dv3
     }
 
     fn entropy(&self) -> f64 {
-        let dx = self.domain.dx();
-        let dv = self.domain.dv();
+        let dx = self.cached_dx;
+        let dv = self.cached_dv;
         let dx3 = dx[0] * dx[1] * dx[2];
         let dv3 = dv[0] * dv[1] * dv[2];
         self.data
@@ -534,7 +575,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
 
     fn stream_count(&self) -> StreamCountField {
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
-        let dv = self.domain.dv();
+        let dv = self.cached_dv;
         let dv23 = dv[1] * dv[2];
 
         let mut out = vec![0u32; nx1 * nx2 * nx3];
@@ -576,8 +617,8 @@ impl PhaseSpaceRepr for UniformGrid6D {
 
     fn velocity_distribution(&self, position: &[f64; 3]) -> Vec<f64> {
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
-        let dx = self.domain.dx();
-        let lx = self.lx();
+        let dx = self.cached_dx;
+        let lx = self.cached_lx;
 
         let ix1 = ((position[0] + lx[0]) / dx[0])
             .floor()
@@ -601,11 +642,11 @@ impl PhaseSpaceRepr for UniformGrid6D {
 
     fn total_kinetic_energy(&self) -> f64 {
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
-        let dx = self.domain.dx();
-        let dv = self.domain.dv();
+        let dx = self.cached_dx;
+        let dv = self.cached_dv;
         let dx3 = dx[0] * dx[1] * dx[2];
         let dv3 = dv[0] * dv[1] * dv[2];
-        let lv = self.lv();
+        let lv = self.cached_lv;
 
         let total = self.data.len();
         let n_spatial = nx1 * nx2 * nx3;

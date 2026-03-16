@@ -1,3 +1,5 @@
+//! Mandatory simulation parameters: gravitational constant and boundary conditions.
+
 use rust_decimal::Decimal;
 
 pub const G: Decimal = Decimal::ONE;

@@ -1,6 +1,6 @@
 [package]
 name = "caustic"
-version = "0.0.7"
+version = "0.0.8"
 edition = "2024"
 description = "A General-Purpose 6D Collisionless Gravitational Dynamics Solver"
 authors = ["Albin <albin@sjoegren.se>"]
