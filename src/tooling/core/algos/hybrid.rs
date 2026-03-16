@@ -252,14 +252,13 @@ impl PhaseSpaceRepr for HybridRepr {
         let [nx, ny, nz] = sheet_density.shape;
         let n = nx * ny * nz;
 
-        let mut data = vec![0.0f64; n];
-        for i in 0..n {
-            if self.mask[i] {
-                data[i] = grid_density.data[i];
-            } else {
-                data[i] = sheet_density.data[i];
-            }
-        }
+        let data: Vec<f64> = self
+            .mask
+            .iter()
+            .zip(grid_density.data.iter())
+            .zip(sheet_density.data.iter())
+            .map(|((&use_grid, &gd), &sd)| if use_grid { gd } else { sd })
+            .collect();
 
         DensityField {
             data,
@@ -335,15 +334,8 @@ impl PhaseSpaceRepr for HybridRepr {
         let [nx, ny, nz] = sheet_streams.shape;
         let n = nx * ny * nz;
 
-        let mut data = vec![0u32; n];
-        for i in 0..n {
-            if self.mask[i] {
-                // In grid mode: report sheet stream count (which triggered the transition)
-                data[i] = sheet_streams.data[i];
-            } else {
-                data[i] = sheet_streams.data[i];
-            }
-        }
+        // Stream counts come from the sheet regardless of mask state
+        let data = sheet_streams.data.clone();
 
         StreamCountField {
             data,
@@ -385,9 +377,7 @@ impl PhaseSpaceRepr for HybridRepr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tooling::core::init::domain::{
-        DomainBuilder, SpatialBoundType, VelocityBoundType,
-    };
+    use crate::tooling::core::init::domain::{DomainBuilder, SpatialBoundType, VelocityBoundType};
 
     fn test_domain(n: i128) -> Domain {
         DomainBuilder::new()

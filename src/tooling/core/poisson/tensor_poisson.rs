@@ -19,8 +19,8 @@ use super::super::solver::PoissonSolver;
 use super::super::types::*;
 use super::exponential_sum::ExponentialSumCoefficients;
 use super::utils::finite_difference_acceleration;
-use rustfft::num_complex::Complex64;
 use rustfft::FftPlanner;
+use rustfft::num_complex::Complex64;
 
 /// Tensor-format Poisson solver with isolated (vacuum) boundary conditions.
 ///
@@ -61,23 +61,30 @@ impl TensorPoisson {
         let mut green = vec![0.0f64; n_padded];
         let prefactor = -1.0 / (4.0 * std::f64::consts::PI);
 
+        let dx_avg = (dx[0] + dx[1] + dx[2]) / 3.0;
+
         for i0 in 0..padded_shape[0] {
             for i1 in 0..padded_shape[1] {
                 for i2 in 0..padded_shape[2] {
+                    let flat = i0 * padded_shape[1] * padded_shape[2] + i1 * padded_shape[2] + i2;
+
                     // Minimum-image distance for circulant embedding
                     let d0 = min_image_dist(i0, padded_shape[0]) * dx[0];
                     let d1 = min_image_dist(i1, padded_shape[1]) * dx[1];
                     let d2 = min_image_dist(i2, padded_shape[2]) * dx[2];
                     let r2 = d0 * d0 + d1 * d1 + d2 * d2;
 
-                    let mut val = 0.0;
-                    for k in 0..exp_sum.r_g {
-                        val += exp_sum.c[k] * (-exp_sum.alpha[k] * r2).exp();
+                    if r2 < 1e-30 {
+                        // Origin: use Hockney–Eastwood regularized self-potential
+                        // G(0) ≈ -2.38·dx/(4π), matching FftIsolated convention.
+                        green[flat] = -2.38 * dx_avg / (4.0 * std::f64::consts::PI);
+                    } else {
+                        let mut val = 0.0;
+                        for k in 0..exp_sum.r_g {
+                            val += exp_sum.c[k] * (-exp_sum.alpha[k] * r2).exp();
+                        }
+                        green[flat] = prefactor * val;
                     }
-                    let flat = i0 * padded_shape[1] * padded_shape[2]
-                        + i1 * padded_shape[2]
-                        + i2;
-                    green[flat] = prefactor * val;
                 }
             }
         }
@@ -170,11 +177,7 @@ impl PoissonSolver for TensorPoisson {
 /// Minimum-image distance: for index i in [0, 2N), returns min(i, 2N-i).
 fn min_image_dist(i: usize, n: usize) -> f64 {
     let half = n / 2;
-    if i <= half {
-        i as f64
-    } else {
-        (n - i) as f64
-    }
+    if i <= half { i as f64 } else { (n - i) as f64 }
 }
 
 /// 3D FFT (forward) of a real array, returning complex array.
@@ -341,10 +344,7 @@ mod tests {
         let center = 4 * 64 + 4 * 8 + 4;
         rho[center] = 1.0;
 
-        let density = DensityField {
-            data: rho,
-            shape,
-        };
+        let density = DensityField { data: rho, shape };
 
         let potential = solver.solve(&density, 1.0);
         assert!(potential.data[center].is_finite());
@@ -396,8 +396,10 @@ mod tests {
     #[test]
     fn tensor_poisson_vs_fft_isolated() {
         // Cross-validate against FftIsolated on a simple density
+        use crate::tooling::core::init::domain::{
+            DomainBuilder, SpatialBoundType, VelocityBoundType,
+        };
         use crate::tooling::core::poisson::fft::FftIsolated;
-        use crate::tooling::core::init::domain::{DomainBuilder, SpatialBoundType, VelocityBoundType};
 
         let domain = DomainBuilder::new()
             .spatial_extent(4.0)
@@ -427,10 +429,7 @@ mod tests {
             }
         }
 
-        let density = DensityField {
-            data: rho,
-            shape,
-        };
+        let density = DensityField { data: rho, shape };
 
         let fft_solver = FftIsolated::new(&domain);
         let tensor_solver = TensorPoisson::new(shape, dx, 1e-6, 1e-6, 20);
@@ -438,19 +437,30 @@ mod tests {
         let phi_fft = fft_solver.solve(&density, 1.0);
         let phi_tensor = tensor_solver.solve(&density, 1.0);
 
-        // Compare: they should agree reasonably well
-        let max_phi = phi_fft.data.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+        // Compare after removing constant offset (potential is defined up
+        // to a constant; the exp-sum Green's function has a different
+        // self-potential than FftIsolated, shifting Φ uniformly).
+        let n = phi_fft.data.len() as f64;
+        let mean_fft: f64 = phi_fft.data.iter().sum::<f64>() / n;
+        let mean_tensor: f64 = phi_tensor.data.iter().sum::<f64>() / n;
+
+        let max_range = phi_fft
+            .data
+            .iter()
+            .map(|v| (v - mean_fft).abs())
+            .fold(0.0f64, f64::max);
         let max_diff: f64 = phi_fft
             .data
             .iter()
             .zip(phi_tensor.data.iter())
-            .map(|(a, b)| (a - b).abs())
+            .map(|(a, b)| (a - mean_fft) - (b - mean_tensor))
+            .map(|d| d.abs())
             .fold(0.0, f64::max);
 
-        let rel_diff = max_diff / (max_phi + 1e-15);
+        let rel_diff = max_diff / (max_range + 1e-15);
         assert!(
             rel_diff < 0.3,
-            "TensorPoisson vs FftIsolated relative difference: {rel_diff} (max_diff={max_diff}, max_phi={max_phi})"
+            "TensorPoisson vs FftIsolated relative difference: {rel_diff} (max_diff={max_diff}, max_range={max_range})"
         );
     }
 }

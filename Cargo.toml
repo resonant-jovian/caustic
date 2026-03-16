@@ -1,6 +1,6 @@
 [package]
 name = "caustic"
-version = "0.0.5"
+version = "0.0.6"
 edition = "2024"
 description = "A General-Purpose 6D Collisionless Gravitational Dynamics Solver"
 authors = ["Albin <albin@sjoegren.se>"]
@@ -22,6 +22,7 @@ realfft = "3.5.0"    # Real-to-complex FFT (Hermitian symmetry)
 tracing = "0.1.44"   # Zero-cost instrumentation spans
 faer = "0.24.0"      # SVD, QR, LU — pure Rust, SIMD-accelerated
 hdf5-metno = { version = "0.12.3", optional = true }
+mpi = { version = "0.8", optional = true }
 
 # Optional allocator / profiling deps behind feature flags
 dhat = { version = "0.3.3", optional = true }
@@ -35,6 +36,7 @@ criterion = { version = "0.8.2", features = ["html_reports"] }
 [features]
 default = []
 hdf5 = ["dep:hdf5-metno"]
+mpi = ["dep:mpi"]
 jemalloc = ["dep:tikv-jemallocator"]
 mimalloc-alloc = ["dep:mimalloc"]
 dhat-heap = ["dep:dhat"]

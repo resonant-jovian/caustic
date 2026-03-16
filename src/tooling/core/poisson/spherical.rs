@@ -253,8 +253,8 @@ fn decompose_density(
         let r_center = (r_idx as f64 + 0.5) * dr;
         let r2_dr = r_center * r_center * dr;
         if r2_dr > 1e-30 {
-            for h_idx in 0..n_harm {
-                rho_lm[h_idx][r_idx] /= r2_dr;
+            for harm in rho_lm.iter_mut() {
+                harm[r_idx] /= r2_dr;
             }
         }
     }

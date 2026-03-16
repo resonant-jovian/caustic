@@ -10,6 +10,8 @@
 //! onto the spatial grid. Stream count at each cell equals the number of
 //! distinct Lagrangian elements mapping to that cell.
 
+use rayon::prelude::*;
+
 use super::super::{
     init::{cosmological::ZeldovichIC, domain::Domain},
     phasespace::PhaseSpaceRepr,
@@ -231,6 +233,7 @@ impl SheetTracker {
     /// Trilinear interpolation of a 3D vector field at an arbitrary position.
     ///
     /// Used by `advect_v` to obtain the acceleration at each particle's position.
+    #[allow(clippy::too_many_arguments)]
     fn interpolate_vec_field(
         field_x: &[f64],
         field_y: &[f64],
@@ -357,16 +360,15 @@ impl PhaseSpaceRepr for SheetTracker {
             self.domain.spatial.x3.to_f64().unwrap(),
         ];
 
-        for p in &mut self.particles {
-            for k in 0..3 {
+        self.particles.par_iter_mut().for_each(|p| {
+            for (k, &l) in lx.iter().enumerate() {
                 p.x[k] += p.v[k] * dt;
                 if is_periodic {
-                    // Wrap into [−L, L): x = ((x + L) mod 2L) − L
-                    let two_l = 2.0 * lx[k];
-                    p.x[k] = ((p.x[k] + lx[k]).rem_euclid(two_l)) - lx[k];
+                    let two_l = 2.0 * l;
+                    p.x[k] = ((p.x[k] + l).rem_euclid(two_l)) - l;
                 }
             }
-        }
+        });
     }
 
     fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
@@ -381,7 +383,7 @@ impl PhaseSpaceRepr for SheetTracker {
             super::super::init::domain::SpatialBoundType::Periodic
         );
 
-        for p in &mut self.particles {
+        self.particles.par_iter_mut().for_each(|p| {
             let a = Self::interpolate_vec_field(
                 &acceleration.gx,
                 &acceleration.gy,
@@ -392,10 +394,10 @@ impl PhaseSpaceRepr for SheetTracker {
                 &lx,
                 is_periodic,
             );
-            for k in 0..3 {
-                p.v[k] += a[k] * dt;
+            for (v, &acc) in p.v.iter_mut().zip(a.iter()) {
+                *v += acc * dt;
             }
-        }
+        });
     }
 
     fn moment(&self, position: &[f64; 3], order: usize) -> Tensor {
@@ -418,13 +420,13 @@ impl PhaseSpaceRepr for SheetTracker {
                 let mut mean_v = [0.0f64; 3];
                 if !indices.is_empty() {
                     for &i in &indices {
-                        for k in 0..3 {
-                            mean_v[k] += self.particles[i].v[k];
+                        for (mv, &pv) in mean_v.iter_mut().zip(self.particles[i].v.iter()) {
+                            *mv += pv;
                         }
                     }
                     let n = indices.len() as f64;
-                    for k in 0..3 {
-                        mean_v[k] /= n;
+                    for mv in &mut mean_v {
+                        *mv /= n;
                     }
                 }
                 Tensor {
@@ -442,12 +444,12 @@ impl PhaseSpaceRepr for SheetTracker {
                 if !indices.is_empty() {
                     let n = indices.len() as f64;
                     for &i in &indices {
-                        for k in 0..3 {
-                            mean_v[k] += self.particles[i].v[k];
+                        for (mv, &pv) in mean_v.iter_mut().zip(self.particles[i].v.iter()) {
+                            *mv += pv;
                         }
                     }
-                    for k in 0..3 {
-                        mean_v[k] /= n;
+                    for mv in &mut mean_v {
+                        *mv /= n;
                     }
 
                     for &i in &indices {

@@ -128,14 +128,15 @@ impl AmrCell {
     /// Returns true if the given 6D point lies within this cell's bounding box.
     #[inline]
     pub fn contains(&self, point: &[f64; 6]) -> bool {
-        for d in 0..6 {
-            let lo = self.center[d] - self.size[d] / 2.0;
-            let hi = self.center[d] + self.size[d] / 2.0;
-            if point[d] < lo || point[d] >= hi {
-                return false;
-            }
-        }
-        true
+        self.center
+            .iter()
+            .zip(self.size.iter())
+            .zip(point.iter())
+            .all(|((&c, &s), &p)| {
+                let lo = c - s / 2.0;
+                let hi = c + s / 2.0;
+                p >= lo && p < hi
+            })
     }
 
     /// Recursive refinement: subdivide leaf cells whose |value| exceeds the threshold
@@ -440,9 +441,9 @@ impl PhaseSpaceRepr for AmrGrid {
 
             // Wrap for periodic BC.
             if periodic {
-                for d in 0..3 {
-                    let period = 2.0 * lx[d];
-                    leaf.center[d] = ((leaf.center[d] + lx[d]) % period + period) % period - lx[d];
+                for (d, &l) in lx.iter().enumerate() {
+                    let period = 2.0 * l;
+                    leaf.center[d] = ((leaf.center[d] + l) % period + period) % period - l;
                 }
             }
         }

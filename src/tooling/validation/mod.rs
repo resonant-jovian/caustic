@@ -1,8 +1,11 @@
 pub(crate) mod conservation;
+pub(crate) mod convergence;
 pub(crate) mod free;
 pub(crate) mod instability;
+pub(crate) mod king;
 pub(crate) mod landau;
 pub(crate) mod plummer;
+pub(crate) mod sheet_1d;
 pub(crate) mod spherical;
 pub(crate) mod stability;
 pub(crate) mod uniform;

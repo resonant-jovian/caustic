@@ -57,13 +57,13 @@ pub fn build_green_ht(
 fn build_1d_gaussian(n_padded: usize, dx: f64, alpha: f64) -> Vec<f64> {
     let mut v = vec![0.0; n_padded];
     let half = n_padded / 2;
-    for i in 0..n_padded {
+    for (i, val) in v.iter_mut().enumerate() {
         let dist = if i <= half {
             i as f64 * dx
         } else {
             (n_padded - i) as f64 * dx
         };
-        v[i] = (-alpha * dist * dist).exp();
+        *val = (-alpha * dist * dist).exp();
     }
     v
 }
@@ -84,7 +84,10 @@ mod tests {
 
         // At origin: G(0) diverges but exp sum gives finite value
         let g0 = green.evaluate([0, 0, 0]);
-        assert!(g0.is_finite(), "Green's function at origin should be finite");
+        assert!(
+            g0.is_finite(),
+            "Green's function at origin should be finite"
+        );
 
         // At (1,0,0): G ≈ -1/(4π * 0.5) ≈ -0.159
         let g1 = green.evaluate([1, 0, 0]);

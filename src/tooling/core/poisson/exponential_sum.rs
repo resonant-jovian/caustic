@@ -48,12 +48,12 @@ impl ExponentialSumCoefficients {
         //   → exp(2u_max) > 36 / delta²  → u_max = 0.5 * ln(36 / delta²)
         let u_max = 0.5 * (36.0 / (delta * delta)).ln();
 
-        // Lower: the integrand exp(u) * exp(-exp(2u) * r²) is negligible.
-        // For small u (large negative): exp(2u) ≈ 0, Gaussian ≈ 1, weight = exp(u) → 0.
-        // Need exp(u_min) < machine_eps → u_min = -36.
-        // But we also need coverage of the low-frequency part.
-        // Practical: u_min = -ln(r_max) - 5 (ensures the slowest Gaussians are included)
-        let u_min = -(r_max.ln().max(0.0) + 5.0);
+        // Lower: for u → -∞, exp(2u) → 0 so the Gaussian ≈ 1, and the
+        // integrand ≈ exp(u). The tail integral from -∞ to u_min is ≈ exp(u_min).
+        // The full integral is √π/(2r). So relative error at r_max is
+        // 2·r_max·exp(u_min)/√π.  For this < ε:
+        //   u_min < ln(ε·√π / (2·r_max))
+        let u_min = (epsilon * std::f64::consts::PI.sqrt() / (2.0 * r_max)).ln();
 
         let two_over_sqrt_pi = std::f64::consts::FRAC_2_SQRT_PI;
 
@@ -132,11 +132,7 @@ mod tests {
 
         // R_G should scale as O(log(1/ε) * log(R/δ))
         // For ε=1e-4, R/δ=100: expect ~30-150 terms
-        assert!(
-            coeffs.r_g > 5,
-            "Too few terms: {}",
-            coeffs.r_g
-        );
+        assert!(coeffs.r_g > 5, "Too few terms: {}", coeffs.r_g);
 
         let max_err = coeffs.max_relative_error(delta, r_max, 500);
         assert!(
@@ -170,48 +166,6 @@ mod tests {
             (val - 1.0).abs() < 1e-5,
             "evaluate(1.0) = {val}, expected ~1.0"
         );
-    }
-
-    #[test]
-    fn exp_sum_debug_step_sizes() {
-        let delta = 0.1_f64;
-        let r_max = 10.0_f64;
-        let u_max = 0.5 * (36.0 / (delta * delta)).ln();
-        let u_min = -(r_max.ln().max(0.0) + 5.0);
-        let two_over_sqrt_pi = std::f64::consts::FRAC_2_SQRT_PI;
-
-        for &test_h in &[0.5, 0.3, 0.2, 0.15, 0.1, 0.05, 0.02] {
-            let n_neg = ((0.0 - u_min) / test_h).ceil() as isize;
-            let n_pos = (u_max / test_h).ceil() as isize;
-
-            let mut max_err = 0.0_f64;
-            let mut n_terms = 0usize;
-            let mut worst_r = 0.0;
-
-            for i in 0..500 {
-                let t = i as f64 / 499.0;
-                let r = delta * (r_max / delta).powf(t);
-                let mut sum = 0.0;
-                let mut local_n = 0;
-                for k in -n_neg..=n_pos {
-                    let u = k as f64 * test_h;
-                    let exp_u = u.exp();
-                    let alpha_k = exp_u * exp_u;
-                    let c_k = two_over_sqrt_pi * test_h * exp_u;
-                    if c_k < 1e-20 { continue; }
-                    if (-alpha_k * delta * delta).exp() < 1e-18 { continue; }
-                    sum += c_k * (-alpha_k * r * r).exp();
-                    if i == 0 { local_n += 1; }
-                }
-                if i == 0 { n_terms = local_n; }
-                let rel_err = (sum * r - 1.0).abs();
-                if rel_err > max_err {
-                    max_err = rel_err;
-                    worst_r = r;
-                }
-            }
-            eprintln!("h={test_h:.3} → n={n_terms:3}, max_rel_err={max_err:.2e}, worst_r={worst_r:.4}");
-        }
     }
 
     #[test]
