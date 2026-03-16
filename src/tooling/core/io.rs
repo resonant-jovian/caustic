@@ -352,7 +352,7 @@ impl IOManager {
             leaves
                 .new_dataset::<f64>()
                 .shape([frame.len()])
-                .create(&format!("leaf_{i}"))?
+                .create(format!("leaf_{i}").as_str())?
                 .write(frame)?;
         }
 
@@ -362,7 +362,7 @@ impl IOManager {
             transfers
                 .new_dataset::<f64>()
                 .shape([tensor.len()])
-                .create(&format!("transfer_{i}"))?
+                .create(format!("transfer_{i}").as_str())?
                 .write(tensor)?;
         }
 
@@ -392,18 +392,20 @@ impl IOManager {
 
         let leaves_group = file.group("leaf_frames")?;
         let n_leaves = leaves_group.len();
-        let mut leaf_frames = Vec::with_capacity(n_leaves);
+        let mut leaf_frames = Vec::with_capacity(n_leaves as usize);
         for i in 0..n_leaves {
-            let data: Vec<f64> = leaves_group.dataset(&format!("leaf_{i}"))?.read_raw()?;
+            let data: Vec<f64> = leaves_group
+                .dataset(format!("leaf_{i}").as_str())?
+                .read_raw()?;
             leaf_frames.push(data);
         }
 
         let transfers_group = file.group("transfer_tensors")?;
         let n_transfers = transfers_group.len();
-        let mut transfer_tensors = Vec::with_capacity(n_transfers);
+        let mut transfer_tensors = Vec::with_capacity(n_transfers as usize);
         for i in 0..n_transfers {
             let data: Vec<f64> = transfers_group
-                .dataset(&format!("transfer_{i}"))?
+                .dataset(format!("transfer_{i}").as_str())?
                 .read_raw()?;
             transfer_tensors.push(data);
         }
