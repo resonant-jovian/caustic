@@ -46,6 +46,7 @@ impl Advector for SemiLagrangian {
 
 /// 4-point Catmull-Rom cubic spline interpolation at fractional position `x` in
 /// periodic array of length `n`. `x` is a fractional cell index in `[0, n)`.
+#[inline]
 pub fn cubic_spline_interpolate(data: &[f64], x: f64, n: usize) -> f64 {
     let i = x.floor() as isize;
     let t = x - x.floor();
@@ -62,6 +63,7 @@ pub fn cubic_spline_interpolate(data: &[f64], x: f64, n: usize) -> f64 {
 }
 
 /// 4-point Catmull-Rom cubic spline interpolation with clamped (open) boundary.
+#[inline]
 fn cubic_spline_interpolate_open(data: &[f64], x: f64, n: usize) -> f64 {
     let i = x.floor() as isize;
     let t = x - x.floor();

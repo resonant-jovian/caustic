@@ -92,8 +92,54 @@ impl SheetTracker {
     }
 
     /// Place one particle at each Lagrangian grid point, displaced by s(q).
-    pub fn from_zeldovich(_ic: &ZeldovichIC, _domain: &Domain) -> Self {
-        todo!("from_zeldovich requires the rand crate which is not available")
+    ///
+    /// Uses `ZeldovichIC::displacement_field()` and `velocity_field()` to set
+    /// x = q + s(q), v = v₀(q).
+    pub fn from_zeldovich(ic: &ZeldovichIC, domain: &Domain) -> Self {
+        let shape = [
+            domain.spatial_res.x1 as usize,
+            domain.spatial_res.x2 as usize,
+            domain.spatial_res.x3 as usize,
+        ];
+        let dx = domain.dx();
+        let lx = [
+            domain.spatial.x1.to_f64().unwrap(),
+            domain.spatial.x2.to_f64().unwrap(),
+            domain.spatial.x3.to_f64().unwrap(),
+        ];
+
+        let [sx, sy, sz] = ic.displacement_field(domain);
+        let [vx, vy, vz] = ic.velocity_field(domain);
+
+        let n_total = shape[0] * shape[1] * shape[2];
+        let particle_mass = 1.0 / n_total as f64;
+
+        let mut particles = Vec::with_capacity(n_total);
+        for i0 in 0..shape[0] {
+            for i1 in 0..shape[1] {
+                for i2 in 0..shape[2] {
+                    let idx = i0 * shape[1] * shape[2] + i1 * shape[2] + i2;
+                    let q = [
+                        -lx[0] + (i0 as f64 + 0.5) * dx[0],
+                        -lx[1] + (i1 as f64 + 0.5) * dx[1],
+                        -lx[2] + (i2 as f64 + 0.5) * dx[2],
+                    ];
+                    particles.push(SheetParticle {
+                        q,
+                        x: [q[0] + sx[idx], q[1] + sy[idx], q[2] + sz[idx]],
+                        v: [vx[idx], vy[idx], vz[idx]],
+                    });
+                }
+            }
+        }
+
+        Self {
+            particles,
+            shape,
+            domain: domain.clone(),
+            stream_threshold: 1.0,
+            particle_mass,
+        }
     }
 
     /// Detect stream crossings by counting the number of particles per spatial cell.
