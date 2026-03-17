@@ -149,10 +149,7 @@ impl LoMaC {
     /// future optimization. This version avoids the dense LoMaC path in
     /// Simulation::step() by using HT moment extraction for the KFVS advance,
     /// then falls back to dense projection for the correction step.
-    pub fn project_ht(
-        &self,
-        ht: &crate::tooling::core::algos::ht::HtTensor,
-    ) -> Vec<f64> {
+    pub fn project_ht(&self, ht: &crate::tooling::core::algos::ht::HtTensor) -> Vec<f64> {
         if !self.active {
             let snap = ht.to_snapshot(0.0);
             return snap.data;
@@ -172,10 +169,7 @@ impl LoMaC {
 
     /// Initialize LoMaC from an HtTensor's moments directly (no dense conversion
     /// for the moment extraction step — only the KFVS initialization needs flat arrays).
-    pub fn initialize_from_ht(
-        &mut self,
-        ht: &crate::tooling::core::algos::ht::HtTensor,
-    ) {
+    pub fn initialize_from_ht(&mut self, ht: &crate::tooling::core::algos::ht::HtTensor) {
         let moments = ht.extract_macro_state();
         let density: Vec<f64> = moments.iter().map(|m| m.density).collect();
         let mom_x: Vec<f64> = moments.iter().map(|m| m.momentum[0]).collect();

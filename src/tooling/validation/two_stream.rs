@@ -47,8 +47,7 @@ fn two_stream_instability() {
             for iv3 in 0..nv3 {
                 let v3 = -lv + (iv3 as f64 + 0.5) * dv[2];
                 let v2sq = v1 * v1 + v2 * v2 + v3 * v3;
-                s_norm +=
-                    v1 * v1 * (-v2sq / (2.0 * sigma * sigma)).exp() * dv[0] * dv[1] * dv[2];
+                s_norm += v1 * v1 * (-v2sq / (2.0 * sigma * sigma)).exp() * dv[0] * dv[1] * dv[2];
             }
         }
     }
@@ -66,9 +65,7 @@ fn two_stream_instability() {
                         for iv3 in 0..nv3 {
                             let v3 = -lv + (iv3 as f64 + 0.5) * dv[2];
                             let v2sq = v1 * v1 + v2 * v2 + v3 * v3;
-                            let f = c * v1 * v1
-                                * (-v2sq / (2.0 * sigma * sigma)).exp()
-                                * perturb;
+                            let f = c * v1 * v1 * (-v2sq / (2.0 * sigma * sigma)).exp() * perturb;
                             let idx = grid.index([ix1, ix2, ix3], [iv1, iv2, iv3]);
                             grid.data[idx] = f.max(0.0);
                         }

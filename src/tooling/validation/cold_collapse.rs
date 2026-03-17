@@ -65,8 +65,7 @@ fn cold_collapse_1d() {
                         for iv3 in 0..nv3 {
                             let v3 = -lv + (iv3 as f64 + 0.5) * dv[2];
                             let v2sq = v1 * v1 + v2 * v2 + v3 * v3;
-                            let f = rho_local / s_norm
-                                * (-v2sq / (2.0 * sigma_v * sigma_v)).exp();
+                            let f = rho_local / s_norm * (-v2sq / (2.0 * sigma_v * sigma_v)).exp();
                             let idx = grid.index([ix1, ix2, ix3], [iv1, iv2, iv3]);
                             grid.data[idx] = f.max(0.0);
                         }

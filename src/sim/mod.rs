@@ -238,9 +238,7 @@ impl SimulationBuilder {
     }
 
     pub fn time_final(mut self, t: f64) -> Self {
-        self.t_final = Some(
-            Decimal::from_f64_retain(t).unwrap_or(Decimal::ZERO),
-        );
+        self.t_final = Some(Decimal::from_f64_retain(t).unwrap_or(Decimal::ZERO));
         self
     }
 
@@ -251,9 +249,7 @@ impl SimulationBuilder {
     }
 
     pub fn output_interval(mut self, dt: f64) -> Self {
-        self.output_interval = Some(
-            Decimal::from_f64_retain(dt).unwrap_or(Decimal::ZERO),
-        );
+        self.output_interval = Some(Decimal::from_f64_retain(dt).unwrap_or(Decimal::ZERO));
         self
     }
 
@@ -264,9 +260,7 @@ impl SimulationBuilder {
     }
 
     pub fn exit_on_energy_drift(mut self, tol: f64) -> Self {
-        self.energy_tolerance = Some(
-            Decimal::from_f64_retain(tol).unwrap_or(Decimal::ZERO),
-        );
+        self.energy_tolerance = Some(Decimal::from_f64_retain(tol).unwrap_or(Decimal::ZERO));
         self
     }
 
@@ -277,9 +271,7 @@ impl SimulationBuilder {
     }
 
     pub fn gravitational_constant(mut self, g: f64) -> Self {
-        self.g = Some(
-            Decimal::from_f64_retain(g).unwrap_or(Decimal::ZERO),
-        );
+        self.g = Some(Decimal::from_f64_retain(g).unwrap_or(Decimal::ZERO));
         self
     }
 
@@ -299,8 +291,7 @@ impl SimulationBuilder {
 
     pub fn cfl_factor(mut self, cfl: f64) -> Self {
         let mut opts = self.opts.unwrap_or_default();
-        opts.cfl_factor =
-            Decimal::from_f64_retain(cfl).unwrap_or(Decimal::ZERO);
+        opts.cfl_factor = Decimal::from_f64_retain(cfl).unwrap_or(Decimal::ZERO);
         self.opts = Some(opts);
         self
     }
@@ -332,16 +323,10 @@ impl SimulationBuilder {
             .ok_or_else(|| anyhow::anyhow!("integrator not set"))?;
 
         // t_final: prefer explicit t_final (Decimal), else read from domain
-        let t_final_dec = self
-            .t_final
-            .unwrap_or(domain.time_range.t_final);
+        let t_final_dec = self.t_final.unwrap_or(domain.time_range.t_final);
         let t_final = t_final_dec.to_f64().unwrap_or(1.0);
 
-        let g = self
-            .g
-            .unwrap_or(Decimal::ONE)
-            .to_f64()
-            .unwrap_or(1.0);
+        let g = self.g.unwrap_or(Decimal::ONE).to_f64().unwrap_or(1.0);
 
         // Build the phase-space representation
         let repr: Box<dyn PhaseSpaceRepr> = if let Some(ic) = self.ic {

@@ -149,8 +149,10 @@ impl PhaseSpaceDiagnostics {
         }
 
         // Compute power spectrum at each timestep (independent per snapshot)
-        let spectra: Vec<Vec<(f64, f64)>> =
-            density_history.par_iter().map(Self::power_spectrum).collect();
+        let spectra: Vec<Vec<(f64, f64)>> = density_history
+            .par_iter()
+            .map(Self::power_spectrum)
+            .collect();
 
         // Collect all k-bins from the first spectrum
         if spectra[0].is_empty() {
@@ -258,13 +260,25 @@ pub fn field_energy_spectrum(potential: &PotentialField, dx: [f64; 3]) -> Vec<(f
 
     use std::f64::consts::PI;
     for ix in 0..nx {
-        let kx_idx = if ix < nx / 2 { ix as i64 } else { ix as i64 - nx as i64 };
+        let kx_idx = if ix < nx / 2 {
+            ix as i64
+        } else {
+            ix as i64 - nx as i64
+        };
         let kx = 2.0 * PI * kx_idx as f64 / lx;
         for iy in 0..ny {
-            let ky_idx = if iy < ny / 2 { iy as i64 } else { iy as i64 - ny as i64 };
+            let ky_idx = if iy < ny / 2 {
+                iy as i64
+            } else {
+                iy as i64 - ny as i64
+            };
             let ky = 2.0 * PI * ky_idx as f64 / ly;
             for iz in 0..nz {
-                let kz_idx = if iz < nz / 2 { iz as i64 } else { iz as i64 - nz as i64 };
+                let kz_idx = if iz < nz / 2 {
+                    iz as i64
+                } else {
+                    iz as i64 - nz as i64
+                };
                 let kz = 2.0 * PI * kz_idx as f64 / lz;
                 let k2 = kx * kx + ky * ky + kz * kz;
                 let k_mag_int = ((kx_idx * kx_idx + ky_idx * ky_idx + kz_idx * kz_idx) as f64)

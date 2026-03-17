@@ -67,10 +67,7 @@ fn nfw_equilibrium() {
     // The NFW cusp should be broadly preserved. On a coarse grid with periodic BC,
     // we can't expect perfect preservation, but central density shouldn't collapse
     // to zero or blow up.
-    assert!(
-        rho_max_final > 0.0,
-        "Final density should be positive"
-    );
+    assert!(rho_max_final > 0.0, "Final density should be positive");
 
     // Check mass conservation (with truncated velocity BC)
     let dx = sim.domain.dx();
@@ -85,10 +82,7 @@ fn nfw_equilibrium() {
     };
 
     // With truncated velocity BC, mass should be reasonably conserved
-    assert!(
-        m_final > 0.0,
-        "Final mass should be positive"
-    );
+    assert!(m_final > 0.0, "Final mass should be positive");
 
     assert!(
         pkg.diagnostics_history.len() >= 2,

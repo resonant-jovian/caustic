@@ -2226,9 +2226,7 @@ impl HtTensor {
 
     /// Extract all macroscopic moments needed for LoMaC: (ρ, J₁, J₂, J₃, e).
     /// Returns per-spatial-cell `MacroState` vectors.
-    pub fn extract_macro_state(
-        &self,
-    ) -> Vec<crate::tooling::core::conservation::kfvs::MacroState> {
+    pub fn extract_macro_state(&self) -> Vec<crate::tooling::core::conservation::kfvs::MacroState> {
         let density = self.compute_density();
         let j0 = self.compute_momentum_density(0);
         let j1 = self.compute_momentum_density(1);

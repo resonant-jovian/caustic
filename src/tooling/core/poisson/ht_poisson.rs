@@ -152,8 +152,7 @@ impl PoissonSolver for HtPoisson {
         for i0 in 0..nx {
             for i1 in 0..ny {
                 for i2 in 0..nz {
-                    padded[i0 * py * pz + i1 * pz + i2] =
-                        density.data[i0 * ny * nz + i1 * nz + i2];
+                    padded[i0 * py * pz + i1 * pz + i2] = density.data[i0 * ny * nz + i1 * nz + i2];
                 }
             }
         }
@@ -181,11 +180,7 @@ impl PoissonSolver for HtPoisson {
             let scale = self.prefactor * c_k;
 
             // Scale rho_hat leaf frames by Green's factor diagonals
-            let scaled = scale_complex_ht(
-                &rho_hat,
-                &self.green_factors[k],
-                scale,
-            );
+            let scaled = scale_complex_ht(&rho_hat, &self.green_factors[k], scale);
 
             phi_hat = Some(match phi_hat {
                 None => scaled,
@@ -216,8 +211,7 @@ impl PoissonSolver for HtPoisson {
         for i0 in 0..nx {
             for i1 in 0..ny {
                 for i2 in 0..nz {
-                    data[i0 * ny * nz + i1 * nz + i2] =
-                        phi_ht.evaluate([i0, i1, i2]) * scale;
+                    data[i0 * ny * nz + i1 * nz + i2] = phi_ht.evaluate([i0, i1, i2]) * scale;
                 }
             }
         }
@@ -374,8 +368,7 @@ fn add_complex_ht(a: &HtTensor3DComplex, b: &HtTensor3DComplex) -> HtTensor3DCom
                 for t in 0..ka_t {
                     for l in 0..ka_l {
                         for r in 0..ka_r {
-                            transfer[t * kl * kr + l * kr + r] =
-                                ta[t * ka_l * ka_r + l * ka_r + r];
+                            transfer[t * kl * kr + l * kr + r] = ta[t * ka_l * ka_r + l * ka_r + r];
                         }
                     }
                 }
@@ -478,10 +471,7 @@ mod tests {
             }
         }
 
-        let density = DensityField {
-            data: rho,
-            shape,
-        };
+        let density = DensityField { data: rho, shape };
 
         let tensor_solver = TensorPoisson::new(shape, dx, 1e-4, 1e-4, 15);
         let ht_solver = HtPoisson::new(shape, dx, 1e-4, 1e-3, 20);

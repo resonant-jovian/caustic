@@ -216,6 +216,10 @@ pub fn spectral_laplacian(density: &DensityField, dx: &[f64; 3]) -> DensityField
 
 fn wavenumber(i: usize, n: usize, l: f64) -> f64 {
     use std::f64::consts::PI;
-    let j = if i <= n / 2 { i as i64 } else { i as i64 - n as i64 };
+    let j = if i <= n / 2 {
+        i as i64
+    } else {
+        i as i64 - n as i64
+    };
     2.0 * PI * j as f64 / l
 }

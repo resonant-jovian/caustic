@@ -31,9 +31,8 @@ pub struct StepRankDiagnostics {
 fn extract_ranks(repr: &dyn PhaseSpaceRepr) -> Option<Vec<usize>> {
     use super::super::algos::ht::HtTensor;
     let any = repr.as_any();
-    any.downcast_ref::<HtTensor>().map(|ht| {
-        ht.nodes.iter().map(|n| n.rank()).collect()
-    })
+    any.downcast_ref::<HtTensor>()
+        .map(|ht| ht.nodes.iter().map(|n| n.rank()).collect())
 }
 
 fn max_rank(ranks: &[usize]) -> f64 {
@@ -66,10 +65,10 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
     ) {
         let _span = tracing::info_span!("instrumented_strang_advance").entered();
 
-        let mut diag = StepRankDiagnostics::default();
-
-        // Record pre-drift ranks
-        diag.pre_drift_ranks = extract_ranks(&*repr);
+        let mut diag = StepRankDiagnostics {
+            pre_drift_ranks: extract_ranks(&*repr),
+            ..Default::default()
+        };
 
         // Drift half-step
         advector.drift(repr, dt / 2.0);
@@ -87,16 +86,13 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
         diag.post_final_ranks = extract_ranks(&*repr);
 
         // Compute amplification ratios
-        if let (Some(pre), Some(post_drift)) =
-            (&diag.pre_drift_ranks, &diag.post_drift_ranks)
-        {
+        if let (Some(pre), Some(post_drift)) = (&diag.pre_drift_ranks, &diag.post_drift_ranks) {
             let r_pre = max_rank(pre);
             let r_post = max_rank(post_drift);
             diag.advection_rank_amplification = Some(r_post / r_pre);
         }
 
-        if let (Some(post_drift), Some(post_kick)) =
-            (&diag.post_drift_ranks, &diag.post_kick_ranks)
+        if let (Some(post_drift), Some(post_kick)) = (&diag.post_drift_ranks, &diag.post_kick_ranks)
         {
             let r_drift = max_rank(post_drift);
             let r_kick = max_rank(post_kick);
@@ -151,7 +147,17 @@ mod tests {
         assert!(integrator.last_diagnostics.pre_drift_ranks.is_none());
         assert!(integrator.last_diagnostics.post_drift_ranks.is_none());
         assert!(integrator.last_diagnostics.post_kick_ranks.is_none());
-        assert!(integrator.last_diagnostics.poisson_rank_amplification.is_none());
-        assert!(integrator.last_diagnostics.advection_rank_amplification.is_none());
+        assert!(
+            integrator
+                .last_diagnostics
+                .poisson_rank_amplification
+                .is_none()
+        );
+        assert!(
+            integrator
+                .last_diagnostics
+                .advection_rank_amplification
+                .is_none()
+        );
     }
 }
