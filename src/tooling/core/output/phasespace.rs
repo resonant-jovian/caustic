@@ -193,3 +193,97 @@ impl PhaseSpaceDiagnostics {
         result
     }
 }
+
+/// Gravitational field energy spectrum E(k) = |k|² |Φ̂(k)|² binned by |k|.
+///
+/// Returns (k, E(k)) pairs. This measures the gravitational energy per mode,
+/// useful for tracking energy cascade and scale-dependent dynamics.
+pub fn field_energy_spectrum(potential: &PotentialField, dx: [f64; 3]) -> Vec<(f64, f64)> {
+    let [nx, ny, nz] = potential.shape;
+    let lx = nx as f64 * dx[0];
+    let ly = ny as f64 * dx[1];
+    let lz = nz as f64 * dx[2];
+
+    // 3D FFT of potential
+    let mut planner = FftPlanner::new();
+    let mut data: Vec<Complex<f64>> = potential
+        .data
+        .iter()
+        .map(|&r| Complex::new(r, 0.0))
+        .collect();
+
+    // FFT along z
+    let fft_z = planner.plan_fft_forward(nz);
+    for ix in 0..nx {
+        for iy in 0..ny {
+            let offset = ix * ny * nz + iy * nz;
+            fft_z.process(&mut data[offset..offset + nz]);
+        }
+    }
+
+    // FFT along y
+    let fft_y = planner.plan_fft_forward(ny);
+    let mut buf = vec![Complex::new(0.0, 0.0); ny];
+    for ix in 0..nx {
+        for iz in 0..nz {
+            for iy in 0..ny {
+                buf[iy] = data[ix * ny * nz + iy * nz + iz];
+            }
+            fft_y.process(&mut buf);
+            for iy in 0..ny {
+                data[ix * ny * nz + iy * nz + iz] = buf[iy];
+            }
+        }
+    }
+
+    // FFT along x
+    let fft_x = planner.plan_fft_forward(nx);
+    let mut buf = vec![Complex::new(0.0, 0.0); nx];
+    for iy in 0..ny {
+        for iz in 0..nz {
+            for ix in 0..nx {
+                buf[ix] = data[ix * ny * nz + iy * nz + iz];
+            }
+            fft_x.process(&mut buf);
+            for ix in 0..nx {
+                data[ix * ny * nz + iy * nz + iz] = buf[ix];
+            }
+        }
+    }
+
+    // Bin |k|² |Φ̂(k)|² by |k|
+    let k_max = ((nx * nx + ny * ny + nz * nz) as f64).sqrt().ceil() as usize + 1;
+    let mut energy_sum = vec![0.0; k_max];
+    let mut count = vec![0u64; k_max];
+
+    use std::f64::consts::PI;
+    for ix in 0..nx {
+        let kx_idx = if ix < nx / 2 { ix as i64 } else { ix as i64 - nx as i64 };
+        let kx = 2.0 * PI * kx_idx as f64 / lx;
+        for iy in 0..ny {
+            let ky_idx = if iy < ny / 2 { iy as i64 } else { iy as i64 - ny as i64 };
+            let ky = 2.0 * PI * ky_idx as f64 / ly;
+            for iz in 0..nz {
+                let kz_idx = if iz < nz / 2 { iz as i64 } else { iz as i64 - nz as i64 };
+                let kz = 2.0 * PI * kz_idx as f64 / lz;
+                let k2 = kx * kx + ky * ky + kz * kz;
+                let k_mag_int = ((kx_idx * kx_idx + ky_idx * ky_idx + kz_idx * kz_idx) as f64)
+                    .sqrt()
+                    .round() as usize;
+                if k_mag_int > 0 && k_mag_int < k_max {
+                    let c = data[ix * ny * nz + iy * nz + iz];
+                    energy_sum[k_mag_int] += k2 * c.norm_sqr();
+                    count[k_mag_int] += 1;
+                }
+            }
+        }
+    }
+
+    let mut result = Vec::new();
+    for bin in 1..k_max {
+        if count[bin] > 0 {
+            result.push((bin as f64, energy_sum[bin] / count[bin] as f64));
+        }
+    }
+    result
+}

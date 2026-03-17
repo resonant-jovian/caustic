@@ -40,6 +40,7 @@ pub use tooling::core::conditions::{
     MassLossCondition, SteadyStateCondition, VirialRelaxedCondition, WallClockCondition,
 };
 pub use tooling::core::diagnostics::GlobalDiagnostics;
+pub use tooling::core::output::phasespace::{PhaseSpaceDiagnostics, field_energy_spectrum};
 pub use tooling::core::init::arbitrary::CustomICArray;
 pub use tooling::core::init::cosmological::{ZeldovichIC, ZeldovichSingleMode};
 pub use tooling::core::init::domain::{SpatialBoundType, VelocityBoundType};

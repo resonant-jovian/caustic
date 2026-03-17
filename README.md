@@ -22,7 +22,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-caustic = "0.0.6"
+caustic = "0.0.9"
 ```
 
 ### Minimal example: Plummer sphere equilibrium
@@ -108,7 +108,8 @@ Each solver component is a Rust trait; implementations are swapped independently
 |---|---|---|---|
 | `FftPoisson` | Periodic | O(N³ log N) | Real-to-complex FFT via `realfft`, rayon-parallelized. |
 | `FftIsolated` | Isolated | O(N³ log N) | Hockney-Eastwood zero-padding on (2N)³ grid. |
-| `TensorPoisson` | Isolated | O(N³ log N) | Braess-Hackbusch exponential sum Green's function + dense 3D FFT. |
+| `TensorPoisson` | Isolated | O(N³ log N) | Braess-Hackbusch exponential sum Green's function + dense 3D FFT. 2nd-order near-field correction. |
+| `HtPoisson` | Isolated | O(R_G·r·N log N) | HT-format Poisson: exp-sum Green's function in HT tensor format with rank re-compression. |
 | `Multigrid` | Periodic/Isolated | O(N³) | V-cycle with red-black Gauss-Seidel smoothing, rayon-parallelized. |
 | `SphericalHarmonicsPoisson` | Isolated | O(l²_max N) | Legendre decomposition + radial ODE integration. |
 | `TreePoisson` | Isolated | O(N³ log N³) | Barnes-Hut octree with multipole expansion, rayon-parallelized. |
@@ -121,6 +122,8 @@ Each solver component is a Rust trait; implementations are swapped independently
 | `YoshidaSplitting` | 4 | 3-substep Yoshida coefficients, 7 sub-steps total. Symplectic. |
 | `LieSplitting` | 1 | Drift(Δt) → kick(Δt). For testing/comparison only. |
 | `UnsplitIntegrator` | 2/3/4 | Method-of-lines RK on full Vlasov PDE. No splitting error. Re-solves Poisson at each stage. |
+| `RkeiIntegrator` | 3 | RKEI (Runge-Kutta Exponential Integrator). SSP-RK3 with unsplit characteristics. 3 Poisson solves per step. |
+| `InstrumentedStrangSplitting` | 2 | Strang splitting with per-sub-step rank diagnostics (drift/kick/Poisson amplification tracking). |
 
 ### The `PhaseSpaceRepr` trait
 
@@ -238,7 +241,7 @@ Termination is configurable via the builder API:
 
 ## Validation suite
 
-**158 tests** — run with `cargo test --release -- --test-threads=1`:
+**163+ tests** — run with `cargo test --release -- --test-threads=1`:
 
 ### Physics validation
 
@@ -246,14 +249,19 @@ Termination is configurable via the builder API:
 |---|---|
 | `free_streaming` | Spatial advection accuracy (G=0, f shifts as f(x−vt, v, 0)) |
 | `uniform_acceleration` | Velocity advection accuracy |
-| `jeans_instability` | Growth rate matches analytic dispersion relation |
+| `jeans_instability` | Growth rate matches analytic dispersion relation (periodic BC) |
+| `jeans_instability_isolated` | Jeans instability with FftIsolated BCs, growth rate comparison |
 | `jeans_stability` | Sub-Jeans perturbation does not grow |
 | `plummer_equilibrium` | Long-term equilibrium preservation |
 | `king_equilibrium` | King model (W₀=5) equilibrium preservation |
+| `nfw_equilibrium` | NFW profile cusp preservation over 5 t_dyn |
 | `zeldovich_pancake` | Caustic position matches analytic Zel'dovich solution |
 | `spherical_collapse` | Spherical overdensity collapse dynamics |
+| `cold_collapse_1d` | Cold slab gravitational collapse, phase-space spiral formation |
 | `conservation_laws` | Energy, momentum, C₂ conservation to tolerance |
 | `landau_damping` | Damping rate matches analytic Landau rate |
+| `nonlinear_landau_damping` | Large perturbation (ε=0.5), phase-space vortex, conservation over 50 bounce times |
+| `two_stream_instability` | Two-stream IC, perturbation growth and saturation |
 | `sheet_1d_density_comparison` | 1D sheet model vs exact Eldridge-Feix dynamics |
 
 ### Convergence tests
@@ -275,6 +283,28 @@ Termination is configurable via the builder API:
 | `tensor_poisson_vs_fft_isolated` | TensorPoisson matches FftIsolated |
 
 Plus integration tests, HT tensor/ACA tests (17), conservation framework tests (15), diagnostics tests (10), and solver-specific unit tests.
+
+## Equation-to-module mapping
+
+| Equation / Method | Module | Reference |
+|---|---|---|
+| ∂f/∂t + v·∇ₓf − ∇Φ·∇ᵥf = 0 (Vlasov) | `time/strang.rs`, `time/yoshida.rs`, `time/rkei.rs` | Operator splitting: Cheng & Knorr (1976) |
+| ∇²Φ = 4πGρ (Poisson) | `poisson/fft.rs`, `poisson/multigrid.rs` | Hockney & Eastwood (1988) |
+| 1/r ≈ Σ c_k exp(-α_k r²) (exponential sum) | `poisson/exponential_sum.rs`, `poisson/tensor_poisson.rs` | Braess & Hackbusch, IMA J. Numer. Anal. 25(4) (2005) |
+| HT-format Poisson with rank re-compression | `poisson/ht_poisson.rs` | Khoromskij (2011), Braess-Hackbusch (2005) |
+| Near-field correction (0th + 2nd order) | `poisson/exponential_sum.rs`, `poisson/tensor_poisson.rs` | Exl, Mauser & Zhang, JCP (2016) |
+| Hierarchical Tucker decomposition | `algos/ht.rs` | Hackbusch & Kühn, JCAM 261 (2009) |
+| HTACA (black-box HT construction) | `algos/ht.rs`, `algos/aca.rs` | Ballani & Grasedyck, Numer. Math. 124 (2013) |
+| SLAR (semi-Lagrangian adaptive rank) | `algos/ht.rs` | Kormann & Reuter (2024) |
+| RKEI (Runge-Kutta exponential integrator) | `time/rkei.rs` | Kormann & Reuter (2024) |
+| LoMaC (local macroscopic conservation) | `conservation/lomac.rs`, `conservation/kfvs.rs` | Guo & Qiu, arXiv:2207.00518 (2022) |
+| Conservative SVD projection | `conservation/conservative_svd.rs` | Guo & Qiu (2022) |
+| KFVS (kinetic flux vector splitting) | `conservation/kfvs.rs` | Mandal & Deshpande, Comput. Fluids 23(4) (1994) |
+| Plummer DF: f(E) ∝ (−E)^{7/2} | `init/isolated.rs` | Dejonghe (1987), Binney & Tremaine (2008) |
+| King model: Poisson-Boltzmann ODE | `init/isolated.rs` | King, AJ 71 (1966) |
+| NFW: numerical Eddington inversion | `init/isolated.rs` | Navarro, Frenk & White, ApJ 462 (1996) |
+| Zel'dovich approximation | `init/cosmological.rs` | Zel'dovich, A&A 5 (1970) |
+| Shu disk DF: f(E, L_z) | `init/stability.rs` | Shu, ApJ 160 (1970) |
 
 ## Feature flags
 
