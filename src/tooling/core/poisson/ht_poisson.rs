@@ -295,10 +295,13 @@ fn scale_complex_ht(
 }
 
 /// Add two complex HT tensors via rank concatenation.
-/// Result rank at each node = rank_a + rank_b.
+/// Leaf and non-root interior ranks are concatenated block-diagonally.
+/// The root node keeps rank 1 (scalar tensor): block-diagonal in (l, r) only,
+/// matching HtTensor3D::add.
 fn add_complex_ht(a: &HtTensor3DComplex, b: &HtTensor3DComplex) -> HtTensor3DComplex {
     assert_eq!(a.shape, b.shape);
     let mut nodes = Vec::with_capacity(a.nodes.len());
+    let root_idx = a.nodes.len() - 1;
 
     for (idx, (na, nb)) in a.nodes.iter().zip(b.nodes.iter()).enumerate() {
         match (na, nb) {
@@ -355,40 +358,63 @@ fn add_complex_ht(a: &HtTensor3DComplex, b: &HtTensor3DComplex) -> HtTensor3DCom
                     ranks: rkb,
                 },
             ) => {
-                // Block-diagonal transfer: B_new[t, l, r] where
-                // t ∈ [0, ka_t + kb_t), l ∈ [0, ka_l + kb_l), r ∈ [0, ka_r + kb_r)
                 let [ka_t, ka_l, ka_r] = *rka;
                 let [kb_t, kb_l, kb_r] = *rkb;
-                let kt = ka_t + kb_t;
                 let kl = ka_l + kb_l;
                 let kr = ka_r + kb_r;
-                let mut transfer = vec![0.0; kt * kl * kr];
 
-                // A block: B_new[t, l, r] = ta[t, l, r] for t < ka_t, l < ka_l, r < ka_r
-                for t in 0..ka_t {
+                if idx == root_idx {
+                    // Root: keep kt=1, block-diagonal in (l, r) only.
+                    // B_sum[0, l, r] = B_A[0, l, r] for l<ka_l, r<ka_r
+                    // B_sum[0, ka_l+l, ka_r+r] = B_B[0, l, r] for l<kb_l, r<kb_r
+                    let mut transfer = vec![0.0; kl * kr];
+
                     for l in 0..ka_l {
                         for r in 0..ka_r {
-                            transfer[t * kl * kr + l * kr + r] = ta[t * ka_l * ka_r + l * ka_r + r];
+                            transfer[l * kr + r] = ta[l * ka_r + r];
                         }
                     }
-                }
-
-                // B block: B_new[ka_t + t, ka_l + l, ka_r + r] = tb[t, l, r]
-                for t in 0..kb_t {
                     for l in 0..kb_l {
                         for r in 0..kb_r {
-                            transfer[(ka_t + t) * kl * kr + (ka_l + l) * kr + (ka_r + r)] =
-                                tb[t * kb_l * kb_r + l * kb_r + r];
+                            transfer[(ka_l + l) * kr + (ka_r + r)] = tb[l * kb_r + r];
                         }
                     }
-                }
 
-                nodes.push(HtNode3DComplex::Interior {
-                    left: *la,
-                    right: *ra,
-                    transfer,
-                    ranks: [kt, kl, kr],
-                });
+                    nodes.push(HtNode3DComplex::Interior {
+                        left: *la,
+                        right: *ra,
+                        transfer,
+                        ranks: [1, kl, kr],
+                    });
+                } else {
+                    // Non-root interior: full block-diagonal in (t, l, r)
+                    let kt = ka_t + kb_t;
+                    let mut transfer = vec![0.0; kt * kl * kr];
+
+                    for t in 0..ka_t {
+                        for l in 0..ka_l {
+                            for r in 0..ka_r {
+                                transfer[t * kl * kr + l * kr + r] =
+                                    ta[t * ka_l * ka_r + l * ka_r + r];
+                            }
+                        }
+                    }
+                    for t in 0..kb_t {
+                        for l in 0..kb_l {
+                            for r in 0..kb_r {
+                                transfer[(ka_t + t) * kl * kr + (ka_l + l) * kr + (ka_r + r)] =
+                                    tb[t * kb_l * kb_r + l * kb_r + r];
+                            }
+                        }
+                    }
+
+                    nodes.push(HtNode3DComplex::Interior {
+                        left: *la,
+                        right: *ra,
+                        transfer,
+                        ranks: [kt, kl, kr],
+                    });
+                }
             }
             _ => panic!("Mismatched node types at index {idx}"),
         }
