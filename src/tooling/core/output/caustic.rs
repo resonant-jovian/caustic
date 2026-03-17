@@ -1,6 +1,7 @@
 //! Caustic surface detection, analysis, and tracking.
 
 use super::super::{init::domain::Domain, types::*};
+use rayon::prelude::*;
 
 /// Tracks formation and evolution of caustic surfaces.
 pub struct CausticDetector;
@@ -9,47 +10,51 @@ impl CausticDetector {
     /// Find voxel faces where stream count changes — these are caustic surfaces.
     ///
     /// Checks adjacent cells in +x, +y, +z; where stream count differs,
-    /// records the face center position.
+    /// records the face center position. Parallelized over spatial cells.
     pub fn detect_surfaces(stream_count: &StreamCountField, domain: &Domain) -> Vec<[f64; 3]> {
         let [nx, ny, nz] = stream_count.shape;
         let dx = domain.dx();
         let lx = domain.lx();
-        let mut surfaces = Vec::new();
+        let n_total = nx * ny * nz;
 
-        for ix in 0..nx {
-            let x = -lx[0] + (ix as f64 + 0.5) * dx[0];
-            for iy in 0..ny {
+        (0..n_total)
+            .into_par_iter()
+            .flat_map(|idx| {
+                let ix = idx / (ny * nz);
+                let iy = (idx / nz) % ny;
+                let iz = idx % nz;
+
+                let x = -lx[0] + (ix as f64 + 0.5) * dx[0];
                 let y = -lx[1] + (iy as f64 + 0.5) * dx[1];
-                for iz in 0..nz {
-                    let z = -lx[2] + (iz as f64 + 0.5) * dx[2];
-                    let idx = ix * ny * nz + iy * nz + iz;
-                    let sc = stream_count.data[idx];
+                let z = -lx[2] + (iz as f64 + 0.5) * dx[2];
+                let sc = stream_count.data[idx];
 
-                    // Check +x neighbor
-                    if ix + 1 < nx {
-                        let neighbor = stream_count.data[(ix + 1) * ny * nz + iy * nz + iz];
-                        if sc != neighbor {
-                            surfaces.push([x + 0.5 * dx[0], y, z]);
-                        }
-                    }
-                    // Check +y neighbor
-                    if iy + 1 < ny {
-                        let neighbor = stream_count.data[ix * ny * nz + (iy + 1) * nz + iz];
-                        if sc != neighbor {
-                            surfaces.push([x, y + 0.5 * dx[1], z]);
-                        }
-                    }
-                    // Check +z neighbor
-                    if iz + 1 < nz {
-                        let neighbor = stream_count.data[ix * ny * nz + iy * nz + iz + 1];
-                        if sc != neighbor {
-                            surfaces.push([x, y, z + 0.5 * dx[2]]);
-                        }
+                let mut local = Vec::new();
+
+                // Check +x neighbor
+                if ix + 1 < nx {
+                    let neighbor = stream_count.data[(ix + 1) * ny * nz + iy * nz + iz];
+                    if sc != neighbor {
+                        local.push([x + 0.5 * dx[0], y, z]);
                     }
                 }
-            }
-        }
-        surfaces
+                // Check +y neighbor
+                if iy + 1 < ny {
+                    let neighbor = stream_count.data[ix * ny * nz + (iy + 1) * nz + iz];
+                    if sc != neighbor {
+                        local.push([x, y + 0.5 * dx[1], z]);
+                    }
+                }
+                // Check +z neighbor
+                if iz + 1 < nz {
+                    let neighbor = stream_count.data[ix * ny * nz + iy * nz + iz + 1];
+                    if sc != neighbor {
+                        local.push([x, y, z + 0.5 * dx[2]]);
+                    }
+                }
+                local
+            })
+            .collect()
     }
 
     /// First timestep index where max stream count > 1.
@@ -63,6 +68,8 @@ impl CausticDetector {
     }
 
     /// Nearest-cell density lookup at caustic surface positions.
+    ///
+    /// Parallelized over surface positions.
     pub fn caustic_density_at(
         density: &DensityField,
         surfaces: &[[f64; 3]],
@@ -73,7 +80,7 @@ impl CausticDetector {
         let lx = domain.lx();
 
         surfaces
-            .iter()
+            .par_iter()
             .map(|pos| {
                 // Convert physical position to grid index (nearest cell)
                 let ix = ((pos[0] + lx[0]) / dx[0]).floor() as usize;

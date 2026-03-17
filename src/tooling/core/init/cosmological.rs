@@ -590,8 +590,7 @@ pub fn growth_factor(a: f64, params: &CosmologyParams) -> f64 {
     let e2_1 = om + ol;
     let om_1 = om / e2_1;
     let ol_1 = ol / e2_1;
-    let d_1 =
-        2.5 * om_1 / (om_1.powf(4.0 / 7.0) - ol_1 + (1.0 + om_1 / 2.0) * (1.0 + ol_1 / 70.0));
+    let d_1 = 2.5 * om_1 / (om_1.powf(4.0 / 7.0) - ol_1 + (1.0 + om_1 / 2.0) * (1.0 + ol_1 / 70.0));
 
     a * d_unnorm / d_1
 }

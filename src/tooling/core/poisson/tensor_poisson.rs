@@ -37,6 +37,9 @@ pub struct TensorPoisson {
     padded_shape: [usize; 3],
     /// Volume element dx³ for integration.
     dv: f64,
+    /// Near-field correction: ∫_{B_δ} [1/|y| - GS(|y|)] dy.
+    /// Applied as Φ_corr(x) = -G/(4π) * ρ(x) * near_field_integral * dx³.
+    near_field_integral: f64,
 }
 
 impl TensorPoisson {
@@ -99,12 +102,16 @@ impl TensorPoisson {
         let green_fft = fft_3d_forward(&green, padded_shape);
         let dv = dx[0] * dx[1] * dx[2];
 
+        // Compute near-field correction integral (Exl, Mauser & Zhang, JCP 2016)
+        let near_field_integral = exp_sum.near_field_correction_integral(delta);
+
         Self {
             shape,
             dx,
             green_fft,
             padded_shape,
             dv,
+            near_field_integral,
         }
     }
 
@@ -174,6 +181,17 @@ impl PoissonSolver for TensorPoisson {
                 }
             });
 
+        // Step 6: Apply near-field correction (Exl, Mauser & Zhang, JCP 2016)
+        // Φ_corr(x) = -G/(4π) * ρ(x) * near_field_integral * dx³
+        if self.near_field_integral.abs() > 1e-30 {
+            let nf_scale = -g / (4.0 * std::f64::consts::PI) * self.near_field_integral * self.dv;
+            data.par_iter_mut()
+                .zip(density.data.par_iter())
+                .for_each(|(phi, &rho)| {
+                    *phi += nf_scale * rho;
+                });
+        }
+
         PotentialField {
             data,
             shape: [nx, ny, nz],
@@ -219,9 +237,8 @@ fn fft_3d_forward(data: &[f64], shape: [usize; 3]) -> Vec<Complex64> {
         .map(|idx| {
             let i0 = idx / n2;
             let i2 = idx % n2;
-            let mut line: Vec<Complex64> = (0..n1)
-                .map(|i1| buf[i0 * n1 * n2 + i1 * n2 + i2])
-                .collect();
+            let mut line: Vec<Complex64> =
+                (0..n1).map(|i1| buf[i0 * n1 * n2 + i1 * n2 + i2]).collect();
             fft1.process(&mut line);
             (i0, i2, line)
         })
@@ -239,9 +256,8 @@ fn fft_3d_forward(data: &[f64], shape: [usize; 3]) -> Vec<Complex64> {
         .map(|idx| {
             let i1 = idx / n2;
             let i2 = idx % n2;
-            let mut line: Vec<Complex64> = (0..n0)
-                .map(|i0| buf[i0 * n1 * n2 + i1 * n2 + i2])
-                .collect();
+            let mut line: Vec<Complex64> =
+                (0..n0).map(|i0| buf[i0 * n1 * n2 + i1 * n2 + i2]).collect();
             fft0.process(&mut line);
             (i1, i2, line)
         })
@@ -281,9 +297,8 @@ fn fft_3d_inverse(data: &[Complex64], shape: [usize; 3]) -> Vec<f64> {
         .map(|idx| {
             let i0 = idx / n2;
             let i2 = idx % n2;
-            let mut line: Vec<Complex64> = (0..n1)
-                .map(|i1| buf[i0 * n1 * n2 + i1 * n2 + i2])
-                .collect();
+            let mut line: Vec<Complex64> =
+                (0..n1).map(|i1| buf[i0 * n1 * n2 + i1 * n2 + i2]).collect();
             ifft1.process(&mut line);
             (i0, i2, line)
         })
@@ -301,9 +316,8 @@ fn fft_3d_inverse(data: &[Complex64], shape: [usize; 3]) -> Vec<f64> {
         .map(|idx| {
             let i1 = idx / n2;
             let i2 = idx % n2;
-            let mut line: Vec<Complex64> = (0..n0)
-                .map(|i0| buf[i0 * n1 * n2 + i1 * n2 + i2])
-                .collect();
+            let mut line: Vec<Complex64> =
+                (0..n0).map(|i0| buf[i0 * n1 * n2 + i1 * n2 + i2]).collect();
             ifft0.process(&mut line);
             (i1, i2, line)
         })

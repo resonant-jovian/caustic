@@ -2,6 +2,7 @@
 //! growth rates.
 
 use super::super::{phasespace::PhaseSpaceRepr, types::*};
+use rayon::prelude::*;
 use rustfft::{FftPlanner, num_complex::Complex};
 
 /// Phase-space structure diagnostic outputs.
@@ -147,9 +148,9 @@ impl PhaseSpaceDiagnostics {
             return Vec::new();
         }
 
-        // Compute power spectrum at each timestep
+        // Compute power spectrum at each timestep (independent per snapshot)
         let spectra: Vec<Vec<(f64, f64)>> =
-            density_history.iter().map(Self::power_spectrum).collect();
+            density_history.par_iter().map(Self::power_spectrum).collect();
 
         // Collect all k-bins from the first spectrum
         if spectra[0].is_empty() {

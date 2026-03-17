@@ -80,8 +80,7 @@ impl IsolatedEquilibrium for PlummerIC {
     }
 
     fn potential(&self, r: f64) -> f64 {
-        -self.g_f64 * self.mass_f64
-            / (r * r + self.scale_radius_f64 * self.scale_radius_f64).sqrt()
+        -self.g_f64 * self.mass_f64 / (r * r + self.scale_radius_f64 * self.scale_radius_f64).sqrt()
     }
 }
 

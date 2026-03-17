@@ -278,6 +278,7 @@ impl TensorTrain {
     /// Evaluate f at a single 6D index by left-to-right contraction of all cores.
     ///
     /// f(i0, i1, i2, i3, i4, i5) = G0[:,i0,:] * G1[:,i1,:] * ... * G5[:,i5,:]
+    #[inline]
     pub fn evaluate(&self, indices: [usize; 6]) -> f64 {
         // Start with vec = [1.0] (r_0 = 1)
         let mut vec = vec![1.0f64];

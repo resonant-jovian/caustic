@@ -421,12 +421,23 @@ impl HtTensor {
             }
 
             // Evaluate fibers: M ∈ ℝ^{n_μ × ns}
-            let mut fiber_mat = Mat::zeros(n_mu, ns);
-            for (s, comp) in comp_indices.iter().enumerate() {
-                for i in 0..n_mu {
-                    let mut idx = *comp;
-                    idx[mu] = i;
-                    fiber_mat[(i, s)] = eval_at_index(idx);
+            // Parallelize over fiber columns (each sample is independent)
+            let fiber_cols: Vec<Vec<f64>> = comp_indices
+                .par_iter()
+                .map(|comp| {
+                    (0..n_mu)
+                        .map(|i| {
+                            let mut idx = *comp;
+                            idx[mu] = i;
+                            eval_at_index(idx)
+                        })
+                        .collect()
+                })
+                .collect();
+            let mut fiber_mat: Mat<f64> = Mat::zeros(n_mu, ns);
+            for (s, col) in fiber_cols.iter().enumerate() {
+                for (i, &val) in col.iter().enumerate() {
+                    fiber_mat[(i, s)] = val;
                 }
             }
 
@@ -868,7 +879,7 @@ fn build_kron_frame(left: &Mat<f64>, right: &Mat<f64>, n_l: usize, n_r: usize) -
 ///
 /// Computes R = (U_left ⊗ U_right)^T @ M_t where M_t is the mode-t matricization of f.
 /// Then SVD of R gives the transfer tensor B_t ∈ ℝ^{k_t × k_left × k_right}.
-fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64>(
+fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64 + Sync>(
     eval: &E,
     shape: &[usize; 6],
     _node_idx: usize,
@@ -895,71 +906,78 @@ fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64>(
     //
     // For efficiency, first compute F_proj ∈ ℝ^{n_left × n_right} for each comp index,
     // then project: R[:, comp] = (U_left^T @ F_proj @ U_right) vectorized.
-    let mut proj_mat: Mat<f64> = Mat::zeros(k_lr, n_comp);
-
-    for comp_flat in 0..n_comp {
-        // Decode comp_flat
-        let mut comp_idx = vec![0usize; comp_dims.len()];
-        let mut rem = comp_flat;
-        for ci in (0..comp_dims.len()).rev() {
-            comp_idx[ci] = rem % shape[comp_dims[ci]];
-            rem /= shape[comp_dims[ci]];
-        }
-
-        // Build the slice matrix S ∈ ℝ^{n_left × n_right} for this comp index
-        // Then project: R[:, comp] = vec(U_left^T @ S @ U_right)
-        // We compute this without forming S explicitly:
-        // First: T = S @ U_right ∈ ℝ^{n_left × k_right}
-        let mut t_mat = vec![0.0f64; n_left_phys * k_right];
-        for left_flat in 0..n_left_phys {
-            let mut left_idx_vals = vec![0usize; left_dims.len()];
-            let mut rem_l = left_flat;
-            for li in (0..left_dims.len()).rev() {
-                left_idx_vals[li] = rem_l % shape[left_dims[li]];
-                rem_l /= shape[left_dims[li]];
+    // Parallelize over comp_flat — each column of proj_mat is independent
+    let proj_cols: Vec<Vec<f64>> = (0..n_comp)
+        .into_par_iter()
+        .map(|comp_flat| {
+            // Decode comp_flat
+            let mut comp_idx = vec![0usize; comp_dims.len()];
+            let mut rem = comp_flat;
+            for ci in (0..comp_dims.len()).rev() {
+                comp_idx[ci] = rem % shape[comp_dims[ci]];
+                rem /= shape[comp_dims[ci]];
             }
 
-            for right_flat in 0..n_right_phys {
-                let mut right_idx_vals = vec![0usize; right_dims.len()];
-                let mut rem_r = right_flat;
-                for ri in (0..right_dims.len()).rev() {
-                    right_idx_vals[ri] = rem_r % shape[right_dims[ri]];
-                    rem_r /= shape[right_dims[ri]];
+            // Build T = S @ U_right ∈ ℝ^{n_left × k_right}
+            let mut t_mat = vec![0.0f64; n_left_phys * k_right];
+            for left_flat in 0..n_left_phys {
+                let mut left_idx_vals = vec![0usize; left_dims.len()];
+                let mut rem_l = left_flat;
+                for li in (0..left_dims.len()).rev() {
+                    left_idx_vals[li] = rem_l % shape[left_dims[li]];
+                    rem_l /= shape[left_dims[li]];
                 }
 
-                let mut idx = [0usize; 6];
-                for (li, &d) in left_dims.iter().enumerate() {
-                    idx[d] = left_idx_vals[li];
-                }
-                for (ri, &d) in right_dims.iter().enumerate() {
-                    idx[d] = right_idx_vals[ri];
-                }
-                for (ci, &d) in comp_dims.iter().enumerate() {
-                    idx[d] = comp_idx[ci];
-                }
+                for right_flat in 0..n_right_phys {
+                    let mut right_idx_vals = vec![0usize; right_dims.len()];
+                    let mut rem_r = right_flat;
+                    for ri in (0..right_dims.len()).rev() {
+                        right_idx_vals[ri] = rem_r % shape[right_dims[ri]];
+                        rem_r /= shape[right_dims[ri]];
+                    }
 
-                let val = eval(idx);
-                if val.abs() < 1e-30 {
-                    continue;
-                }
+                    let mut idx = [0usize; 6];
+                    for (li, &d) in left_dims.iter().enumerate() {
+                        idx[d] = left_idx_vals[li];
+                    }
+                    for (ri, &d) in right_dims.iter().enumerate() {
+                        idx[d] = right_idx_vals[ri];
+                    }
+                    for (ci, &d) in comp_dims.iter().enumerate() {
+                        idx[d] = comp_idx[ci];
+                    }
 
-                // Accumulate into T = S @ U_right
+                    let val = eval(idx);
+                    if val.abs() < 1e-30 {
+                        continue;
+                    }
+
+                    for jr in 0..k_right {
+                        t_mat[left_flat * k_right + jr] += val * right_frame[(right_flat, jr)];
+                    }
+                }
+            }
+
+            // Compute R[:, comp] = vec(U_left^T @ T)
+            let mut col = vec![0.0f64; k_lr];
+            for jl in 0..k_left {
                 for jr in 0..k_right {
-                    t_mat[left_flat * k_right + jr] += val * right_frame[(right_flat, jr)];
+                    let mut s = 0.0;
+                    for left_flat in 0..n_left_phys {
+                        s += left_frame[(left_flat, jl)] * t_mat[left_flat * k_right + jr];
+                    }
+                    col[jl * k_right + jr] = s;
                 }
             }
-        }
+            col
+        })
+        .collect();
 
-        // Now compute R[:, comp] = vec(U_left^T @ T)
-        // R[(jl*kr+jr), comp] = Σ_{left_flat} U_left[left_flat, jl] * T[left_flat, jr]
-        for jl in 0..k_left {
-            for jr in 0..k_right {
-                let mut s = 0.0;
-                for left_flat in 0..n_left_phys {
-                    s += left_frame[(left_flat, jl)] * t_mat[left_flat * k_right + jr];
-                }
-                proj_mat[(jl * k_right + jr, comp_flat)] = s;
-            }
+    // Assemble proj_mat from parallel results
+    let mut proj_mat: Mat<f64> = Mat::zeros(k_lr, n_comp);
+    for (comp_flat, col) in proj_cols.iter().enumerate() {
+        for (row, &val) in col.iter().enumerate() {
+            proj_mat[(row, comp_flat)] = val;
         }
     }
 
@@ -987,6 +1005,7 @@ fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64>(
 
 impl HtTensor {
     /// Evaluate at a single 6D grid point. Cost: O(d·k³).
+    #[inline]
     pub fn evaluate(&self, indices: [usize; 6]) -> f64 {
         let root_vec = self.node_vector(ROOT, &indices);
         debug_assert_eq!(root_vec.len(), 1);
@@ -994,6 +1013,7 @@ impl HtTensor {
     }
 
     /// Contracted vector at a node for given indices.
+    #[inline]
     fn node_vector(&self, node_idx: usize, indices: &[usize; 6]) -> Vec<f64> {
         match &self.nodes[node_idx] {
             HtNode::Leaf { dim, frame } => {
