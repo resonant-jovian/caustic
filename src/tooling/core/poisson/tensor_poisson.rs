@@ -20,7 +20,7 @@ use rayon::prelude::*;
 use super::super::solver::PoissonSolver;
 use super::super::types::*;
 use super::exponential_sum::ExponentialSumCoefficients;
-use super::utils::finite_difference_acceleration;
+use super::utils::{finite_difference_acceleration, spectral_laplacian};
 use rustfft::FftPlanner;
 use rustfft::num_complex::Complex64;
 
@@ -40,6 +40,9 @@ pub struct TensorPoisson {
     /// Near-field correction: ∫_{B_δ} [1/|y| - GS(|y|)] dy.
     /// Applied as Φ_corr(x) = -G/(4π) * ρ(x) * near_field_integral * dx³.
     near_field_integral: f64,
+    /// 2nd-order near-field correction: ∫_{B_δ} [1/|y| - GS(|y|)] r⁴/6 dy.
+    /// Applied as Φ_corr_2(x) = -G · I_2 · ∇²ρ(x).
+    near_field_integral_2: f64,
 }
 
 impl TensorPoisson {
@@ -102,8 +105,9 @@ impl TensorPoisson {
         let green_fft = fft_3d_forward(&green, padded_shape);
         let dv = dx[0] * dx[1] * dx[2];
 
-        // Compute near-field correction integral (Exl, Mauser & Zhang, JCP 2016)
+        // Compute near-field correction integrals (Exl, Mauser & Zhang, JCP 2016)
         let near_field_integral = exp_sum.near_field_correction_integral(delta);
+        let (_, near_field_integral_2) = exp_sum.near_field_correction_second_order(delta);
 
         Self {
             shape,
@@ -112,6 +116,7 @@ impl TensorPoisson {
             padded_shape,
             dv,
             near_field_integral,
+            near_field_integral_2,
         }
     }
 
@@ -181,14 +186,25 @@ impl PoissonSolver for TensorPoisson {
                 }
             });
 
-        // Step 6: Apply near-field correction (Exl, Mauser & Zhang, JCP 2016)
-        // Φ_corr(x) = -G/(4π) * ρ(x) * near_field_integral * dx³
+        // Step 6: Apply near-field corrections (Exl, Mauser & Zhang, JCP 2016)
+        // 0th-order: Φ_corr(x) = -G/(4π) * ρ(x) * I_0 * dx³
         if self.near_field_integral.abs() > 1e-30 {
             let nf_scale = -g / (4.0 * std::f64::consts::PI) * self.near_field_integral * self.dv;
             data.par_iter_mut()
                 .zip(density.data.par_iter())
                 .for_each(|(phi, &rho)| {
                     *phi += nf_scale * rho;
+                });
+        }
+
+        // 2nd-order: Φ_corr_2(x) = -G · I_2 · ∇²ρ(x)
+        if self.near_field_integral_2.abs() > 1e-30 {
+            let lap_rho = spectral_laplacian(density, &self.dx);
+            let nf2_scale = -g * self.near_field_integral_2;
+            data.par_iter_mut()
+                .zip(lap_rho.data.par_iter())
+                .for_each(|(phi, &lap)| {
+                    *phi += nf2_scale * lap;
                 });
         }
 

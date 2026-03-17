@@ -88,8 +88,6 @@ impl Simulation {
             let accel = self.poisson.compute_acceleration(&potential);
 
             // Build per-cell acceleration vectors for KFVS
-            let [nx, ny, nz] = density.shape;
-            let n = nx * ny * nz;
             let acc: Vec<[f64; 3]> = accel
                 .gx
                 .iter()
@@ -98,22 +96,42 @@ impl Simulation {
                 .map(|((&gx, &gy), &gz)| [gx, gy, gz])
                 .collect();
 
-            // Get the current kinetic data, apply LoMaC, write back
-            let snapshot = self.repr.to_snapshot(self.time);
-            let corrected = lomac.apply(dt, &acc, &snapshot.data);
-
-            // Update the representation with the corrected distribution
-            let corrected_snap = PhaseSpaceSnapshot {
-                data: corrected,
-                shape: snapshot.shape,
-                time: self.time,
-            };
-            self.repr = Box::new(
-                crate::tooling::core::algos::uniform::UniformGrid6D::from_snapshot(
-                    corrected_snap,
-                    self.domain.clone(),
-                ),
-            );
+            // HtTensor path: use project_ht to avoid unnecessary dense→HT→dense round-trips
+            if let Some(ht) = self
+                .repr
+                .as_any()
+                .downcast_ref::<crate::tooling::core::algos::ht::HtTensor>()
+            {
+                lomac.advance_macroscopic(dt, &acc);
+                let corrected = lomac.project_ht(ht);
+                let shape = ht.shape;
+                let corrected_snap = PhaseSpaceSnapshot {
+                    data: corrected,
+                    shape,
+                    time: self.time,
+                };
+                self.repr = Box::new(
+                    crate::tooling::core::algos::uniform::UniformGrid6D::from_snapshot(
+                        corrected_snap,
+                        self.domain.clone(),
+                    ),
+                );
+            } else {
+                // Dense path (UniformGrid6D, etc.)
+                let snapshot = self.repr.to_snapshot(self.time);
+                let corrected = lomac.apply(dt, &acc, &snapshot.data);
+                let corrected_snap = PhaseSpaceSnapshot {
+                    data: corrected,
+                    shape: snapshot.shape,
+                    time: self.time,
+                };
+                self.repr = Box::new(
+                    crate::tooling::core::algos::uniform::UniformGrid6D::from_snapshot(
+                        corrected_snap,
+                        self.domain.clone(),
+                    ),
+                );
+            }
         }
 
         self.time += dt;

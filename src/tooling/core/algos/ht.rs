@@ -2155,6 +2155,188 @@ impl PhaseSpaceRepr for HtTensor {
     }
 }
 
+// ─── Moment extraction (Phase 3: LoMaC integration) ─────────────────────────
+
+impl HtTensor {
+    /// Compute momentum density J_i(x) = ∫ v_i f(x,v) dv³ for axis i ∈ {0,1,2}.
+    ///
+    /// Same tree contraction as `compute_density()` but with velocity weights
+    /// set to v_i on the corresponding velocity leaf, and 1 on the others.
+    pub fn compute_momentum_density(&self, axis: usize) -> DensityField {
+        assert!(axis < 3, "axis must be 0, 1, or 2");
+        let [nx1, nx2, nx3, nv1, nv2, nv3] = self.shape;
+        let dv = self.domain.dv();
+        let dv3 = dv[0] * dv[1] * dv[2];
+        let lv = self.domain.lv();
+        let nv = [nv1, nv2, nv3];
+
+        // Build velocity weights: v_i for the target axis, 1 for others
+        let mut w3: Vec<f64> = vec![1.0; nv1];
+        let mut w4: Vec<f64> = vec![1.0; nv2];
+        let mut w5: Vec<f64> = vec![1.0; nv3];
+
+        let weights = [&mut w3, &mut w4, &mut w5];
+        for iv in 0..nv[axis] {
+            let v = -lv[axis] + (iv as f64 + 0.5) * dv[axis];
+            weights[axis][iv] = v;
+        }
+
+        self.contract_velocity_weighted(&w3, &w4, &w5, dv3)
+    }
+
+    /// Compute energy density e(x) = ∫ ½|v|² f(x,v) dv³.
+    ///
+    /// Decomposed as: e = ½ ∫ v₁² f dv³ + ½ ∫ v₂² f dv³ + ½ ∫ v₃² f dv³.
+    /// Each term is a separate tree contraction with v_i² weights on one leaf.
+    pub fn compute_energy_density(&self) -> DensityField {
+        let [_, _, _, nv1, nv2, nv3] = self.shape;
+        let dv = self.domain.dv();
+        let dv3 = dv[0] * dv[1] * dv[2];
+        let lv = self.domain.lv();
+        let nv = [nv1, nv2, nv3];
+
+        let mut result: Option<DensityField> = None;
+
+        for axis in 0..3 {
+            let mut w3 = vec![1.0f64; nv1];
+            let mut w4 = vec![1.0f64; nv2];
+            let mut w5 = vec![1.0f64; nv3];
+
+            let weights = [&mut w3, &mut w4, &mut w5];
+            for iv in 0..nv[axis] {
+                let v = -lv[axis] + (iv as f64 + 0.5) * dv[axis];
+                weights[axis][iv] = 0.5 * v * v;
+            }
+
+            let term = self.contract_velocity_weighted(&w3, &w4, &w5, dv3);
+
+            result = Some(match result {
+                None => term,
+                Some(mut acc) => {
+                    for (a, b) in acc.data.iter_mut().zip(term.data.iter()) {
+                        *a += b;
+                    }
+                    acc
+                }
+            });
+        }
+
+        result.unwrap()
+    }
+
+    /// Extract all macroscopic moments needed for LoMaC: (ρ, J₁, J₂, J₃, e).
+    /// Returns per-spatial-cell `MacroState` vectors.
+    pub fn extract_macro_state(
+        &self,
+    ) -> Vec<crate::tooling::core::conservation::kfvs::MacroState> {
+        let density = self.compute_density();
+        let j0 = self.compute_momentum_density(0);
+        let j1 = self.compute_momentum_density(1);
+        let j2 = self.compute_momentum_density(2);
+        let energy = self.compute_energy_density();
+
+        density
+            .data
+            .iter()
+            .zip(j0.data.iter())
+            .zip(j1.data.iter())
+            .zip(j2.data.iter())
+            .zip(energy.data.iter())
+            .map(|((((&rho, &jx), &jy), &jz), &e)| {
+                crate::tooling::core::conservation::kfvs::MacroState {
+                    density: rho,
+                    momentum: [jx, jy, jz],
+                    energy: e,
+                }
+            })
+            .collect()
+    }
+
+    /// Generalized velocity contraction: same algorithm as `compute_density()` but
+    /// with arbitrary weights on velocity leaves instead of uniform ones.
+    fn contract_velocity_weighted(
+        &self,
+        w_v1: &[f64],
+        w_v2: &[f64],
+        w_v3: &[f64],
+        dv3: f64,
+    ) -> DensityField {
+        let [nx1, nx2, nx3, _, _, _] = self.shape;
+
+        let c3 = contract_leaf_weights(&self.nodes[3], w_v1);
+        let c4 = contract_leaf_weights(&self.nodes[4], w_v2);
+        let c5 = contract_leaf_weights(&self.nodes[5], w_v3);
+
+        let c7 = self.contract_interior_vec(7, &c4, &c5);
+        let c9 = self.contract_interior_vec(9, &c3, &c7);
+
+        let (_, kl_root, kr_root, t_root) = get_interior(&self.nodes[ROOT]);
+        let mut eff_left = vec![0.0f64; kl_root];
+        for j in 0..kl_root {
+            let mut s = 0.0;
+            for k in 0..kr_root {
+                s += t_root[j * kr_root + k] * c9[k];
+            }
+            eff_left[j] = s;
+        }
+
+        let (kt8, kl8, kr8, t8) = get_interior(&self.nodes[8]);
+        let mut eff8 = vec![0.0f64; kl8 * kr8];
+        for j8 in 0..kl8 {
+            for k8 in 0..kr8 {
+                let mut s = 0.0;
+                for j in 0..kt8 {
+                    s += eff_left[j] * t8[j * kl8 * kr8 + j8 * kr8 + k8];
+                }
+                eff8[j8 * kr8 + k8] = s;
+            }
+        }
+
+        let (f0, _) = leaf_data(&self.nodes[0]);
+        let (f1, _) = leaf_data(&self.nodes[1]);
+        let (f2, _) = leaf_data(&self.nodes[2]);
+        let (_, kl6, kr6, t6) = get_interior(&self.nodes[6]);
+
+        let density: Vec<f64> = (0..nx1)
+            .into_par_iter()
+            .flat_map(|i0| {
+                let mut eff_i0 = vec![0.0f64; kr8];
+                for k8 in 0..kr8 {
+                    let mut s = 0.0;
+                    for j8 in 0..kl8 {
+                        s += eff8[j8 * kr8 + k8] * f0[(i0, j8)];
+                    }
+                    eff_i0[k8] = s;
+                }
+
+                let mut row = vec![0.0f64; nx2 * nx3];
+                for i1 in 0..nx2 {
+                    for i2 in 0..nx3 {
+                        let mut val = 0.0;
+                        for k8 in 0..kr8 {
+                            let mut n6 = 0.0;
+                            for j6 in 0..kl6 {
+                                let lv = f1[(i1, j6)];
+                                for k6 in 0..kr6 {
+                                    n6 += t6[k8 * kl6 * kr6 + j6 * kr6 + k6] * lv * f2[(i2, k6)];
+                                }
+                            }
+                            val += eff_i0[k8] * n6;
+                        }
+                        row[i1 * nx3 + i2] = val * dv3;
+                    }
+                }
+                row
+            })
+            .collect();
+
+        DensityField {
+            data: density,
+            shape: [nx1, nx2, nx3],
+        }
+    }
+}
+
 // ─── Private HtTensor helpers ───────────────────────────────────────────────
 
 impl HtTensor {

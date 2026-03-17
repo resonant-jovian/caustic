@@ -132,6 +132,30 @@ impl ExponentialSumCoefficients {
         integral
     }
 
+    /// Second-order near-field correction integrals (Exl, Mauser & Zhang 2016).
+    ///
+    /// Returns `(I_0, I_2)` where:
+    /// - `I_0 = ∫₀^δ [1/r - GS(r)] 4πr² dr` (0th-order, same as `near_field_correction_integral`)
+    /// - `I_2 = ∫₀^δ [1/r - GS(r)] 4πr⁴/6 dr` (2nd-order, couples to ∇²ρ)
+    ///
+    /// The second-order correction is: `Φ_corr_2(x) = -G · I_2 · ∇²ρ(x)`
+    pub fn near_field_correction_second_order(&self, delta: f64) -> (f64, f64) {
+        let n_quad = 200;
+        let dr = delta / n_quad as f64;
+        let mut i0 = 0.0;
+        let mut i2 = 0.0;
+        for i in 0..n_quad {
+            let r = (i as f64 + 0.5) * dr;
+            let exact = 1.0 / r;
+            let approx = self.evaluate(r);
+            let diff = exact - approx;
+            let r2 = r * r;
+            i0 += diff * 4.0 * std::f64::consts::PI * r2 * dr;
+            i2 += diff * 4.0 * std::f64::consts::PI * r2 * r2 / 6.0 * dr;
+        }
+        (i0, i2)
+    }
+
     /// Maximum relative error on [delta, r_max] sampled at n_test log-spaced points.
     pub fn max_relative_error(&self, delta: f64, r_max: f64, n_test: usize) -> f64 {
         let mut max_err = 0.0f64;

@@ -9,6 +9,9 @@ use super::solver::PoissonSolver;
 pub struct SimState {
     pub time: f64,
     pub step: u64,
+    /// Per-step rank diagnostics from `InstrumentedStrangSplitting`.
+    /// `None` when using a non-instrumented integrator or non-HT representation.
+    pub step_rank_diagnostics: Option<super::time::rank_monitor::StepRankDiagnostics>,
 }
 
 /// Trait for all time integration / operator splitting strategies.
