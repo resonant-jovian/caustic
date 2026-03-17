@@ -2,7 +2,6 @@
 //! kinetic energy density, heat flux.
 
 use super::super::{init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
-use rust_decimal::prelude::ToPrimitive;
 
 /// All velocity moments of the distribution function.
 pub struct VelocityMoments {
@@ -20,11 +19,7 @@ impl VelocityMoments {
         let [nx1, nx2, nx3] = density.shape;
         let n_spatial = nx1 * nx2 * nx3;
         let dx = domain.dx();
-        let lx = [
-            domain.spatial.x1.to_f64().unwrap(),
-            domain.spatial.x2.to_f64().unwrap(),
-            domain.spatial.x3.to_f64().unwrap(),
-        ];
+        let lx = domain.lx();
 
         let mut mean_vel = [
             vec![0.0; n_spatial],

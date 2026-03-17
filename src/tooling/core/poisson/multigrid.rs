@@ -266,57 +266,51 @@ fn restrict(fine: &[f64], fine_shape: [usize; 3]) -> (Vec<f64>, [usize; 3]) {
     let [fnx, fny, fnz] = fine_shape;
     let coarse_shape = [fnx / 2, fny / 2, fnz / 2];
     let [cnx, cny, cnz] = coarse_shape;
-    let mut coarse = vec![0.0; cnx * cny * cnz];
+    let coarse: Vec<f64> = (0..cnx * cny * cnz)
+        .into_par_iter()
+        .map(|flat| {
+            let ci = flat / (cny * cnz);
+            let cj = (flat / cnz) % cny;
+            let ck = flat % cnz;
 
-    for ci in 0..cnx {
-        for cj in 0..cny {
-            for ck in 0..cnz {
-                let fi = 2 * ci;
-                let fj = 2 * cj;
-                let fk = 2 * ck;
+            let fi = 2 * ci;
+            let fj = 2 * cj;
+            let fk = 2 * ck;
 
-                let mut val = 0.0;
+            let mut val = 0.0;
 
-                // Iterate over 3x3x3 stencil around (fi, fj, fk)
-                for di in 0..3i32 {
-                    for dj in 0..3i32 {
-                        for dk in 0..3i32 {
-                            let si = fi as i32 + di - 1;
-                            let sj = fj as i32 + dj - 1;
-                            let sk = fk as i32 + dk - 1;
+            for di in 0..3i32 {
+                for dj in 0..3i32 {
+                    for dk in 0..3i32 {
+                        let si = fi as i32 + di - 1;
+                        let sj = fj as i32 + dj - 1;
+                        let sk = fk as i32 + dk - 1;
 
-                            // Clamp to fine grid bounds (zero outside for Dirichlet,
-                            // or wrap for periodic — but restriction is typically
-                            // interior-only. We clamp for safety.)
-                            if si < 0
-                                || si >= fnx as i32
-                                || sj < 0
-                                || sj >= fny as i32
-                                || sk < 0
-                                || sk >= fnz as i32
-                            {
-                                continue;
-                            }
-
-                            let si = si as usize;
-                            let sj = sj as usize;
-                            let sk = sk as usize;
-
-                            // Number of offsets from center: each non-zero offset contributes
-                            // a factor of 1/2
-                            let dist = (di != 1) as u32 + (dj != 1) as u32 + (dk != 1) as u32;
-                            // weight = 1 / (8 * 2^dist) = 1 / 2^(3+dist)
-                            let weight = 1.0 / (1u32 << (3 + dist)) as f64;
-
-                            val += weight * fine[idx(si, sj, sk, fine_shape)];
+                        if si < 0
+                            || si >= fnx as i32
+                            || sj < 0
+                            || sj >= fny as i32
+                            || sk < 0
+                            || sk >= fnz as i32
+                        {
+                            continue;
                         }
+
+                        let si = si as usize;
+                        let sj = sj as usize;
+                        let sk = sk as usize;
+
+                        let dist = (di != 1) as u32 + (dj != 1) as u32 + (dk != 1) as u32;
+                        let weight = 1.0 / (1u32 << (3 + dist)) as f64;
+
+                        val += weight * fine[idx(si, sj, sk, fine_shape)];
                     }
                 }
-
-                coarse[idx(ci, cj, ck, coarse_shape)] = val;
             }
-        }
-    }
+
+            val
+        })
+        .collect();
 
     (coarse, coarse_shape)
 }

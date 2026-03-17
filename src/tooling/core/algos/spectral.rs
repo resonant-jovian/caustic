@@ -13,7 +13,7 @@ use super::super::{
     types::*,
 };
 use super::lagrangian::sl_shift_1d;
-use rust_decimal::prelude::ToPrimitive;
+use rayon::prelude::*;
 use std::any::Any;
 use std::f64::consts::PI;
 
@@ -57,7 +57,7 @@ impl SpectralV {
         let nz = domain.spatial_res.x3 as usize;
         let n_spatial = nx * ny * nz;
         let n_modes3 = n_modes * n_modes * n_modes;
-        let lv = domain.velocity.v1.to_f64().unwrap();
+        let lv = domain.lv()[0];
         let sigma = lv / 3.0;
 
         SpectralV {
@@ -130,11 +130,7 @@ impl SpectralV {
         let n_modes3 = n_modes * n_modes * n_modes;
 
         let dv = domain.dv();
-        let lv = [
-            domain.velocity.v1.to_f64().unwrap(),
-            domain.velocity.v2.to_f64().unwrap(),
-            domain.velocity.v3.to_f64().unwrap(),
-        ];
+        let lv = domain.lv();
         let sigma = lv[0] / 3.0;
 
         // Precompute Hermite function values on the velocity grid for each dimension
@@ -156,44 +152,36 @@ impl SpectralV {
             .collect();
 
         let mut coefficients = vec![0.0; n_spatial * n_modes3];
+        let dv_over_sigma3 = dv[0] * dv[1] * dv[2] / (sigma * sigma * sigma);
 
-        // For each spatial cell, project onto Hermite basis
-        for ix in 0..nx {
-            for iy in 0..ny {
-                for iz in 0..nz {
-                    let si = ix * ny * nz + iy * nz + iz;
-                    let sp_base = si * n_modes3;
-
-                    // For efficiency, precompute the separable structure:
-                    // a_{m0,m1,m2} = sum_{iv1,iv2,iv3} f * psi_{m0}(v1) * psi_{m1}(v2) * psi_{m2}(v3) * dv^3 / sigma^3
-
-                    for m0 in 0..n_modes {
-                        for m1 in 0..n_modes {
-                            for m2 in 0..n_modes {
-                                let mi = m0 * n_modes * n_modes + m1 * n_modes + m2;
-                                let mut sum = 0.0;
-                                for iv1 in 0..nv1 {
-                                    let psi0 = psi_tables[0][m0][iv1];
-                                    for iv2 in 0..nv2 {
-                                        let psi01 = psi0 * psi_tables[1][m1][iv2];
-                                        for (iv3, &psi_v3) in
-                                            psi_tables[2][m2].iter().enumerate().take(nv3)
-                                        {
-                                            let vi = iv1 * nv2 * nv3 + iv2 * nv3 + iv3;
-                                            let f_val = snap.data[si * n_vel + vi];
-                                            sum += f_val * psi01 * psi_v3;
-                                        }
+        // Parallelize over spatial cells — each cell's projection is independent
+        coefficients
+            .par_chunks_mut(n_modes3)
+            .enumerate()
+            .for_each(|(si, coeff_chunk)| {
+                for m0 in 0..n_modes {
+                    for m1 in 0..n_modes {
+                        for m2 in 0..n_modes {
+                            let mi = m0 * n_modes * n_modes + m1 * n_modes + m2;
+                            let mut sum = 0.0;
+                            for iv1 in 0..nv1 {
+                                let psi0 = psi_tables[0][m0][iv1];
+                                for iv2 in 0..nv2 {
+                                    let psi01 = psi0 * psi_tables[1][m1][iv2];
+                                    for (iv3, &psi_v3) in
+                                        psi_tables[2][m2].iter().enumerate().take(nv3)
+                                    {
+                                        let vi = iv1 * nv2 * nv3 + iv2 * nv3 + iv3;
+                                        let f_val = snap.data[si * n_vel + vi];
+                                        sum += f_val * psi01 * psi_v3;
                                     }
                                 }
-                                // dv^3 / sigma^3 accounts for the change of variable v -> u = v/sigma
-                                coefficients[sp_base + mi] =
-                                    sum * dv[0] * dv[1] * dv[2] / (sigma * sigma * sigma);
                             }
+                            coeff_chunk[mi] = sum * dv_over_sigma3;
                         }
                     }
                 }
-            }
-        }
+            });
 
         SpectralV {
             coefficients,
@@ -241,20 +229,12 @@ impl SpectralV {
 
     /// Spatial half-extents [Lx, Ly, Lz].
     fn lx(&self) -> [f64; 3] {
-        [
-            self.domain.spatial.x1.to_f64().unwrap(),
-            self.domain.spatial.x2.to_f64().unwrap(),
-            self.domain.spatial.x3.to_f64().unwrap(),
-        ]
+        self.domain.lx()
     }
 
     /// Velocity half-extents [Lv1, Lv2, Lv3].
     fn lv(&self) -> [f64; 3] {
-        [
-            self.domain.velocity.v1.to_f64().unwrap(),
-            self.domain.velocity.v2.to_f64().unwrap(),
-            self.domain.velocity.v3.to_f64().unwrap(),
-        ]
+        self.domain.lv()
     }
 
     /// Number of spatial cells.
@@ -314,6 +294,7 @@ impl PhaseSpaceRepr for SpectralV {
         let norm = self.density_normalization();
 
         let data: Vec<f64> = (0..n_spatial)
+            .into_par_iter()
             .map(|si| {
                 // The (0,0,0) mode is at index 0 within each spatial cell's coefficient block
                 self.coefficients[si * n_modes3] * norm
@@ -526,61 +507,61 @@ impl PhaseSpaceRepr for SpectralV {
 
         let old = self.coefficients.clone();
 
-        for si in 0..self.n_spatial() {
-            let gx = acceleration.gx[si];
-            let gy = acceleration.gy[si];
-            let gz = acceleration.gz[si];
-            let accel = [gx, gy, gz];
-            let base = si * n_modes3;
+        // Parallelize over spatial cells — each cell's coupling is independent
+        self.coefficients
+            .par_chunks_mut(n_modes3)
+            .enumerate()
+            .for_each(|(si, coeff_chunk)| {
+                let gx = acceleration.gx[si];
+                let gy = acceleration.gy[si];
+                let gz = acceleration.gz[si];
+                let accel = [gx, gy, gz];
+                let base = si * n_modes3;
 
-            // Apply coupling per velocity dimension using Lie-Trotter splitting:
-            // dimension 0 (v1), then dimension 1 (v2), then dimension 2 (v3)
-            for (dim, &g) in accel.iter().enumerate() {
-                if g.abs() < 1e-30 {
-                    continue;
-                }
-                let g_over_sigma = g / sigma;
+                for (dim, &g) in accel.iter().enumerate() {
+                    if g.abs() < 1e-30 {
+                        continue;
+                    }
+                    let g_over_sigma = g / sigma;
 
-                // For each mode triple, apply the coupling for this velocity dimension
-                for m0 in 0..n_modes {
-                    for m1 in 0..n_modes {
-                        for m2 in 0..n_modes {
-                            let mi = m0 * n_modes * n_modes + m1 * n_modes + m2;
-                            let md = match dim {
-                                0 => m0,
-                                1 => m1,
-                                _ => m2,
-                            };
-
-                            // da_n/dt = (g/sigma) * [sqrt(n/2) * a_{n-1} - sqrt((n+1)/2) * a_{n+1}]
-                            let lower = if md > 0 {
-                                let mi_lower = match dim {
-                                    0 => (m0 - 1) * n_modes * n_modes + m1 * n_modes + m2,
-                                    1 => m0 * n_modes * n_modes + (m1 - 1) * n_modes + m2,
-                                    _ => m0 * n_modes * n_modes + m1 * n_modes + (m2 - 1),
+                    for m0 in 0..n_modes {
+                        for m1 in 0..n_modes {
+                            for m2 in 0..n_modes {
+                                let mi = m0 * n_modes * n_modes + m1 * n_modes + m2;
+                                let md = match dim {
+                                    0 => m0,
+                                    1 => m1,
+                                    _ => m2,
                                 };
-                                (md as f64 / 2.0).sqrt() * old[base + mi_lower]
-                            } else {
-                                0.0
-                            };
 
-                            let upper = if md + 1 < n_modes {
-                                let mi_upper = match dim {
-                                    0 => (m0 + 1) * n_modes * n_modes + m1 * n_modes + m2,
-                                    1 => m0 * n_modes * n_modes + (m1 + 1) * n_modes + m2,
-                                    _ => m0 * n_modes * n_modes + m1 * n_modes + (m2 + 1),
+                                let lower = if md > 0 {
+                                    let mi_lower = match dim {
+                                        0 => (m0 - 1) * n_modes * n_modes + m1 * n_modes + m2,
+                                        1 => m0 * n_modes * n_modes + (m1 - 1) * n_modes + m2,
+                                        _ => m0 * n_modes * n_modes + m1 * n_modes + (m2 - 1),
+                                    };
+                                    (md as f64 / 2.0).sqrt() * old[base + mi_lower]
+                                } else {
+                                    0.0
                                 };
-                                ((md + 1) as f64 / 2.0).sqrt() * old[base + mi_upper]
-                            } else {
-                                0.0
-                            };
 
-                            self.coefficients[base + mi] += dt * g_over_sigma * (lower - upper);
+                                let upper = if md + 1 < n_modes {
+                                    let mi_upper = match dim {
+                                        0 => (m0 + 1) * n_modes * n_modes + m1 * n_modes + m2,
+                                        1 => m0 * n_modes * n_modes + (m1 + 1) * n_modes + m2,
+                                        _ => m0 * n_modes * n_modes + m1 * n_modes + (m2 + 1),
+                                    };
+                                    ((md + 1) as f64 / 2.0).sqrt() * old[base + mi_upper]
+                                } else {
+                                    0.0
+                                };
+
+                                coeff_chunk[mi] += dt * g_over_sigma * (lower - upper);
+                            }
                         }
                     }
                 }
-            }
-        }
+            });
     }
 
     /// Compute velocity moment at a given spatial position.

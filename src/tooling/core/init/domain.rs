@@ -87,6 +87,11 @@ pub struct Domain {
     pub time_range: TimeRange,
     pub spatial_bc: SpatialBoundType,
     pub velocity_bc: VelocityBoundType,
+    // Cached f64 conversions (computed once at construction)
+    cached_dx: [f64; 3],
+    cached_dv: [f64; 3],
+    cached_lx: [f64; 3],
+    cached_lv: [f64; 3],
 }
 
 impl Domain {
@@ -96,25 +101,56 @@ impl Domain {
     }
 
     /// Cell size in each spatial dimension: Δx = 2L / N.
+    #[inline]
     pub fn dx(&self) -> [f64; 3] {
-        let l1 = self.spatial.x1.to_f64().unwrap();
-        let l2 = self.spatial.x2.to_f64().unwrap();
-        let l3 = self.spatial.x3.to_f64().unwrap();
-        let n1 = self.spatial_res.x1 as f64;
-        let n2 = self.spatial_res.x2 as f64;
-        let n3 = self.spatial_res.x3 as f64;
-        [2.0 * l1 / n1, 2.0 * l2 / n2, 2.0 * l3 / n3]
+        self.cached_dx
     }
 
     /// Cell size in each velocity dimension: Δv = 2Lv / Nv.
+    #[inline]
     pub fn dv(&self) -> [f64; 3] {
-        let lv1 = self.velocity.v1.to_f64().unwrap();
-        let lv2 = self.velocity.v2.to_f64().unwrap();
-        let lv3 = self.velocity.v3.to_f64().unwrap();
-        let nv1 = self.velocity_res.v1 as f64;
-        let nv2 = self.velocity_res.v2 as f64;
-        let nv3 = self.velocity_res.v3 as f64;
-        [2.0 * lv1 / nv1, 2.0 * lv2 / nv2, 2.0 * lv3 / nv3]
+        self.cached_dv
+    }
+
+    /// Spatial half-extents as f64: [L_x1, L_x2, L_x3].
+    #[inline]
+    pub fn lx(&self) -> [f64; 3] {
+        self.cached_lx
+    }
+
+    /// Velocity half-extents as f64: [L_v1, L_v2, L_v3].
+    #[inline]
+    pub fn lv(&self) -> [f64; 3] {
+        self.cached_lv
+    }
+
+    fn compute_cache(
+        spatial: &SpatialDom,
+        velocity: &VelocityDom,
+        spatial_res: &SpatialRes,
+        velocity_res: &VelocityRes,
+    ) -> ([f64; 3], [f64; 3], [f64; 3], [f64; 3]) {
+        let lx = [
+            spatial.x1.to_f64().unwrap(),
+            spatial.x2.to_f64().unwrap(),
+            spatial.x3.to_f64().unwrap(),
+        ];
+        let lv = [
+            velocity.v1.to_f64().unwrap(),
+            velocity.v2.to_f64().unwrap(),
+            velocity.v3.to_f64().unwrap(),
+        ];
+        let dx = [
+            2.0 * lx[0] / spatial_res.x1 as f64,
+            2.0 * lx[1] / spatial_res.x2 as f64,
+            2.0 * lx[2] / spatial_res.x3 as f64,
+        ];
+        let dv = [
+            2.0 * lv[0] / velocity_res.v1 as f64,
+            2.0 * lv[1] / velocity_res.v2 as f64,
+            2.0 * lv[2] / velocity_res.v3 as f64,
+        ];
+        (dx, dv, lx, lv)
     }
 
     /// Total number of 6D cells: Nx³ × Nv³.
@@ -227,30 +263,78 @@ impl DomainBuilder {
         self
     }
 
+    /// Set symmetric spatial extent from a Decimal value (avoids lossy f64→Decimal conversion).
+    pub fn spatial_extent_decimal(mut self, l: Decimal) -> Self {
+        self.spatial = Some(SpatialDom {
+            x1: l,
+            x2: l,
+            x3: l,
+            neg_x1: Some(-l),
+            neg_x2: Some(-l),
+            neg_x3: Some(-l),
+        });
+        self
+    }
+
+    /// Set symmetric velocity extent from a Decimal value.
+    pub fn velocity_extent_decimal(mut self, lv: Decimal) -> Self {
+        self.velocity = Some(VelocityDom {
+            v1: lv,
+            v2: lv,
+            v3: lv,
+            neg_v1: Some(-lv),
+            neg_v2: Some(-lv),
+            neg_v3: Some(-lv),
+        });
+        self
+    }
+
+    /// Set final simulation time from a Decimal value.
+    pub fn t_final_decimal(mut self, t: Decimal) -> Self {
+        self.time_range = Some(TimeRange {
+            t0: Decimal::ZERO,
+            t_final: t,
+        });
+        self
+    }
+
     /// Validate and construct the `Domain`.
     pub fn build(self) -> anyhow::Result<Domain> {
+        let spatial = self
+            .spatial
+            .ok_or_else(|| anyhow::anyhow!("missing spatial extent"))?;
+        let velocity = self
+            .velocity
+            .ok_or_else(|| anyhow::anyhow!("missing velocity extent"))?;
+        let spatial_res = self
+            .spatial_res
+            .ok_or_else(|| anyhow::anyhow!("missing spatial resolution"))?;
+        let velocity_res = self
+            .velocity_res
+            .ok_or_else(|| anyhow::anyhow!("missing velocity resolution"))?;
+        let time_range = self
+            .time_range
+            .ok_or_else(|| anyhow::anyhow!("missing t_final"))?;
+        let spatial_bc = self
+            .spatial_bc
+            .ok_or_else(|| anyhow::anyhow!("missing spatial BC"))?;
+        let velocity_bc = self
+            .velocity_bc
+            .ok_or_else(|| anyhow::anyhow!("missing velocity BC"))?;
+        let (cached_dx, cached_dv, cached_lx, cached_lv) =
+            Domain::compute_cache(&spatial, &velocity, &spatial_res, &velocity_res);
         Ok(Domain {
-            spatial: self
-                .spatial
-                .ok_or_else(|| anyhow::anyhow!("missing spatial extent"))?,
-            velocity: self
-                .velocity
-                .ok_or_else(|| anyhow::anyhow!("missing velocity extent"))?,
-            spatial_res: self
-                .spatial_res
-                .ok_or_else(|| anyhow::anyhow!("missing spatial resolution"))?,
-            velocity_res: self
-                .velocity_res
-                .ok_or_else(|| anyhow::anyhow!("missing velocity resolution"))?,
-            time_range: self
-                .time_range
-                .ok_or_else(|| anyhow::anyhow!("missing t_final"))?,
-            spatial_bc: self
-                .spatial_bc
-                .ok_or_else(|| anyhow::anyhow!("missing spatial BC"))?,
-            velocity_bc: self
-                .velocity_bc
-                .ok_or_else(|| anyhow::anyhow!("missing velocity BC"))?,
+            spatial,
+            velocity,
+            spatial_res,
+            velocity_res,
+            time_range,
+            spatial_bc,
+            velocity_bc,
+            cached_dx,
+            cached_dv,
+            cached_lx,
+            cached_lv,
         })
     }
 }

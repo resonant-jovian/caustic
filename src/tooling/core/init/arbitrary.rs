@@ -2,7 +2,6 @@
 
 use super::super::types::PhaseSpaceSnapshot;
 use super::domain::Domain;
-use rust_decimal::prelude::ToPrimitive;
 
 /// User-provided callable: f(x, v) → f64. Evaluated on every grid point at startup.
 pub struct CustomIC {
@@ -26,16 +25,8 @@ impl CustomIC {
 
         let dx = domain.dx();
         let dv = domain.dv();
-        let lx = [
-            domain.spatial.x1.to_f64().unwrap(),
-            domain.spatial.x2.to_f64().unwrap(),
-            domain.spatial.x3.to_f64().unwrap(),
-        ];
-        let lv = [
-            domain.velocity.v1.to_f64().unwrap(),
-            domain.velocity.v2.to_f64().unwrap(),
-            domain.velocity.v3.to_f64().unwrap(),
-        ];
+        let lx = domain.lx();
+        let lv = domain.lv();
 
         let s_v3 = 1usize;
         let s_v2 = nv3;

@@ -1,6 +1,7 @@
 //! Velocity CFL constraint: Δt < Δv / |g|_max. Applies to Eulerian velocity advection only.
 
 use super::super::super::{init::domain::Domain, types::*};
+use rayon::prelude::*;
 
 /// Velocity CFL timestep constraint.
 pub struct VelocityCfl {
@@ -15,11 +16,11 @@ impl VelocityCfl {
 
         let g_max = accel
             .gx
-            .iter()
-            .zip(accel.gy.iter())
-            .zip(accel.gz.iter())
+            .par_iter()
+            .zip(accel.gy.par_iter())
+            .zip(accel.gz.par_iter())
             .map(|((&gx, &gy), &gz)| (gx * gx + gy * gy + gz * gz).sqrt())
-            .fold(0.0_f64, f64::max);
+            .reduce(|| 0.0_f64, f64::max);
 
         if g_max <= 0.0 {
             return 1e10;

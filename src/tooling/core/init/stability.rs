@@ -1,11 +1,11 @@
 //! Disk stability initial conditions: equilibrium disk + bulge + halo with a seeded
 //! perturbation mode for studying spiral arm / bar instabilities.
 
-use rust_decimal::prelude::ToPrimitive;
-
 use super::super::types::PhaseSpaceSnapshot;
 use super::domain::Domain;
 use super::isolated::IsolatedEquilibrium;
+use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 
 /// Complete elliptic integral K(m) via Abramowitz & Stegun polynomial approximation (17.3.34).
 /// Argument m is the parameter (not the modulus k; m = k²). Valid for 0 ≤ m < 1.
@@ -70,12 +70,16 @@ pub struct DiskStabilityIC {
     /// Azimuthal mode number m (m=2 = bar, m=3 = triangle).
     pub perturbation_mode_m: u32,
     /// Pattern speed Ω_p in rad/time.
-    pub perturbation_pattern_speed: f64,
+    pub perturbation_pattern_speed: Decimal,
     /// Relative amplitude δΣ/Σ.
-    pub perturbation_amplitude: f64,
+    pub perturbation_amplitude: Decimal,
+    // Cached f64 values for hot-path computation
+    perturbation_pattern_speed_f64: f64,
+    perturbation_amplitude_f64: f64,
 }
 
 impl DiskStabilityIC {
+    /// Create a DiskStabilityIC from f64 parameters (backward-compatible).
     pub fn new(
         disk_surface_density: Box<dyn Fn(f64) -> f64 + Send + Sync>,
         disk_velocity_dispersion: Box<dyn Fn(f64) -> f64 + Send + Sync>,
@@ -89,6 +93,30 @@ impl DiskStabilityIC {
             bulge: None,
             halo_potential: None,
             perturbation_mode_m,
+            perturbation_pattern_speed: Decimal::from_f64_retain(perturbation_pattern_speed)
+                .unwrap(),
+            perturbation_amplitude: Decimal::from_f64_retain(perturbation_amplitude).unwrap(),
+            perturbation_pattern_speed_f64: perturbation_pattern_speed,
+            perturbation_amplitude_f64: perturbation_amplitude,
+        }
+    }
+
+    /// Create a DiskStabilityIC from Decimal parameters (exact config).
+    pub fn new_decimal(
+        disk_surface_density: Box<dyn Fn(f64) -> f64 + Send + Sync>,
+        disk_velocity_dispersion: Box<dyn Fn(f64) -> f64 + Send + Sync>,
+        perturbation_mode_m: u32,
+        perturbation_pattern_speed: Decimal,
+        perturbation_amplitude: Decimal,
+    ) -> Self {
+        Self {
+            disk_surface_density,
+            disk_velocity_dispersion,
+            bulge: None,
+            halo_potential: None,
+            perturbation_mode_m,
+            perturbation_pattern_speed_f64: perturbation_pattern_speed.to_f64().unwrap(),
+            perturbation_amplitude_f64: perturbation_amplitude.to_f64().unwrap(),
             perturbation_pattern_speed,
             perturbation_amplitude,
         }
@@ -258,16 +286,8 @@ impl DiskStabilityIC {
 
         let dx = domain.dx();
         let dv = domain.dv();
-        let lx = [
-            domain.spatial.x1.to_f64().unwrap(),
-            domain.spatial.x2.to_f64().unwrap(),
-            domain.spatial.x3.to_f64().unwrap(),
-        ];
-        let lv = [
-            domain.velocity.v1.to_f64().unwrap(),
-            domain.velocity.v2.to_f64().unwrap(),
-            domain.velocity.v3.to_f64().unwrap(),
-        ];
+        let lx = domain.lx();
+        let lv = domain.lv();
 
         // Maximum radius for guiding-center search
         let r_max = (lx[0] * lx[0] + lx[1] * lx[1]).sqrt() * 1.5;
@@ -284,7 +304,7 @@ impl DiskStabilityIC {
         let mut data = vec![0.0f64; total];
 
         let perturbation_m = self.perturbation_mode_m;
-        let perturbation_amp = self.perturbation_amplitude;
+        let perturbation_amp = self.perturbation_amplitude_f64;
 
         for ix1 in 0..nx1 {
             let x1 = -lx[0] + (ix1 as f64 + 0.5) * dx[0];

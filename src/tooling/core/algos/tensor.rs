@@ -17,7 +17,7 @@ use super::super::{
 };
 use super::lagrangian::sl_shift_1d;
 use faer::Mat;
-use rust_decimal::prelude::ToPrimitive;
+use rayon::prelude::*;
 use std::any::Any;
 
 // ─── TT Core ─────────────────────────────────────────────────────────────────
@@ -301,29 +301,28 @@ impl TensorTrain {
 
     /// Expand the TT back to a full 6D array. Only practical for small grids.
     pub fn to_full(&self) -> Vec<f64> {
-        let n_total: usize = self.shape.iter().product();
-        let mut data = vec![0.0f64; n_total];
         let [n0, n1, n2, n3, n4, n5] = self.shape;
-        for i0 in 0..n0 {
-            for i1 in 0..n1 {
-                for i2 in 0..n2 {
-                    for i3 in 0..n3 {
-                        for i4 in 0..n4 {
-                            for i5 in 0..n5 {
-                                let flat = i0 * n1 * n2 * n3 * n4 * n5
-                                    + i1 * n2 * n3 * n4 * n5
-                                    + i2 * n3 * n4 * n5
-                                    + i3 * n4 * n5
-                                    + i4 * n5
-                                    + i5;
-                                data[flat] = self.evaluate([i0, i1, i2, i3, i4, i5]);
+        let stride_0 = n1 * n2 * n3 * n4 * n5;
+
+        // Parallelize over i0 — each slab is independent
+        (0..n0)
+            .into_par_iter()
+            .flat_map(|i0| {
+                let mut slab = Vec::with_capacity(stride_0);
+                for i1 in 0..n1 {
+                    for i2 in 0..n2 {
+                        for i3 in 0..n3 {
+                            for i4 in 0..n4 {
+                                for i5 in 0..n5 {
+                                    slab.push(self.evaluate([i0, i1, i2, i3, i4, i5]));
+                                }
                             }
                         }
                     }
                 }
-            }
-        }
-        data
+                slab
+            })
+            .collect()
     }
 
     /// Recompress the TT to reduce ranks while keeping error below tolerance.
@@ -566,19 +565,11 @@ impl TensorTrain {
     // ─── Helpers for PhaseSpaceRepr ──────────────────────────────────────────
 
     fn lx(&self) -> [f64; 3] {
-        [
-            self.domain.spatial.x1.to_f64().unwrap(),
-            self.domain.spatial.x2.to_f64().unwrap(),
-            self.domain.spatial.x3.to_f64().unwrap(),
-        ]
+        self.domain.lx()
     }
 
     fn lv(&self) -> [f64; 3] {
-        [
-            self.domain.velocity.v1.to_f64().unwrap(),
-            self.domain.velocity.v2.to_f64().unwrap(),
-            self.domain.velocity.v3.to_f64().unwrap(),
-        ]
+        self.domain.lv()
     }
 
     /// Contract velocity dimensions (3,4,5) with uniform weight vectors to produce
@@ -642,24 +633,22 @@ impl PhaseSpaceRepr for TensorTrain {
         // Pre-contract velocity cores
         let w3 = self.contract_velocity_sums();
 
-        // For each spatial point, contract cores 0,1,2 and apply w3
-        let mut data = vec![0.0f64; n_spatial];
+        // For each spatial point, contract cores 0,1,2 and apply w3.
+        // Parallelize over i0 slabs.
+        let c0 = &self.cores[0];
+        let c1 = &self.cores[1];
+        let c2 = &self.cores[2];
 
-        for i0 in 0..n0 {
-            for i1 in 0..n1 {
-                for i2 in 0..n2 {
-                    // Left-to-right contraction of cores 0,1,2 at indices (i0,i1,i2)
-                    let c0 = &self.cores[0];
-                    let c1 = &self.cores[1];
-                    let c2 = &self.cores[2];
+        let data: Vec<f64> = (0..n0)
+            .into_par_iter()
+            .flat_map(|i0| {
+                let mut slab = Vec::with_capacity(n1 * n2);
+                let mut vec0 = vec![0.0f64; c0.r_right];
+                for beta in 0..c0.r_right {
+                    vec0[beta] = c0.get(0, i0, beta);
+                }
 
-                    // After core 0: vec0[beta0] = sum_alpha core0[alpha, i0, beta0] (alpha=0 only since r0=1)
-                    let mut vec0 = vec![0.0f64; c0.r_right];
-                    for beta in 0..c0.r_right {
-                        vec0[beta] = c0.get(0, i0, beta);
-                    }
-
-                    // After core 1: vec1[beta1] = sum_{alpha} vec0[alpha] * core1[alpha, i1, beta1]
+                for i1 in 0..n1 {
                     let mut vec1 = vec![0.0f64; c1.r_right];
                     for beta in 0..c1.r_right {
                         let mut sum = 0.0;
@@ -669,25 +658,26 @@ impl PhaseSpaceRepr for TensorTrain {
                         vec1[beta] = sum;
                     }
 
-                    // After core 2: vec2[beta2] = sum_{alpha} vec1[alpha] * core2[alpha, i2, beta2]
-                    let mut vec2 = vec![0.0f64; c2.r_right];
-                    for beta in 0..c2.r_right {
-                        let mut sum = 0.0;
-                        for alpha in 0..c2.r_left {
-                            sum += vec1[alpha] * c2.get(alpha, i2, beta);
+                    for i2 in 0..n2 {
+                        let mut vec2 = vec![0.0f64; c2.r_right];
+                        for beta in 0..c2.r_right {
+                            let mut sum = 0.0;
+                            for alpha in 0..c2.r_left {
+                                sum += vec1[alpha] * c2.get(alpha, i2, beta);
+                            }
+                            vec2[beta] = sum;
                         }
-                        vec2[beta] = sum;
-                    }
 
-                    // Density = dot(vec2, w3)
-                    let mut rho = 0.0f64;
-                    for j in 0..vec2.len().min(w3.len()) {
-                        rho += vec2[j] * w3[j];
+                        let mut rho = 0.0f64;
+                        for j in 0..vec2.len().min(w3.len()) {
+                            rho += vec2[j] * w3[j];
+                        }
+                        slab.push(rho);
                     }
-                    data[i0 * n1 * n2 + i1 * n2 + i2] = rho;
                 }
-            }
-        }
+                slab
+            })
+            .collect();
 
         DensityField {
             data,

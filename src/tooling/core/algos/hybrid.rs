@@ -3,7 +3,6 @@
 
 use super::super::{init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
 use super::{sheet::SheetTracker, uniform::UniformGrid6D};
-use rust_decimal::prelude::ToPrimitive;
 use std::any::Any;
 
 /// Hybrid representation combining SheetTracker and UniformGrid6D.
@@ -51,16 +50,8 @@ impl HybridRepr {
 
         let dx = self.domain.dx();
         let dv = self.domain.dv();
-        let lx = [
-            self.domain.spatial.x1.to_f64().unwrap(),
-            self.domain.spatial.x2.to_f64().unwrap(),
-            self.domain.spatial.x3.to_f64().unwrap(),
-        ];
-        let lv = [
-            self.domain.velocity.v1.to_f64().unwrap(),
-            self.domain.velocity.v2.to_f64().unwrap(),
-            self.domain.velocity.v3.to_f64().unwrap(),
-        ];
+        let lx = self.domain.lx();
+        let lv = self.domain.lv();
         let nv = [
             self.domain.velocity_res.v1 as usize,
             self.domain.velocity_res.v2 as usize,
@@ -218,11 +209,7 @@ impl HybridRepr {
     /// Helper: compute spatial cell index for a position.
     fn cell_index_3d(&self, pos: &[f64; 3]) -> Option<usize> {
         let dx = self.domain.dx();
-        let lx = [
-            self.domain.spatial.x1.to_f64().unwrap(),
-            self.domain.spatial.x2.to_f64().unwrap(),
-            self.domain.spatial.x3.to_f64().unwrap(),
-        ];
+        let lx = self.domain.lx();
         let [nx, ny, nz] = self.sheet.shape;
         let is_periodic = matches!(
             self.domain.spatial_bc,

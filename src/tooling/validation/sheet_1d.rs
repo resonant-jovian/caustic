@@ -26,7 +26,6 @@ fn sheet_1d_density_comparison() {
     use crate::tooling::core::poisson::fft::FftPoisson;
     use crate::tooling::core::time::strang::StrangSplitting;
     use crate::tooling::core::types::PhaseSpaceSnapshot;
-    use rust_decimal::prelude::ToPrimitive;
 
     // ── Parameters ──────────────────────────────────────────────────
     let n_sheets = 16; // Number of 1D mass sheets
@@ -94,11 +93,7 @@ fn sheet_1d_density_comparison() {
 
     let dx = domain.dx();
     let dv = domain.dv();
-    let lv = [
-        domain.velocity.v1.to_f64().unwrap(),
-        domain.velocity.v2.to_f64().unwrap(),
-        domain.velocity.v3.to_f64().unwrap(),
-    ];
+    let lv = domain.lv();
 
     // Build quasi-1D IC: f(x,v) = ρ(x₁) × δ(v) approximated as a narrow Gaussian
     // Only varies in x₁ dimension; uniform in x₂, x₃.

@@ -25,6 +25,7 @@ impl FftPoisson {
         }
     }
 
+    #[inline]
     fn wavenumber(i: usize, n: usize, cell_size: f64) -> f64 {
         use std::f64::consts::PI;
         let j = if i < n / 2 {

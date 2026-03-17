@@ -5,7 +5,6 @@
 //! Far cells are approximated as monopoles; nearby cells are recursed into.
 
 use rayon::prelude::*;
-use rust_decimal::prelude::ToPrimitive;
 
 use super::super::{init::domain::Domain, solver::PoissonSolver, types::*};
 
@@ -42,6 +41,7 @@ const MAX_DEPTH: usize = 30;
 
 /// Determine which octant of a cube centred at `center` the point `pos` falls into.
 /// Octant index: bit 0 = x >= center_x, bit 1 = y >= center_y, bit 2 = z >= center_z.
+#[inline]
 fn octant_index(pos: &[f64; 3], center: &[f64; 3]) -> usize {
     let mut idx = 0;
     if pos[0] >= center[0] {
@@ -57,6 +57,7 @@ fn octant_index(pos: &[f64; 3], center: &[f64; 3]) -> usize {
 }
 
 /// Geometric centre of the child octant `oct` given parent `center` and `half_size`.
+#[inline]
 fn child_center(center: &[f64; 3], half_size: f64, oct: usize) -> [f64; 3] {
     let q = half_size * 0.5;
     [
@@ -207,6 +208,7 @@ fn build_tree(
 /// Uses the Barnes-Hut opening-angle criterion: if `node.size / r < theta`
 /// (the node subtends a small angle), use the monopole approximation
 /// Φ = −G M / sqrt(r² + ε²). Otherwise recurse into children.
+#[inline]
 fn tree_potential(node: &OctreeNode, point: &[f64; 3], theta: f64, g: f64, softening: f64) -> f64 {
     if node.total_mass == 0.0 {
         return 0.0;
@@ -281,13 +283,11 @@ impl PoissonSolver for TreePoisson {
         let dx = self.domain.dx();
 
         // Domain spans [-L, L] in each dimension
-        let lx = self.domain.spatial.x1.to_f64().unwrap();
-        let ly = self.domain.spatial.x2.to_f64().unwrap();
-        let lz = self.domain.spatial.x3.to_f64().unwrap();
-        let origin = [-lx, -ly, -lz];
+        let lx = self.domain.lx();
+        let origin = [-lx[0], -lx[1], -lx[2]];
 
         // Root node size: largest dimension of the domain
-        let domain_size = 2.0_f64 * lx.max(ly).max(lz);
+        let domain_size = 2.0_f64 * lx[0].max(lx[1]).max(lx[2]);
 
         // Build octree
         let tree = build_tree(density, &dx, &origin, domain_size);

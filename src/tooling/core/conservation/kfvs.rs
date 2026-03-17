@@ -16,6 +16,8 @@
 //!
 //! Reference: Guo & Qiu, arXiv:2207.00518
 
+use rayon::prelude::*;
+
 /// Macroscopic state at a single spatial cell: density, momentum, energy.
 #[derive(Clone, Debug)]
 pub struct MacroState {
@@ -29,6 +31,7 @@ pub struct MacroState {
 
 impl MacroState {
     /// Bulk velocity u = J/ρ.
+    #[inline]
     pub fn velocity(&self) -> [f64; 3] {
         if self.density.abs() < 1e-30 {
             return [0.0; 3];
@@ -41,6 +44,7 @@ impl MacroState {
     }
 
     /// Thermal energy density: e_th = e - ½ρ|u|².
+    #[inline]
     pub fn thermal_energy(&self) -> f64 {
         let u = self.velocity();
         let ke = 0.5 * self.density * (u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
@@ -48,11 +52,13 @@ impl MacroState {
     }
 
     /// Isotropic pressure P = (2/3) * e_th (for 3D Maxwellian).
+    #[inline]
     pub fn pressure(&self) -> f64 {
         (2.0 / 3.0) * self.thermal_energy()
     }
 
     /// Temperature T = P/ρ = (2/3) * e_th/ρ.
+    #[inline]
     pub fn temperature(&self) -> f64 {
         if self.density.abs() < 1e-30 {
             return 0.0;
@@ -118,11 +124,13 @@ impl KfvsSolver {
     }
 
     /// Flat index from 3D coordinates.
+    #[inline]
     fn flat(&self, i: usize, j: usize, k: usize) -> usize {
         i * self.shape[1] * self.shape[2] + j * self.shape[2] + k
     }
 
     /// Periodic index wrap.
+    #[inline]
     fn wrap(i: isize, n: usize) -> usize {
         ((i % n as isize + n as isize) % n as isize) as usize
     }

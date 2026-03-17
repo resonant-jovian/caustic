@@ -1,7 +1,6 @@
 //! Caustic surface detection, analysis, and tracking.
 
 use super::super::{init::domain::Domain, types::*};
-use rust_decimal::prelude::ToPrimitive;
 
 /// Tracks formation and evolution of caustic surfaces.
 pub struct CausticDetector;
@@ -14,11 +13,7 @@ impl CausticDetector {
     pub fn detect_surfaces(stream_count: &StreamCountField, domain: &Domain) -> Vec<[f64; 3]> {
         let [nx, ny, nz] = stream_count.shape;
         let dx = domain.dx();
-        let lx = [
-            domain.spatial.x1.to_f64().unwrap(),
-            domain.spatial.x2.to_f64().unwrap(),
-            domain.spatial.x3.to_f64().unwrap(),
-        ];
+        let lx = domain.lx();
         let mut surfaces = Vec::new();
 
         for ix in 0..nx {
@@ -75,11 +70,7 @@ impl CausticDetector {
     ) -> Vec<f64> {
         let [nx, ny, nz] = density.shape;
         let dx = domain.dx();
-        let lx = [
-            domain.spatial.x1.to_f64().unwrap(),
-            domain.spatial.x2.to_f64().unwrap(),
-            domain.spatial.x3.to_f64().unwrap(),
-        ];
+        let lx = domain.lx();
 
         surfaces
             .iter()

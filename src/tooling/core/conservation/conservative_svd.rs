@@ -14,6 +14,7 @@
 //! Reference: Guo & Qiu, arXiv:2207.00518, Section 3.2
 
 use super::kfvs::MacroState;
+use rayon::prelude::*;
 
 /// Velocity moment basis functions for 3D.
 ///
@@ -95,50 +96,53 @@ pub fn moment_preserving_projection(
     let gram_inv = invert_5x5(&gram);
 
     // For each spatial cell: adjust f so that moments match target
-    for (ix, target) in target_moments.iter().enumerate().take(n_spatial) {
-        let f_offset = ix * n_vel;
+    result
+        .par_chunks_mut(n_vel)
+        .enumerate()
+        .for_each(|(ix, cell)| {
+            let target = &target_moments[ix];
 
-        // Current moments of f
-        let mut current = [0.0f64; N_CONSERVED];
-        for iv in 0..n_vel {
-            let fval = result[f_offset + iv];
+            // Current moments of f
+            let mut current = [0.0f64; N_CONSERVED];
+            for iv in 0..n_vel {
+                let fval = cell[iv];
+                for m in 0..N_CONSERVED {
+                    current[m] += fval * psi[iv][m] * dv3;
+                }
+            }
+
+            // Target moments
+            let target_vec = [
+                target.density,
+                target.momentum[0],
+                target.momentum[1],
+                target.momentum[2],
+                target.energy,
+            ];
+
+            // Moment deficit: δ = target - current
+            let mut delta = [0.0f64; N_CONSERVED];
             for m in 0..N_CONSERVED {
-                current[m] += fval * psi[iv][m] * dv3;
+                delta[m] = target_vec[m] - current[m];
             }
-        }
 
-        // Target moments
-        let target_vec = [
-            target.density,
-            target.momentum[0],
-            target.momentum[1],
-            target.momentum[2],
-            target.energy,
-        ];
-
-        // Moment deficit: δ = target - current
-        let mut delta = [0.0f64; N_CONSERVED];
-        for m in 0..N_CONSERVED {
-            delta[m] = target_vec[m] - current[m];
-        }
-
-        // Correction coefficients: c = G⁻¹ δ
-        let mut coeffs = [0.0f64; N_CONSERVED];
-        for i in 0..N_CONSERVED {
-            for j in 0..N_CONSERVED {
-                coeffs[i] += gram_inv[i][j] * delta[j];
+            // Correction coefficients: c = G⁻¹ δ
+            let mut coeffs = [0.0f64; N_CONSERVED];
+            for i in 0..N_CONSERVED {
+                for j in 0..N_CONSERVED {
+                    coeffs[i] += gram_inv[i][j] * delta[j];
+                }
             }
-        }
 
-        // Add correction: f_corrected(v) = f(v) + Σ_m c_m ψ_m(v)
-        for iv in 0..n_vel {
-            let mut correction = 0.0;
-            for m in 0..N_CONSERVED {
-                correction += coeffs[m] * psi[iv][m];
+            // Add correction: f_corrected(v) = f(v) + Σ_m c_m ψ_m(v)
+            for iv in 0..n_vel {
+                let mut correction = 0.0;
+                for m in 0..N_CONSERVED {
+                    correction += coeffs[m] * psi[iv][m];
+                }
+                cell[iv] += correction;
             }
-            result[f_offset + iv] += correction;
-        }
-    }
+        });
 
     result
 }

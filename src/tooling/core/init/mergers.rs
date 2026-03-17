@@ -4,21 +4,27 @@
 use super::super::types::PhaseSpaceSnapshot;
 use super::domain::Domain;
 use super::isolated::IsolatedEquilibrium;
+use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 
 /// f(x,v,t₀) = f₁(x−x₁, v−v₁) + f₂(x−x₂, v−v₂).
 /// Exact for collisionless systems before interaction begins.
 pub struct MergerIC {
     pub body1: Box<dyn IsolatedEquilibrium>,
-    pub mass1: f64,
+    pub mass1: Decimal,
     pub body2: Box<dyn IsolatedEquilibrium>,
-    pub mass2: f64,
+    pub mass2: Decimal,
     pub separation: [f64; 3],
     pub relative_velocity: [f64; 3],
-    pub impact_parameter: f64,
+    pub impact_parameter: Decimal,
+    // Cached f64 values for hot-path computation
+    mass1_f64: f64,
+    mass2_f64: f64,
+    impact_parameter_f64: f64,
 }
 
 impl MergerIC {
+    /// Create a MergerIC from f64 parameters (backward-compatible).
     pub fn new(
         body1: Box<dyn IsolatedEquilibrium>,
         mass1: f64,
@@ -30,11 +36,38 @@ impl MergerIC {
     ) -> Self {
         Self {
             body1,
-            mass1,
+            mass1: Decimal::from_f64_retain(mass1).unwrap(),
             body2,
-            mass2,
+            mass2: Decimal::from_f64_retain(mass2).unwrap(),
             separation,
             relative_velocity,
+            impact_parameter: Decimal::from_f64_retain(impact_parameter).unwrap(),
+            mass1_f64: mass1,
+            mass2_f64: mass2,
+            impact_parameter_f64: impact_parameter,
+        }
+    }
+
+    /// Create a MergerIC from Decimal parameters (exact config).
+    pub fn new_decimal(
+        body1: Box<dyn IsolatedEquilibrium>,
+        mass1: Decimal,
+        body2: Box<dyn IsolatedEquilibrium>,
+        mass2: Decimal,
+        separation: [f64; 3],
+        relative_velocity: [f64; 3],
+        impact_parameter: Decimal,
+    ) -> Self {
+        Self {
+            body1,
+            mass1_f64: mass1.to_f64().unwrap(),
+            body2,
+            mass2_f64: mass2.to_f64().unwrap(),
+            separation,
+            relative_velocity,
+            impact_parameter_f64: impact_parameter.to_f64().unwrap(),
+            mass1,
+            mass2,
             impact_parameter,
         }
     }
@@ -52,16 +85,8 @@ impl MergerIC {
 
         let dx = domain.dx();
         let dv = domain.dv();
-        let lx = [
-            domain.spatial.x1.to_f64().unwrap(),
-            domain.spatial.x2.to_f64().unwrap(),
-            domain.spatial.x3.to_f64().unwrap(),
-        ];
-        let lv = [
-            domain.velocity.v1.to_f64().unwrap(),
-            domain.velocity.v2.to_f64().unwrap(),
-            domain.velocity.v3.to_f64().unwrap(),
-        ];
+        let lx = domain.lx();
+        let lv = domain.lv();
 
         // Centre-of-mass frame: body 1 at -sep/2, body 2 at +sep/2
         let x1_offset = [
@@ -158,7 +183,7 @@ impl MergerIC {
 
     /// Check that both components fit within the domain.
     pub fn validate(&self, domain: &Domain) -> anyhow::Result<()> {
-        let lx = domain.spatial.x1.to_f64().unwrap();
+        let lx = domain.lx()[0];
         let sep_max = self
             .separation
             .iter()

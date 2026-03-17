@@ -7,8 +7,6 @@
 //!
 //! where g(x) = -grad Phi is the gravitational acceleration.
 
-use rust_decimal::prelude::ToPrimitive;
-
 use super::super::{
     advecator::Advector, init::domain::Domain, integrator::TimeIntegrator,
     phasespace::PhaseSpaceRepr, solver::PoissonSolver, types::*,
@@ -73,11 +71,7 @@ impl UnsplitIntegrator {
 
     /// Velocity extents [-Lv, Lv] for each dimension.
     fn lv(&self) -> [f64; 3] {
-        [
-            self.domain.velocity.v1.to_f64().unwrap(),
-            self.domain.velocity.v2.to_f64().unwrap(),
-            self.domain.velocity.v3.to_f64().unwrap(),
-        ]
+        self.domain.lv()
     }
 
     /// Evaluate the RHS of the Vlasov equation:
@@ -498,11 +492,7 @@ impl TimeIntegrator for UnsplitIntegrator {
 
         let dt_velocity = if rho_max > 0.0 && self.g > 0.0 {
             // g_max ~ sqrt(G * rho_max) * L where L is the box size
-            let lx = [
-                self.domain.spatial.x1.to_f64().unwrap(),
-                self.domain.spatial.x2.to_f64().unwrap(),
-                self.domain.spatial.x3.to_f64().unwrap(),
-            ];
+            let lx = self.domain.lx();
             let l_box = 2.0 * lx[0].max(lx[1]).max(lx[2]);
             let g_max = (self.g * rho_max).sqrt() * l_box;
             if g_max > 0.0 { dv_min / g_max } else { 1e10 }

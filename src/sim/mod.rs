@@ -63,7 +63,7 @@ impl Simulation {
 
     /// Advance by a single timestep. Returns `Some(reason)` if the simulation should stop.
     pub fn step(&mut self) -> anyhow::Result<Option<ExitReason>> {
-        let cfl_factor = self.opts.cfl_factor;
+        let cfl_factor = self.opts.cfl_factor_f64();
         let mut dt = self.integrator.max_dt(&*self.repr, cfl_factor);
 
         // Clamp dt to not overshoot t_final by more than necessary
@@ -243,7 +243,7 @@ impl SimulationBuilder {
 
     pub fn cfl_factor(mut self, cfl: f64) -> Self {
         let mut opts = self.opts.unwrap_or_default();
-        opts.cfl_factor = cfl;
+        opts.cfl_factor = rust_decimal::Decimal::from_f64_retain(cfl).unwrap_or(rust_decimal::Decimal::ZERO);
         self.opts = Some(opts);
         self
     }
@@ -305,11 +305,7 @@ impl SimulationBuilder {
         // Initialize LoMaC if requested
         let lomac = if self.enable_lomac {
             let dv = domain.dv();
-            let lv = [
-                domain.velocity.v1.to_f64().unwrap(),
-                domain.velocity.v2.to_f64().unwrap(),
-                domain.velocity.v3.to_f64().unwrap(),
-            ];
+            let lv = domain.lv();
             let v_min = [-lv[0], -lv[1], -lv[2]];
             let spatial_shape = [
                 domain.spatial_res.x1 as usize,
