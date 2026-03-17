@@ -15,10 +15,12 @@
 //! sum decomposition: 1/r ≈ Σ c_k exp(-α_k r²), where each term is separable.
 //! This allows O(R_G · N) construction instead of O(N³).
 
+use rayon::prelude::*;
+
 use super::super::solver::PoissonSolver;
 use super::super::types::*;
 use super::exponential_sum::ExponentialSumCoefficients;
-use super::utils::finite_difference_acceleration;
+use super::utils::{finite_difference_acceleration, spectral_laplacian};
 use rustfft::FftPlanner;
 use rustfft::num_complex::Complex64;
 
@@ -35,6 +37,12 @@ pub struct TensorPoisson {
     padded_shape: [usize; 3],
     /// Volume element dx³ for integration.
     dv: f64,
+    /// Near-field correction: ∫_{B_δ} [1/|y| - GS(|y|)] dy.
+    /// Applied as Φ_corr(x) = -G/(4π) * ρ(x) * near_field_integral * dx³.
+    near_field_integral: f64,
+    /// 2nd-order near-field correction: ∫_{B_δ} [1/|y| - GS(|y|)] r⁴/6 dy.
+    /// Applied as Φ_corr_2(x) = -G · I_2 · ∇²ρ(x).
+    near_field_integral_2: f64,
 }
 
 impl TensorPoisson {
@@ -55,43 +63,51 @@ impl TensorPoisson {
         let exp_sum = ExponentialSumCoefficients::compute(delta, r_max, exp_sum_accuracy);
 
         let padded_shape = [shape[0] * 2, shape[1] * 2, shape[2] * 2];
-        let n_padded: usize = padded_shape.iter().product();
 
-        // Build Green's function on (2N)³ grid using exponential sum
-        let mut green = vec![0.0f64; n_padded];
         let prefactor = -1.0 / (4.0 * std::f64::consts::PI);
-
         let dx_avg = (dx[0] + dx[1] + dx[2]) / 3.0;
 
-        for i0 in 0..padded_shape[0] {
-            for i1 in 0..padded_shape[1] {
-                for i2 in 0..padded_shape[2] {
-                    let flat = i0 * padded_shape[1] * padded_shape[2] + i1 * padded_shape[2] + i2;
+        // Build Green's function on (2N)³ grid using exponential sum.
+        // Parallelize over i0 slabs. Pre-extract exp_sum data for closure capture.
+        let slab_size = padded_shape[1] * padded_shape[2];
+        let n_padded: usize = padded_shape.iter().product();
+        let exp_c: Vec<f64> = exp_sum.c.clone();
+        let exp_alpha: Vec<f64> = exp_sum.alpha.clone();
+        let exp_rg = exp_sum.r_g;
 
-                    // Minimum-image distance for circulant embedding
-                    let d0 = min_image_dist(i0, padded_shape[0]) * dx[0];
+        let mut green = vec![0.0f64; n_padded];
+        green
+            .par_chunks_mut(slab_size)
+            .enumerate()
+            .for_each(|(i0, slab)| {
+                let d0 = min_image_dist(i0, padded_shape[0]) * dx[0];
+                for i1 in 0..padded_shape[1] {
                     let d1 = min_image_dist(i1, padded_shape[1]) * dx[1];
-                    let d2 = min_image_dist(i2, padded_shape[2]) * dx[2];
-                    let r2 = d0 * d0 + d1 * d1 + d2 * d2;
+                    for i2 in 0..padded_shape[2] {
+                        let d2 = min_image_dist(i2, padded_shape[2]) * dx[2];
+                        let r2 = d0 * d0 + d1 * d1 + d2 * d2;
+                        let flat = i1 * padded_shape[2] + i2;
 
-                    if r2 < 1e-30 {
-                        // Origin: use Hockney–Eastwood regularized self-potential
-                        // G(0) ≈ -2.38·dx/(4π), matching FftIsolated convention.
-                        green[flat] = -2.38 * dx_avg / (4.0 * std::f64::consts::PI);
-                    } else {
-                        let mut val = 0.0;
-                        for k in 0..exp_sum.r_g {
-                            val += exp_sum.c[k] * (-exp_sum.alpha[k] * r2).exp();
+                        if r2 < 1e-30 {
+                            slab[flat] = -2.38 * dx_avg / (4.0 * std::f64::consts::PI);
+                        } else {
+                            let mut val = 0.0;
+                            for k in 0..exp_rg {
+                                val += exp_c[k] * (-exp_alpha[k] * r2).exp();
+                            }
+                            slab[flat] = prefactor * val;
                         }
-                        green[flat] = prefactor * val;
                     }
                 }
-            }
-        }
+            });
 
         // 3D FFT of Green's function
         let green_fft = fft_3d_forward(&green, padded_shape);
         let dv = dx[0] * dx[1] * dx[2];
+
+        // Compute near-field correction integrals (Exl, Mauser & Zhang, JCP 2016)
+        let near_field_integral = exp_sum.near_field_correction_integral(delta);
+        let (_, near_field_integral_2) = exp_sum.near_field_correction_second_order(delta);
 
         Self {
             shape,
@@ -99,6 +115,8 @@ impl TensorPoisson {
             green_fft,
             padded_shape,
             dv,
+            near_field_integral,
+            near_field_integral_2,
         }
     }
 
@@ -124,43 +142,70 @@ impl PoissonSolver for TensorPoisson {
         let [nx, ny, nz] = self.shape;
         let [px, py, pz] = self.padded_shape;
 
-        // Step 1: zero-pad density to (2N)³
+        // Step 1: zero-pad density to (2N)³ — parallel over i0 slabs
         let n_padded: usize = self.padded_shape.iter().product();
         let mut rho_padded = vec![0.0f64; n_padded];
-        for i0 in 0..nx {
-            for i1 in 0..ny {
-                for i2 in 0..nz {
-                    let src = i0 * ny * nz + i1 * nz + i2;
-                    let dst = i0 * py * pz + i1 * pz + i2;
-                    rho_padded[dst] = density.data[src];
+        rho_padded
+            .par_chunks_mut(py * pz)
+            .enumerate()
+            .for_each(|(i0, slab)| {
+                if i0 < nx {
+                    for i1 in 0..ny.min(py) {
+                        for i2 in 0..nz.min(pz) {
+                            let src = i0 * ny * nz + i1 * nz + i2;
+                            slab[i1 * pz + i2] = density.data[src];
+                        }
+                    }
                 }
-            }
-        }
+            });
 
         // Step 2: 3D FFT of padded density
         let rho_fft = fft_3d_forward(&rho_padded, self.padded_shape);
 
-        // Step 3: element-wise multiply (convolution in Fourier space)
+        // Step 3: element-wise multiply (convolution in Fourier space) — parallel
         let phi_fft: Vec<Complex64> = rho_fft
-            .iter()
-            .zip(self.green_fft.iter())
+            .par_iter()
+            .zip(self.green_fft.par_iter())
             .map(|(r, g)| r * g)
             .collect();
 
         // Step 4: 3D IFFT
         let phi_padded = fft_3d_inverse(&phi_fft, self.padded_shape);
 
-        // Step 5: extract N³ subgrid and scale
+        // Step 5: extract N³ subgrid and scale — parallel over i0 slabs
         let scale = 4.0 * std::f64::consts::PI * g * self.dv;
         let mut data = vec![0.0f64; nx * ny * nz];
-        for i0 in 0..nx {
-            for i1 in 0..ny {
-                for i2 in 0..nz {
-                    let src = i0 * py * pz + i1 * pz + i2;
-                    let dst = i0 * ny * nz + i1 * nz + i2;
-                    data[dst] = phi_padded[src] * scale;
+        data.par_chunks_mut(ny * nz)
+            .enumerate()
+            .for_each(|(i0, chunk)| {
+                for i1 in 0..ny {
+                    for i2 in 0..nz {
+                        let src = i0 * py * pz + i1 * pz + i2;
+                        chunk[i1 * nz + i2] = phi_padded[src] * scale;
+                    }
                 }
-            }
+            });
+
+        // Step 6: Apply near-field corrections (Exl, Mauser & Zhang, JCP 2016)
+        // 0th-order: Φ_corr(x) = -G/(4π) * ρ(x) * I_0 * dx³
+        if self.near_field_integral.abs() > 1e-30 {
+            let nf_scale = -g / (4.0 * std::f64::consts::PI) * self.near_field_integral * self.dv;
+            data.par_iter_mut()
+                .zip(density.data.par_iter())
+                .for_each(|(phi, &rho)| {
+                    *phi += nf_scale * rho;
+                });
+        }
+
+        // 2nd-order: Φ_corr_2(x) = -G · I_2 · ∇²ρ(x)
+        if self.near_field_integral_2.abs() > 1e-30 {
+            let lap_rho = spectral_laplacian(density, &self.dx);
+            let nf2_scale = -g * self.near_field_integral_2;
+            data.par_iter_mut()
+                .zip(lap_rho.data.par_iter())
+                .for_each(|(phi, &lap)| {
+                    *phi += nf2_scale * lap;
+                });
         }
 
         PotentialField {
@@ -181,6 +226,11 @@ fn min_image_dist(i: usize, n: usize) -> f64 {
 }
 
 /// 3D FFT (forward) of a real array, returning complex array.
+///
+/// Parallelized via rayon using the gather-process-scatter pattern:
+/// - Axis 2: contiguous rows processed via `par_chunks_mut`.
+/// - Axis 1 and 0: parallel gather into thread-local line buffers, FFT,
+///   collect results, then sequential scatter back.
 fn fft_3d_forward(data: &[f64], shape: [usize; 3]) -> Vec<Complex64> {
     let [n0, n1, n2] = shape;
     let n_total = n0 * n1 * n2;
@@ -190,42 +240,47 @@ fn fft_3d_forward(data: &[f64], shape: [usize; 3]) -> Vec<Complex64> {
 
     let mut planner = FftPlanner::new();
 
-    // FFT along axis 2 (fastest varying)
+    // FFT along axis 2 (fastest varying) — parallel over (i0, i1) pairs.
     let fft2 = planner.plan_fft_forward(n2);
-    for i0 in 0..n0 {
-        for i1 in 0..n1 {
-            let start = i0 * n1 * n2 + i1 * n2;
-            fft2.process(&mut buf[start..start + n2]);
-        }
-    }
+    buf.par_chunks_mut(n2).for_each(|row| {
+        fft2.process(row);
+    });
 
-    // FFT along axis 1
+    // FFT along axis 1 — parallel gather/process, sequential scatter.
     let fft1 = planner.plan_fft_forward(n1);
-    let mut line = vec![Complex64::new(0.0, 0.0); n1];
-    for i0 in 0..n0 {
-        for i2 in 0..n2 {
-            for i1 in 0..n1 {
-                line[i1] = buf[i0 * n1 * n2 + i1 * n2 + i2];
-            }
+    let results_1: Vec<(usize, usize, Vec<Complex64>)> = (0..n0 * n2)
+        .into_par_iter()
+        .map(|idx| {
+            let i0 = idx / n2;
+            let i2 = idx % n2;
+            let mut line: Vec<Complex64> =
+                (0..n1).map(|i1| buf[i0 * n1 * n2 + i1 * n2 + i2]).collect();
             fft1.process(&mut line);
-            for i1 in 0..n1 {
-                buf[i0 * n1 * n2 + i1 * n2 + i2] = line[i1];
-            }
+            (i0, i2, line)
+        })
+        .collect();
+    for (i0, i2, line) in results_1 {
+        for i1 in 0..n1 {
+            buf[i0 * n1 * n2 + i1 * n2 + i2] = line[i1];
         }
     }
 
-    // FFT along axis 0
+    // FFT along axis 0 — parallel gather/process, sequential scatter.
     let fft0 = planner.plan_fft_forward(n0);
-    let mut line0 = vec![Complex64::new(0.0, 0.0); n0];
-    for i1 in 0..n1 {
-        for i2 in 0..n2 {
-            for i0 in 0..n0 {
-                line0[i0] = buf[i0 * n1 * n2 + i1 * n2 + i2];
-            }
-            fft0.process(&mut line0);
-            for i0 in 0..n0 {
-                buf[i0 * n1 * n2 + i1 * n2 + i2] = line0[i0];
-            }
+    let results_0: Vec<(usize, usize, Vec<Complex64>)> = (0..n1 * n2)
+        .into_par_iter()
+        .map(|idx| {
+            let i1 = idx / n2;
+            let i2 = idx % n2;
+            let mut line: Vec<Complex64> =
+                (0..n0).map(|i0| buf[i0 * n1 * n2 + i1 * n2 + i2]).collect();
+            fft0.process(&mut line);
+            (i1, i2, line)
+        })
+        .collect();
+    for (i1, i2, line) in results_0 {
+        for i0 in 0..n0 {
+            buf[i0 * n1 * n2 + i1 * n2 + i2] = line[i0];
         }
     }
 
@@ -233,6 +288,8 @@ fn fft_3d_forward(data: &[f64], shape: [usize; 3]) -> Vec<Complex64> {
 }
 
 /// 3D IFFT of a complex array, returning real part.
+///
+/// Parallelized via rayon using the gather-process-scatter pattern (same as forward).
 fn fft_3d_inverse(data: &[Complex64], shape: [usize; 3]) -> Vec<f64> {
     let [n0, n1, n2] = shape;
     let n_total = n0 * n1 * n2;
@@ -243,46 +300,51 @@ fn fft_3d_inverse(data: &[Complex64], shape: [usize; 3]) -> Vec<f64> {
 
     let mut planner = FftPlanner::new();
 
-    // IFFT along axis 2
+    // IFFT along axis 2 — parallel over (i0, i1) pairs via contiguous chunks.
     let ifft2 = planner.plan_fft_inverse(n2);
-    for i0 in 0..n0 {
-        for i1 in 0..n1 {
-            let start = i0 * n1 * n2 + i1 * n2;
-            ifft2.process(&mut buf[start..start + n2]);
-        }
-    }
+    buf.par_chunks_mut(n2).for_each(|row| {
+        ifft2.process(row);
+    });
 
-    // IFFT along axis 1
+    // IFFT along axis 1 — parallel gather/process, sequential scatter.
     let ifft1 = planner.plan_fft_inverse(n1);
-    let mut line = vec![Complex64::new(0.0, 0.0); n1];
-    for i0 in 0..n0 {
-        for i2 in 0..n2 {
-            for i1 in 0..n1 {
-                line[i1] = buf[i0 * n1 * n2 + i1 * n2 + i2];
-            }
+    let results_1: Vec<(usize, usize, Vec<Complex64>)> = (0..n0 * n2)
+        .into_par_iter()
+        .map(|idx| {
+            let i0 = idx / n2;
+            let i2 = idx % n2;
+            let mut line: Vec<Complex64> =
+                (0..n1).map(|i1| buf[i0 * n1 * n2 + i1 * n2 + i2]).collect();
             ifft1.process(&mut line);
-            for i1 in 0..n1 {
-                buf[i0 * n1 * n2 + i1 * n2 + i2] = line[i1];
-            }
+            (i0, i2, line)
+        })
+        .collect();
+    for (i0, i2, line) in results_1 {
+        for i1 in 0..n1 {
+            buf[i0 * n1 * n2 + i1 * n2 + i2] = line[i1];
         }
     }
 
-    // IFFT along axis 0
+    // IFFT along axis 0 — parallel gather/process, sequential scatter.
     let ifft0 = planner.plan_fft_inverse(n0);
-    let mut line0 = vec![Complex64::new(0.0, 0.0); n0];
-    for i1 in 0..n1 {
-        for i2 in 0..n2 {
-            for i0 in 0..n0 {
-                line0[i0] = buf[i0 * n1 * n2 + i1 * n2 + i2];
-            }
-            ifft0.process(&mut line0);
-            for i0 in 0..n0 {
-                buf[i0 * n1 * n2 + i1 * n2 + i2] = line0[i0];
-            }
+    let results_0: Vec<(usize, usize, Vec<Complex64>)> = (0..n1 * n2)
+        .into_par_iter()
+        .map(|idx| {
+            let i1 = idx / n2;
+            let i2 = idx % n2;
+            let mut line: Vec<Complex64> =
+                (0..n0).map(|i0| buf[i0 * n1 * n2 + i1 * n2 + i2]).collect();
+            ifft0.process(&mut line);
+            (i1, i2, line)
+        })
+        .collect();
+    for (i1, i2, line) in results_0 {
+        for i0 in 0..n0 {
+            buf[i0 * n1 * n2 + i1 * n2 + i2] = line[i0];
         }
     }
 
-    buf.iter().map(|c| c.re * scale).collect()
+    buf.par_iter().map(|c| c.re * scale).collect()
 }
 
 #[cfg(test)]

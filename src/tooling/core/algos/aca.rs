@@ -6,6 +6,7 @@
 //! Used as a building block for black-box HT tensor construction (HTACA).
 
 use faer::Mat;
+use rayon::prelude::*;
 
 // ─── Black-box matrix trait ─────────────────────────────────────────────────
 
@@ -117,18 +118,27 @@ impl AcaResult {
     }
 
     /// Compute (max_error, frobenius_error) against a dense reference matrix.
+    ///
+    /// Parallelized over rows with rayon for large matrices.
     pub fn error_vs_dense(&self, dense: &Mat<f64>) -> (f64, f64) {
         let m = dense.nrows();
         let n = dense.ncols();
-        let mut max_err = 0.0f64;
-        let mut frob_sq = 0.0f64;
-        for i in 0..m {
-            for j in 0..n {
-                let e = (dense[(i, j)] - self.evaluate(i, j)).abs();
-                max_err = max_err.max(e);
-                frob_sq += e * e;
-            }
-        }
+        let (max_err, frob_sq) = (0..m)
+            .into_par_iter()
+            .map(|i| {
+                let mut row_max = 0.0f64;
+                let mut row_frob_sq = 0.0f64;
+                for j in 0..n {
+                    let e = (dense[(i, j)] - self.evaluate(i, j)).abs();
+                    row_max = row_max.max(e);
+                    row_frob_sq += e * e;
+                }
+                (row_max, row_frob_sq)
+            })
+            .reduce(
+                || (0.0f64, 0.0f64),
+                |(m1, f1), (m2, f2)| (m1.max(m2), f1 + f2),
+            );
         (max_err, frob_sq.sqrt())
     }
 }

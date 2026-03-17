@@ -1,5 +1,7 @@
 //! Top-level `Simulation` struct. Entry point for library users; matches the README builder API.
 
+use rust_decimal::Decimal;
+
 use crate::tooling::core::{
     advecator::Advector,
     conditions::{ExitReason, TimeLimitCondition},
@@ -63,7 +65,7 @@ impl Simulation {
 
     /// Advance by a single timestep. Returns `Some(reason)` if the simulation should stop.
     pub fn step(&mut self) -> anyhow::Result<Option<ExitReason>> {
-        let cfl_factor = self.opts.cfl_factor;
+        let cfl_factor = self.opts.cfl_factor_f64();
         let mut dt = self.integrator.max_dt(&*self.repr, cfl_factor);
 
         // Clamp dt to not overshoot t_final by more than necessary
@@ -86,8 +88,6 @@ impl Simulation {
             let accel = self.poisson.compute_acceleration(&potential);
 
             // Build per-cell acceleration vectors for KFVS
-            let [nx, ny, nz] = density.shape;
-            let n = nx * ny * nz;
             let acc: Vec<[f64; 3]> = accel
                 .gx
                 .iter()
@@ -96,22 +96,42 @@ impl Simulation {
                 .map(|((&gx, &gy), &gz)| [gx, gy, gz])
                 .collect();
 
-            // Get the current kinetic data, apply LoMaC, write back
-            let snapshot = self.repr.to_snapshot(self.time);
-            let corrected = lomac.apply(dt, &acc, &snapshot.data);
-
-            // Update the representation with the corrected distribution
-            let corrected_snap = PhaseSpaceSnapshot {
-                data: corrected,
-                shape: snapshot.shape,
-                time: self.time,
-            };
-            self.repr = Box::new(
-                crate::tooling::core::algos::uniform::UniformGrid6D::from_snapshot(
-                    corrected_snap,
-                    self.domain.clone(),
-                ),
-            );
+            // HtTensor path: use project_ht to avoid unnecessary dense→HT→dense round-trips
+            if let Some(ht) = self
+                .repr
+                .as_any()
+                .downcast_ref::<crate::tooling::core::algos::ht::HtTensor>()
+            {
+                lomac.advance_macroscopic(dt, &acc);
+                let corrected = lomac.project_ht(ht);
+                let shape = ht.shape;
+                let corrected_snap = PhaseSpaceSnapshot {
+                    data: corrected,
+                    shape,
+                    time: self.time,
+                };
+                self.repr = Box::new(
+                    crate::tooling::core::algos::uniform::UniformGrid6D::from_snapshot(
+                        corrected_snap,
+                        self.domain.clone(),
+                    ),
+                );
+            } else {
+                // Dense path (UniformGrid6D, etc.)
+                let snapshot = self.repr.to_snapshot(self.time);
+                let corrected = lomac.apply(dt, &acc, &snapshot.data);
+                let corrected_snap = PhaseSpaceSnapshot {
+                    data: corrected,
+                    shape: snapshot.shape,
+                    time: self.time,
+                };
+                self.repr = Box::new(
+                    crate::tooling::core::algos::uniform::UniformGrid6D::from_snapshot(
+                        corrected_snap,
+                        self.domain.clone(),
+                    ),
+                );
+            }
         }
 
         self.time += dt;
@@ -135,6 +155,10 @@ impl Simulation {
 }
 
 /// Builder for `Simulation` using a fluent API.
+///
+/// Configuration fields (`t_final`, `output_interval`, `energy_tolerance`, `g`)
+/// are stored as `Decimal` for exact user-facing arithmetic. Backward-compatible
+/// `f64` setter methods are provided alongside `_decimal` variants.
 pub struct SimulationBuilder {
     domain: Option<Domain>,
     repr: Option<Box<dyn PhaseSpaceRepr>>,
@@ -143,10 +167,10 @@ pub struct SimulationBuilder {
     integrator: Option<Box<dyn TimeIntegrator>>,
     opts: Option<OptionalParams>,
     ic: Option<PhaseSpaceSnapshot>,
-    t_final: Option<f64>,
-    output_interval: Option<f64>,
-    energy_tolerance: Option<f64>,
-    g: Option<f64>,
+    t_final: Option<Decimal>,
+    output_interval: Option<Decimal>,
+    energy_tolerance: Option<Decimal>,
+    g: Option<Decimal>,
     enable_lomac: bool,
 }
 
@@ -214,21 +238,45 @@ impl SimulationBuilder {
     }
 
     pub fn time_final(mut self, t: f64) -> Self {
+        self.t_final = Some(Decimal::from_f64_retain(t).unwrap_or(Decimal::ZERO));
+        self
+    }
+
+    /// Set final simulation time from an exact `Decimal` value.
+    pub fn time_final_decimal(mut self, t: Decimal) -> Self {
         self.t_final = Some(t);
         self
     }
 
     pub fn output_interval(mut self, dt: f64) -> Self {
+        self.output_interval = Some(Decimal::from_f64_retain(dt).unwrap_or(Decimal::ZERO));
+        self
+    }
+
+    /// Set output interval from an exact `Decimal` value.
+    pub fn output_interval_decimal(mut self, dt: Decimal) -> Self {
         self.output_interval = Some(dt);
         self
     }
 
     pub fn exit_on_energy_drift(mut self, tol: f64) -> Self {
+        self.energy_tolerance = Some(Decimal::from_f64_retain(tol).unwrap_or(Decimal::ZERO));
+        self
+    }
+
+    /// Set energy drift tolerance from an exact `Decimal` value.
+    pub fn exit_on_energy_drift_decimal(mut self, tol: Decimal) -> Self {
         self.energy_tolerance = Some(tol);
         self
     }
 
     pub fn gravitational_constant(mut self, g: f64) -> Self {
+        self.g = Some(Decimal::from_f64_retain(g).unwrap_or(Decimal::ZERO));
+        self
+    }
+
+    /// Set gravitational constant from an exact `Decimal` value.
+    pub fn gravitational_constant_decimal(mut self, g: Decimal) -> Self {
         self.g = Some(g);
         self
     }
@@ -242,6 +290,14 @@ impl SimulationBuilder {
     }
 
     pub fn cfl_factor(mut self, cfl: f64) -> Self {
+        let mut opts = self.opts.unwrap_or_default();
+        opts.cfl_factor = Decimal::from_f64_retain(cfl).unwrap_or(Decimal::ZERO);
+        self.opts = Some(opts);
+        self
+    }
+
+    /// Set CFL safety factor from an exact `Decimal` value.
+    pub fn cfl_factor_decimal(mut self, cfl: Decimal) -> Self {
         let mut opts = self.opts.unwrap_or_default();
         opts.cfl_factor = cfl;
         self.opts = Some(opts);
@@ -266,12 +322,11 @@ impl SimulationBuilder {
             .integrator
             .ok_or_else(|| anyhow::anyhow!("integrator not set"))?;
 
-        // t_final: prefer explicit t_final, else read from domain
-        let t_final = self
-            .t_final
-            .unwrap_or_else(|| domain.time_range.t_final.to_f64().unwrap_or(1.0));
+        // t_final: prefer explicit t_final (Decimal), else read from domain
+        let t_final_dec = self.t_final.unwrap_or(domain.time_range.t_final);
+        let t_final = t_final_dec.to_f64().unwrap_or(1.0);
 
-        let g = self.g.unwrap_or(1.0);
+        let g = self.g.unwrap_or(Decimal::ONE).to_f64().unwrap_or(1.0);
 
         // Build the phase-space representation
         let repr: Box<dyn PhaseSpaceRepr> = if let Some(ic) = self.ic {
@@ -297,19 +352,16 @@ impl SimulationBuilder {
         let mut exit_evaluator = ExitEvaluator::new(initial_diag);
         exit_evaluator.add_condition(Box::new(TimeLimitCondition { t_final }));
 
-        if let Some(tol) = self.energy_tolerance {
+        if let Some(tol_dec) = self.energy_tolerance {
             use crate::tooling::core::conditions::EnergyDriftCondition;
+            let tol = tol_dec.to_f64().unwrap_or(1e-6);
             exit_evaluator.add_condition(Box::new(EnergyDriftCondition { tolerance: tol }));
         }
 
         // Initialize LoMaC if requested
         let lomac = if self.enable_lomac {
             let dv = domain.dv();
-            let lv = [
-                domain.velocity.v1.to_f64().unwrap(),
-                domain.velocity.v2.to_f64().unwrap(),
-                domain.velocity.v3.to_f64().unwrap(),
-            ];
+            let lv = domain.lv();
             let v_min = [-lv[0], -lv[1], -lv[2]];
             let spatial_shape = [
                 domain.spatial_res.x1 as usize,

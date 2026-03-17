@@ -3,7 +3,6 @@
 use super::super::types::PhaseSpaceSnapshot;
 use super::domain::Domain;
 use super::isolated::IsolatedEquilibrium;
-use rust_decimal::prelude::ToPrimitive;
 
 /// Tidal stream IC: progenitor cluster on an orbit in an external host potential.
 pub struct TidalIC {
@@ -44,16 +43,8 @@ impl TidalIC {
 
         let dx = domain.dx();
         let dv = domain.dv();
-        let lx = [
-            domain.spatial.x1.to_f64().unwrap(),
-            domain.spatial.x2.to_f64().unwrap(),
-            domain.spatial.x3.to_f64().unwrap(),
-        ];
-        let lv = [
-            domain.velocity.v1.to_f64().unwrap(),
-            domain.velocity.v2.to_f64().unwrap(),
-            domain.velocity.v3.to_f64().unwrap(),
-        ];
+        let lx = domain.lx();
+        let lv = domain.lv();
 
         let pos = self.progenitor_position;
         let vel = self.progenitor_velocity;

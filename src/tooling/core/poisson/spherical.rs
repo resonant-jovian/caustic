@@ -5,6 +5,8 @@
 //! Poisson equation for each (l,m) mode via the Green's function method, and
 //! reconstructs the potential on the Cartesian grid.
 
+use rayon::prelude::*;
+
 use super::super::{solver::PoissonSolver, types::*};
 use super::utils::finite_difference_acceleration;
 use std::f64::consts::PI;
@@ -49,12 +51,14 @@ impl SphericalHarmonicsPoisson {
     }
 
     /// Number of (l,m) pairs for l in 0..=l_max: sum_{l=0}^{l_max} (2l+1) = (l_max+1)^2.
+    #[inline]
     fn n_harmonics(&self) -> usize {
         (self.l_max + 1) * (self.l_max + 1)
     }
 
     /// Map (l, m) to a flat index. m ranges from -l to l.
     /// Index = l^2 + l + m.
+    #[inline]
     fn lm_index(l: usize, m: i32) -> usize {
         ((l * l) as i32 + l as i32 + m) as usize
     }
@@ -70,6 +74,7 @@ impl SphericalHarmonicsPoisson {
 ///   P_m^m(x) = (-1)^m (2m-1)!! (1-x^2)^{m/2}
 ///   P_{m+1}^m(x) = x (2m+1) P_m^m(x)
 ///   (l-m) P_l^m(x) = (2l-1) x P_{l-1}^m(x) - (l+m-1) P_{l-2}^m(x)
+#[inline]
 fn associated_legendre(l: usize, m: usize, x: f64) -> f64 {
     debug_assert!(m <= l, "m must be <= l");
 
@@ -106,6 +111,7 @@ fn associated_legendre(l: usize, m: usize, x: f64) -> f64 {
 }
 
 /// Compute the normalization factor N_lm = sqrt((2l+1)/(4pi) * (l-|m|)!/(l+|m|)!).
+#[inline]
 fn normalization(l: usize, m_abs: usize) -> f64 {
     // Compute (l-|m|)! / (l+|m|)! via ratio to avoid large factorials
     let mut ratio = 1.0_f64;
@@ -120,6 +126,7 @@ fn normalization(l: usize, m_abs: usize) -> f64 {
 ///   m > 0:  sqrt(2) * N_lm * P_l^m(cos theta) * cos(m phi)
 ///   m = 0:  N_l0 * P_l^0(cos theta)
 ///   m < 0:  sqrt(2) * N_l|m| * P_l^|m|(cos theta) * sin(|m| phi)
+#[inline]
 fn real_spherical_harmonic(l: usize, m: i32, theta: f64, phi: f64) -> f64 {
     let m_abs = m.unsigned_abs() as usize;
     let n_lm = normalization(l, m_abs);
@@ -195,39 +202,57 @@ fn decompose_density(
     let [nx, ny, nz] = *shape;
 
     // rho_lm[harm_idx][r_idx]: accumulated weighted density
-    let mut rho_lm: Vec<Vec<f64>> = vec![vec![0.0; n_radial]; n_harm];
     // shell_vol[r_idx]: total Cartesian cell volume in each radial bin (for normalization)
-    let mut shell_vol: Vec<f64> = vec![0.0; n_radial];
+    //
+    // Parallelize over ix: each thread accumulates its own rho_lm + shell_vol,
+    // then reduce by element-wise addition.
+    let (mut rho_lm, _shell_vol) = (0..nx)
+        .into_par_iter()
+        .fold(
+            || (vec![vec![0.0; n_radial]; n_harm], vec![0.0; n_radial]),
+            |(mut rho_lm_local, mut shell_vol_local), ix| {
+                for iy in 0..ny {
+                    for iz in 0..nz {
+                        let (x, y, z) = cell_to_xyz(ix, iy, iz, shape, dx);
+                        let (r, theta, phi) = xyz_to_spherical(x, y, z);
 
-    for ix in 0..nx {
-        for iy in 0..ny {
-            for iz in 0..nz {
-                let (x, y, z) = cell_to_xyz(ix, iy, iz, shape, dx);
-                let (r, theta, phi) = xyz_to_spherical(x, y, z);
+                        if r >= r_max {
+                            continue;
+                        }
 
-                // Skip cells beyond r_max
-                if r >= r_max {
-                    continue;
-                }
+                        let r_idx = ((r / dr) as usize).min(n_radial - 1);
 
-                let r_idx = (r / dr) as usize;
-                let r_idx = r_idx.min(n_radial - 1);
+                        let cell_idx = ix * ny * nz + iy * nz + iz;
+                        let rho_val = density.data[cell_idx];
 
-                let cell_idx = ix * ny * nz + iy * nz + iz;
-                let rho_val = density.data[cell_idx];
+                        shell_vol_local[r_idx] += cell_vol;
 
-                shell_vol[r_idx] += cell_vol;
-
-                for l in 0..=l_max {
-                    for m in -(l as i32)..=(l as i32) {
-                        let ylm = real_spherical_harmonic(l, m, theta, phi);
-                        let h_idx = SphericalHarmonicsPoisson::lm_index(l, m);
-                        rho_lm[h_idx][r_idx] += rho_val * ylm * cell_vol;
+                        for l in 0..=l_max {
+                            for m in -(l as i32)..=(l as i32) {
+                                let ylm = real_spherical_harmonic(l, m, theta, phi);
+                                let h_idx = SphericalHarmonicsPoisson::lm_index(l, m);
+                                rho_lm_local[h_idx][r_idx] += rho_val * ylm * cell_vol;
+                            }
+                        }
                     }
                 }
-            }
-        }
-    }
+                (rho_lm_local, shell_vol_local)
+            },
+        )
+        .reduce(
+            || (vec![vec![0.0; n_radial]; n_harm], vec![0.0; n_radial]),
+            |(mut a_rho, mut a_sv), (b_rho, b_sv)| {
+                for h in 0..n_harm {
+                    for r in 0..n_radial {
+                        a_rho[h][r] += b_rho[h][r];
+                    }
+                }
+                for r in 0..n_radial {
+                    a_sv[r] += b_sv[r];
+                }
+                (a_rho, a_sv)
+            },
+        );
 
     // Normalize: divide by shell volume so rho_lm has units of density * Y_lm
     // The integral over the shell of rho*Y_lm dV = rho_lm[r] * shell_vol
@@ -352,35 +377,34 @@ fn reconstruct_potential(
     let dr = r_max / n_radial as f64;
     let mut pot_data = vec![0.0f64; n_total];
 
-    for ix in 0..nx {
-        for iy in 0..ny {
-            for iz in 0..nz {
-                let (x, y, z) = cell_to_xyz(ix, iy, iz, shape, dx);
-                let (r, theta, phi) = xyz_to_spherical(x, y, z);
+    pot_data.par_iter_mut().enumerate().for_each(|(flat, val)| {
+        let ix = flat / (ny * nz);
+        let iy = (flat / nz) % ny;
+        let iz = flat % nz;
 
-                // Find radial bin and interpolate linearly
-                let r_frac = r / dr - 0.5;
-                let r_idx_lo = r_frac.floor().max(0.0) as usize;
-                let r_idx_hi = (r_idx_lo + 1).min(n_radial - 1);
-                let t = (r_frac - r_idx_lo as f64).clamp(0.0, 1.0);
+        let (x, y, z) = cell_to_xyz(ix, iy, iz, shape, dx);
+        let (r, theta, phi) = xyz_to_spherical(x, y, z);
 
-                let cell_idx = ix * ny * nz + iy * nz + iz;
+        // Find radial bin and interpolate linearly
+        let r_frac = r / dr - 0.5;
+        let r_idx_lo = r_frac.floor().max(0.0) as usize;
+        let r_idx_hi = (r_idx_lo + 1).min(n_radial - 1);
+        let t = (r_frac - r_idx_lo as f64).clamp(0.0, 1.0);
 
-                for l in 0..=l_max {
-                    for m in -(l as i32)..=(l as i32) {
-                        let h_idx = SphericalHarmonicsPoisson::lm_index(l, m);
-                        let ylm = real_spherical_harmonic(l, m, theta, phi);
+        let mut sum = 0.0;
+        for l in 0..=l_max {
+            for m in -(l as i32)..=(l as i32) {
+                let h_idx = SphericalHarmonicsPoisson::lm_index(l, m);
+                let ylm = real_spherical_harmonic(l, m, theta, phi);
 
-                        // Linear interpolation in radius
-                        let phi_r =
-                            (1.0 - t) * phi_lm[h_idx][r_idx_lo] + t * phi_lm[h_idx][r_idx_hi];
+                // Linear interpolation in radius
+                let phi_r = (1.0 - t) * phi_lm[h_idx][r_idx_lo] + t * phi_lm[h_idx][r_idx_hi];
 
-                        pot_data[cell_idx] += phi_r * ylm;
-                    }
-                }
+                sum += phi_r * ylm;
             }
         }
-    }
+        *val = sum;
+    });
 
     PotentialField {
         data: pot_data,

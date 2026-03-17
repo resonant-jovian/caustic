@@ -8,6 +8,7 @@
 
 use super::phasespace::PhaseSpaceRepr;
 use super::types::{DensityField, PotentialField};
+use rayon::prelude::*;
 use serde::Serialize;
 
 /// One row of the global time-series output.
@@ -131,24 +132,38 @@ impl Diagnostics {
         let n_bins = (nx.max(ny).max(nz) / 2).max(1);
         let dr = r_max / n_bins as f64;
 
-        let mut bin_sum = vec![0.0f64; n_bins];
-        let mut bin_count = vec![0u64; n_bins];
-
-        for ix in 0..nx {
-            for iy in 0..ny {
-                for iz in 0..nz {
-                    let rx = (ix as f64 + 0.5 - cx) * dx[0];
-                    let ry = (iy as f64 + 0.5 - cy) * dx[1];
-                    let rz = (iz as f64 + 0.5 - cz) * dx[2];
-                    let r = (rx * rx + ry * ry + rz * rz).sqrt();
-                    let bin = (r / dr) as usize;
-                    if bin < n_bins {
-                        bin_sum[bin] += density.data[ix * ny * nz + iy * nz + iz];
-                        bin_count[bin] += 1;
+        // Parallel fold-reduce over ix slabs to accumulate bin data
+        let (bin_sum, bin_count) = (0..nx)
+            .into_par_iter()
+            .fold(
+                || (vec![0.0f64; n_bins], vec![0u64; n_bins]),
+                |(mut bs, mut bc), ix| {
+                    for iy in 0..ny {
+                        for iz in 0..nz {
+                            let rx = (ix as f64 + 0.5 - cx) * dx[0];
+                            let ry = (iy as f64 + 0.5 - cy) * dx[1];
+                            let rz = (iz as f64 + 0.5 - cz) * dx[2];
+                            let r = (rx * rx + ry * ry + rz * rz).sqrt();
+                            let bin = (r / dr) as usize;
+                            if bin < n_bins {
+                                bs[bin] += density.data[ix * ny * nz + iy * nz + iz];
+                                bc[bin] += 1;
+                            }
+                        }
                     }
-                }
-            }
-        }
+                    (bs, bc)
+                },
+            )
+            .reduce(
+                || (vec![0.0f64; n_bins], vec![0u64; n_bins]),
+                |(mut a_s, mut a_c), (b_s, b_c)| {
+                    for i in 0..n_bins {
+                        a_s[i] += b_s[i];
+                        a_c[i] += b_c[i];
+                    }
+                    (a_s, a_c)
+                },
+            );
 
         (0..n_bins)
             .filter(|&i| bin_count[i] > 0)
@@ -177,17 +192,17 @@ pub struct ConservationSummary {
 
 /// L1 norm: ‖f‖₁ = Σ|fᵢ|·dV.
 pub fn norm_l1(data: &[f64], cell_volume: f64) -> f64 {
-    data.iter().map(|v| v.abs()).sum::<f64>() * cell_volume
+    data.par_iter().map(|v| v.abs()).sum::<f64>() * cell_volume
 }
 
 /// L2 norm: ‖f‖₂ = √(Σfᵢ²·dV).
 pub fn norm_l2(data: &[f64], cell_volume: f64) -> f64 {
-    (data.iter().map(|v| v * v).sum::<f64>() * cell_volume).sqrt()
+    (data.par_iter().map(|v| v * v).sum::<f64>() * cell_volume).sqrt()
 }
 
 /// L∞ norm: max|fᵢ|.
 pub fn norm_linf(data: &[f64]) -> f64 {
-    data.iter().fold(0.0f64, |m, v| m.max(v.abs()))
+    data.par_iter().map(|v| v.abs()).reduce(|| 0.0f64, f64::max)
 }
 
 /// L1 error between two fields: ‖a − b‖₁ / ‖b‖₁.

@@ -3,6 +3,9 @@
 
 use super::super::types::PhaseSpaceSnapshot;
 use super::domain::Domain;
+use rayon::prelude::*;
+use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 
 /// Trait for isolated equilibrium models specified as a distribution function.
 pub trait IsolatedEquilibrium {
@@ -17,14 +20,34 @@ pub trait IsolatedEquilibrium {
 /// Plummer sphere: f(E) ∝ (−E)^(7/2).
 /// Analytic DF; density ρ ∝ (r²+a²)^(−5/2).
 pub struct PlummerIC {
-    pub mass: f64,
-    pub scale_radius: f64,
-    pub g: f64,
+    pub mass: Decimal,
+    pub scale_radius: Decimal,
+    pub g: Decimal,
+    // Cached f64 values for hot-path computation
+    mass_f64: f64,
+    scale_radius_f64: f64,
+    g_f64: f64,
 }
 
 impl PlummerIC {
+    /// Create a Plummer IC from f64 parameters (backward-compatible).
     pub fn new(mass: f64, scale_radius: f64, g: f64) -> Self {
         Self {
+            mass: Decimal::from_f64_retain(mass).unwrap(),
+            scale_radius: Decimal::from_f64_retain(scale_radius).unwrap(),
+            g: Decimal::from_f64_retain(g).unwrap(),
+            mass_f64: mass,
+            scale_radius_f64: scale_radius,
+            g_f64: g,
+        }
+    }
+
+    /// Create a Plummer IC from Decimal parameters (exact config).
+    pub fn new_decimal(mass: Decimal, scale_radius: Decimal, g: Decimal) -> Self {
+        Self {
+            mass_f64: mass.to_f64().unwrap(),
+            scale_radius_f64: scale_radius.to_f64().unwrap(),
+            g_f64: g.to_f64().unwrap(),
             mass,
             scale_radius,
             g,
@@ -38,9 +61,9 @@ impl IsolatedEquilibrium for PlummerIC {
             return 0.0;
         }
         use std::f64::consts::PI;
-        let a = self.scale_radius;
-        let m = self.mass;
-        let g = self.g;
+        let a = self.scale_radius_f64;
+        let m = self.mass_f64;
+        let g = self.g_f64;
         // Binney & Tremaine §4.4.3 (Eddington inversion of Plummer density):
         // In natural units G=M=a=1: f(E) = (24√2/7π³) * (-E)^(7/2)
         // In physical units: f(E) = (24√2/7π³) * M * (-E)^(7/2) / (a³ * (GM/a)^5)
@@ -51,13 +74,13 @@ impl IsolatedEquilibrium for PlummerIC {
 
     fn density_profile(&self, r: f64) -> f64 {
         use std::f64::consts::PI;
-        let a = self.scale_radius;
-        let m = self.mass;
+        let a = self.scale_radius_f64;
+        let m = self.mass_f64;
         3.0 * m / (4.0 * PI * a.powi(3)) * (1.0 + r * r / (a * a)).powf(-2.5)
     }
 
     fn potential(&self, r: f64) -> f64 {
-        -self.g * self.mass / (r * r + self.scale_radius * self.scale_radius).sqrt()
+        -self.g_f64 * self.mass_f64 / (r * r + self.scale_radius_f64 * self.scale_radius_f64).sqrt()
     }
 }
 
@@ -65,10 +88,16 @@ impl IsolatedEquilibrium for PlummerIC {
 /// Requires solving the Poisson-Boltzmann ODE from r=0 outward to find the
 /// tidal radius r_t where Φ(r_t) = E₀.
 pub struct KingIC {
-    pub mass: f64,
+    pub mass: Decimal,
     /// Dimensionless King concentration W₀ = Φ(0)/σ².
-    pub king_parameter_w0: f64,
-    pub velocity_dispersion: f64,
+    pub king_parameter_w0: Decimal,
+    pub velocity_dispersion: Decimal,
+    pub g: Decimal,
+    // Cached f64 values for hot-path computation
+    mass_f64: f64,
+    king_parameter_w0_f64: f64,
+    velocity_dispersion_f64: f64,
+    g_f64: f64,
     /// Tabulated radius values from ODE integration.
     r_table: Vec<f64>,
     /// Tabulated density ρ(r) from ODE integration.
@@ -79,8 +108,6 @@ pub struct KingIC {
     norm_a: f64,
     /// Tidal (boundary) energy E₀ = Φ(r_t).
     e0: f64,
-    /// Gravitational constant.
-    pub g: f64,
 }
 
 /// Single RK4 step for (y, dy/dr) given f(r, y, dy).
@@ -212,16 +239,35 @@ impl KingIC {
         let norm_a = rho_scale / (2.0 * PI * sigma * sigma).powf(1.5);
 
         Self {
-            mass,
-            king_parameter_w0,
-            velocity_dispersion: sigma,
+            mass: Decimal::from_f64_retain(mass).unwrap(),
+            king_parameter_w0: Decimal::from_f64_retain(king_parameter_w0).unwrap(),
+            velocity_dispersion: Decimal::from_f64_retain(sigma).unwrap(),
+            g: Decimal::from_f64_retain(g).unwrap(),
+            mass_f64: mass,
+            king_parameter_w0_f64: king_parameter_w0,
+            velocity_dispersion_f64: sigma,
+            g_f64: g,
             r_table,
             rho_table,
             phi_table,
             norm_a,
             e0,
-            g,
         }
+    }
+
+    /// Create a King model from Decimal parameters (exact config).
+    pub fn new_decimal(
+        mass: Decimal,
+        king_parameter_w0: Decimal,
+        scale_radius: Decimal,
+        g: Decimal,
+    ) -> Self {
+        Self::new(
+            mass.to_f64().unwrap(),
+            king_parameter_w0.to_f64().unwrap(),
+            scale_radius.to_f64().unwrap(),
+            g.to_f64().unwrap(),
+        )
     }
 }
 
@@ -245,7 +291,7 @@ impl IsolatedEquilibrium for KingIC {
         if energy >= self.e0 {
             return 0.0;
         }
-        let sigma2 = self.velocity_dispersion * self.velocity_dispersion;
+        let sigma2 = self.velocity_dispersion_f64 * self.velocity_dispersion_f64;
         let arg = (self.e0 - energy) / sigma2;
         if arg > 500.0 {
             return 0.0; // overflow guard
@@ -291,14 +337,34 @@ fn interpolate_table(x_table: &[f64], y_table: &[f64], x: f64) -> f64 {
 /// Hernquist (1990): ρ ∝ 1/(r(r+a)³). More realistic cuspy halo profile.
 /// Closed-form DF from Hernquist 1990, eq. 17.
 pub struct HernquistIC {
-    pub mass: f64,
-    pub scale_radius: f64,
-    pub g: f64,
+    pub mass: Decimal,
+    pub scale_radius: Decimal,
+    pub g: Decimal,
+    // Cached f64 values for hot-path computation
+    mass_f64: f64,
+    scale_radius_f64: f64,
+    g_f64: f64,
 }
 
 impl HernquistIC {
+    /// Create a Hernquist IC from f64 parameters (backward-compatible).
     pub fn new(mass: f64, scale_radius: f64, g: f64) -> Self {
         Self {
+            mass: Decimal::from_f64_retain(mass).unwrap(),
+            scale_radius: Decimal::from_f64_retain(scale_radius).unwrap(),
+            g: Decimal::from_f64_retain(g).unwrap(),
+            mass_f64: mass,
+            scale_radius_f64: scale_radius,
+            g_f64: g,
+        }
+    }
+
+    /// Create a Hernquist IC from Decimal parameters (exact config).
+    pub fn new_decimal(mass: Decimal, scale_radius: Decimal, g: Decimal) -> Self {
+        Self {
+            mass_f64: mass.to_f64().unwrap(),
+            scale_radius_f64: scale_radius.to_f64().unwrap(),
+            g_f64: g.to_f64().unwrap(),
             mass,
             scale_radius,
             g,
@@ -312,9 +378,9 @@ impl IsolatedEquilibrium for HernquistIC {
             return 0.0;
         }
         use std::f64::consts::PI;
-        let m = self.mass;
-        let a = self.scale_radius;
-        let g = self.g;
+        let m = self.mass_f64;
+        let a = self.scale_radius_f64;
+        let g = self.g_f64;
         // Hernquist (1990), eq. 17:
         // f(E) = M / (8√2·π³·(GMa)^{3/2}) · 1/(1-q²)^{5/2}
         //        · [3·arcsin(q) + q√(1-q²)·(1-2q²)·(8q⁴-8q²-3)]
@@ -335,23 +401,28 @@ impl IsolatedEquilibrium for HernquistIC {
     }
 
     fn density_profile(&self, r: f64) -> f64 {
-        let a = self.scale_radius;
-        let m = self.mass;
+        let a = self.scale_radius_f64;
+        let m = self.mass_f64;
         m * a / (2.0 * std::f64::consts::PI * r * (r + a).powi(3))
     }
 
     fn potential(&self, r: f64) -> f64 {
-        -self.g * self.mass / (r + self.scale_radius)
+        -self.g_f64 * self.mass_f64 / (r + self.scale_radius_f64)
     }
 }
 
 /// NFW (Navarro-Frenk-White): ρ ∝ 1/(r/r_s · (1+r/r_s)²).
 /// DF computed via numerical Eddington inversion.
 pub struct NfwIC {
-    pub mass: f64,
-    pub scale_radius: f64,
-    pub concentration: f64,
-    pub g: f64,
+    pub mass: Decimal,
+    pub scale_radius: Decimal,
+    pub concentration: Decimal,
+    pub g: Decimal,
+    // Cached f64 values for hot-path computation
+    mass_f64: f64,
+    scale_radius_f64: f64,
+    concentration_f64: f64,
+    g_f64: f64,
     /// Characteristic density ρ_s (derived from mass, r_s, concentration).
     rho_s: f64,
     /// Tabulated DF: (E, f(E)) pairs.
@@ -360,6 +431,7 @@ pub struct NfwIC {
 }
 
 impl NfwIC {
+    /// Create an NFW IC from f64 parameters (backward-compatible).
     pub fn new(mass: f64, scale_radius: f64, concentration: f64, g: f64) -> Self {
         use std::f64::consts::PI;
         let rs = scale_radius;
@@ -443,14 +515,33 @@ impl NfwIC {
         }
 
         Self {
-            mass,
-            scale_radius,
-            concentration,
-            g,
+            mass: Decimal::from_f64_retain(mass).unwrap(),
+            scale_radius: Decimal::from_f64_retain(scale_radius).unwrap(),
+            concentration: Decimal::from_f64_retain(concentration).unwrap(),
+            g: Decimal::from_f64_retain(g).unwrap(),
+            mass_f64: mass,
+            scale_radius_f64: scale_radius,
+            concentration_f64: concentration,
+            g_f64: g,
             rho_s,
             df_table_e,
             df_table_f,
         }
+    }
+
+    /// Create an NFW IC from Decimal parameters (exact config).
+    pub fn new_decimal(
+        mass: Decimal,
+        scale_radius: Decimal,
+        concentration: Decimal,
+        g: Decimal,
+    ) -> Self {
+        Self::new(
+            mass.to_f64().unwrap(),
+            scale_radius.to_f64().unwrap(),
+            concentration.to_f64().unwrap(),
+            g.to_f64().unwrap(),
+        )
     }
 }
 
@@ -463,7 +554,7 @@ impl IsolatedEquilibrium for NfwIC {
     }
 
     fn density_profile(&self, r: f64) -> f64 {
-        let x = r / self.scale_radius;
+        let x = r / self.scale_radius_f64;
         if x < 1e-30 {
             return self.rho_s * 1e30; // diverges at r=0
         }
@@ -473,22 +564,30 @@ impl IsolatedEquilibrium for NfwIC {
     fn potential(&self, r: f64) -> f64 {
         use std::f64::consts::PI;
         if r < 1e-30 {
-            return -4.0 * PI * self.g * self.rho_s * self.scale_radius * self.scale_radius * 100.0;
+            return -4.0
+                * PI
+                * self.g_f64
+                * self.rho_s
+                * self.scale_radius_f64
+                * self.scale_radius_f64
+                * 100.0;
         }
         -4.0 * PI
-            * self.g
+            * self.g_f64
             * self.rho_s
-            * self.scale_radius.powi(3)
-            * (1.0 + r / self.scale_radius).ln()
+            * self.scale_radius_f64.powi(3)
+            * (1.0 + r / self.scale_radius_f64).ln()
             / r
     }
 }
 
 /// Sample an isolated equilibrium IC onto the 6D grid.
 /// Evaluates f(E(x,v)) = f(½v² + Φ(r)) on every (x,v) grid point.
-pub fn sample_on_grid(ic: &dyn IsolatedEquilibrium, domain: &Domain) -> PhaseSpaceSnapshot {
-    use rust_decimal::prelude::ToPrimitive;
-
+/// Parallelized over the outer spatial dimension (ix1) using rayon.
+pub fn sample_on_grid(
+    ic: &(dyn IsolatedEquilibrium + Sync),
+    domain: &Domain,
+) -> PhaseSpaceSnapshot {
     let nx1 = domain.spatial_res.x1 as usize;
     let nx2 = domain.spatial_res.x2 as usize;
     let nx3 = domain.spatial_res.x3 as usize;
@@ -498,16 +597,8 @@ pub fn sample_on_grid(ic: &dyn IsolatedEquilibrium, domain: &Domain) -> PhaseSpa
 
     let dx = domain.dx();
     let dv = domain.dv();
-    let lx = [
-        domain.spatial.x1.to_f64().unwrap(),
-        domain.spatial.x2.to_f64().unwrap(),
-        domain.spatial.x3.to_f64().unwrap(),
-    ];
-    let lv = [
-        domain.velocity.v1.to_f64().unwrap(),
-        domain.velocity.v2.to_f64().unwrap(),
-        domain.velocity.v3.to_f64().unwrap(),
-    ];
+    let lx = domain.lx();
+    let lv = domain.lv();
 
     // Row-major strides (same layout as UniformGrid6D)
     let s_v3 = 1usize;
@@ -520,32 +611,35 @@ pub fn sample_on_grid(ic: &dyn IsolatedEquilibrium, domain: &Domain) -> PhaseSpa
     let total = nx1 * nx2 * nx3 * nv1 * nv2 * nv3;
     let mut data = vec![0.0f64; total];
 
-    for ix1 in 0..nx1 {
-        let x1 = -lx[0] + (ix1 as f64 + 0.5) * dx[0];
-        for ix2 in 0..nx2 {
-            let x2 = -lx[1] + (ix2 as f64 + 0.5) * dx[1];
-            for ix3 in 0..nx3 {
-                let x3 = -lx[2] + (ix3 as f64 + 0.5) * dx[2];
-                let r = (x1 * x1 + x2 * x2 + x3 * x3).sqrt();
-                let phi = ic.potential(r);
-                let base = ix1 * s_x1 + ix2 * s_x2 + ix3 * s_x3;
+    // Each ix1 slab is independent — parallelize over ix1
+    data.par_chunks_mut(s_x1)
+        .enumerate()
+        .for_each(|(ix1, chunk)| {
+            let x1 = -lx[0] + (ix1 as f64 + 0.5) * dx[0];
+            for ix2 in 0..nx2 {
+                let x2 = -lx[1] + (ix2 as f64 + 0.5) * dx[1];
+                for ix3 in 0..nx3 {
+                    let x3 = -lx[2] + (ix3 as f64 + 0.5) * dx[2];
+                    let r = (x1 * x1 + x2 * x2 + x3 * x3).sqrt();
+                    let phi = ic.potential(r);
+                    let base = ix2 * s_x2 + ix3 * s_x3;
 
-                for iv1 in 0..nv1 {
-                    let v1 = -lv[0] + (iv1 as f64 + 0.5) * dv[0];
-                    for iv2 in 0..nv2 {
-                        let v2 = -lv[1] + (iv2 as f64 + 0.5) * dv[1];
-                        for iv3 in 0..nv3 {
-                            let v3 = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
-                            let v2sq = v1 * v1 + v2 * v2 + v3 * v3;
-                            let energy = 0.5 * v2sq + phi;
-                            let f = ic.distribution_function(energy, 0.0).max(0.0);
-                            data[base + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3] = f;
+                    for iv1 in 0..nv1 {
+                        let v1 = -lv[0] + (iv1 as f64 + 0.5) * dv[0];
+                        for iv2 in 0..nv2 {
+                            let v2 = -lv[1] + (iv2 as f64 + 0.5) * dv[1];
+                            for iv3 in 0..nv3 {
+                                let v3 = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
+                                let v2sq = v1 * v1 + v2 * v2 + v3 * v3;
+                                let energy = 0.5 * v2sq + phi;
+                                let f = ic.distribution_function(energy, 0.0).max(0.0);
+                                chunk[base + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3] = f;
+                            }
                         }
                     }
                 }
             }
-        }
-    }
+        });
 
     PhaseSpaceSnapshot {
         data,

@@ -22,6 +22,7 @@
 
 use super::conservative_svd::{conservative_truncation, extract_moments};
 use super::kfvs::KfvsSolver;
+use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
 
 /// LoMaC conservation manager.
 ///
@@ -135,6 +136,49 @@ impl LoMaC {
     /// Get the current total energy from the macroscopic solver.
     pub fn total_energy(&self) -> f64 {
         self.kfvs.total_energy()
+    }
+
+    /// Project an HtTensor directly to restore conservation, without dense conversion.
+    ///
+    /// Algorithm:
+    /// 1. Extract macro state from HT via tree contraction (no dense expansion)
+    /// 2. Compute per-cell moment deficits vs KFVS target
+    /// 3. Convert the HT to snapshot, apply standard conservative_truncation
+    ///
+    /// Note: Full HT-native projection (f_ref splitting + δf truncation) is a
+    /// future optimization. This version avoids the dense LoMaC path in
+    /// Simulation::step() by using HT moment extraction for the KFVS advance,
+    /// then falls back to dense projection for the correction step.
+    pub fn project_ht(&self, ht: &crate::tooling::core::algos::ht::HtTensor) -> Vec<f64> {
+        if !self.active {
+            let snap = ht.to_snapshot(0.0);
+            return snap.data;
+        }
+
+        // Extract snapshot and apply standard projection
+        let snap = ht.to_snapshot(0.0);
+        conservative_truncation(
+            &snap.data,
+            self.spatial_shape,
+            self.velocity_shape,
+            &self.kfvs.state,
+            self.dv,
+            self.v_min,
+        )
+    }
+
+    /// Initialize LoMaC from an HtTensor's moments directly (no dense conversion
+    /// for the moment extraction step — only the KFVS initialization needs flat arrays).
+    pub fn initialize_from_ht(&mut self, ht: &crate::tooling::core::algos::ht::HtTensor) {
+        let moments = ht.extract_macro_state();
+        let density: Vec<f64> = moments.iter().map(|m| m.density).collect();
+        let mom_x: Vec<f64> = moments.iter().map(|m| m.momentum[0]).collect();
+        let mom_y: Vec<f64> = moments.iter().map(|m| m.momentum[1]).collect();
+        let mom_z: Vec<f64> = moments.iter().map(|m| m.momentum[2]).collect();
+        let energy: Vec<f64> = moments.iter().map(|m| m.energy).collect();
+
+        self.kfvs
+            .initialize_from_moments(&density, &mom_x, &mom_y, &mom_z, &energy);
     }
 
     /// Conservation error: difference between kinetic and macroscopic moments.

@@ -24,7 +24,7 @@ use super::super::{
 };
 use super::aca::{BlackBoxMatrix, FnMatrix, Xorshift64, aca_partial_pivot};
 use faer::Mat;
-use rust_decimal::prelude::ToPrimitive;
+use rayon::prelude::*;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -285,36 +285,45 @@ impl HtTensor {
         ];
         let dx = domain.dx();
         let dv = domain.dv();
-        let lx = ext_f64(&domain.spatial);
-        let lv = ext_f64_v(&domain.velocity);
+        let lx = domain.lx();
+        let lv = domain.lv();
 
-        let total: usize = shape.iter().product();
-        let mut data = vec![0.0f64; total];
         let [n0, n1, n2, n3, n4, n5] = shape;
+        let slab_size = n1 * n2 * n3 * n4 * n5;
 
-        for i0 in 0..n0 {
-            for i1 in 0..n1 {
-                for i2 in 0..n2 {
-                    for i3 in 0..n3 {
-                        for i4 in 0..n4 {
-                            for i5 in 0..n5 {
-                                let x = [
-                                    -lx[0] + (i0 as f64 + 0.5) * dx[0],
-                                    -lx[1] + (i1 as f64 + 0.5) * dx[1],
-                                    -lx[2] + (i2 as f64 + 0.5) * dx[2],
-                                ];
-                                let v = [
-                                    -lv[0] + (i3 as f64 + 0.5) * dv[0],
-                                    -lv[1] + (i4 as f64 + 0.5) * dv[1],
-                                    -lv[2] + (i5 as f64 + 0.5) * dv[2],
-                                ];
-                                data[flat_index(&shape, [i0, i1, i2, i3, i4, i5])] = f(&x, &v);
+        let data: Vec<f64> = (0..n0)
+            .into_par_iter()
+            .flat_map(|i0| {
+                let mut slab = vec![0.0f64; slab_size];
+                for i1 in 0..n1 {
+                    for i2 in 0..n2 {
+                        for i3 in 0..n3 {
+                            for i4 in 0..n4 {
+                                for i5 in 0..n5 {
+                                    let x = [
+                                        -lx[0] + (i0 as f64 + 0.5) * dx[0],
+                                        -lx[1] + (i1 as f64 + 0.5) * dx[1],
+                                        -lx[2] + (i2 as f64 + 0.5) * dx[2],
+                                    ];
+                                    let v = [
+                                        -lv[0] + (i3 as f64 + 0.5) * dv[0],
+                                        -lv[1] + (i4 as f64 + 0.5) * dv[1],
+                                        -lv[2] + (i5 as f64 + 0.5) * dv[2],
+                                    ];
+                                    let local_idx = i1 * n2 * n3 * n4 * n5
+                                        + i2 * n3 * n4 * n5
+                                        + i3 * n4 * n5
+                                        + i4 * n5
+                                        + i5;
+                                    slab[local_idx] = f(&x, &v);
+                                }
                             }
                         }
                     }
                 }
-            }
-        }
+                slab
+            })
+            .collect();
 
         Self::from_full(&data, shape, domain, tolerance)
     }
@@ -354,8 +363,8 @@ impl HtTensor {
         ];
         let dx = domain.dx();
         let dv = domain.dv();
-        let lx = ext_f64(&domain.spatial);
-        let lv = ext_f64_v(&domain.velocity);
+        let lx = domain.lx();
+        let lv = domain.lv();
 
         let n_samples = n_initial_samples.unwrap_or(5 * max_rank);
         let mut rng = Xorshift64::new(seed.unwrap_or(42));
@@ -412,12 +421,23 @@ impl HtTensor {
             }
 
             // Evaluate fibers: M ∈ ℝ^{n_μ × ns}
-            let mut fiber_mat = Mat::zeros(n_mu, ns);
-            for (s, comp) in comp_indices.iter().enumerate() {
-                for i in 0..n_mu {
-                    let mut idx = *comp;
-                    idx[mu] = i;
-                    fiber_mat[(i, s)] = eval_at_index(idx);
+            // Parallelize over fiber columns (each sample is independent)
+            let fiber_cols: Vec<Vec<f64>> = comp_indices
+                .par_iter()
+                .map(|comp| {
+                    (0..n_mu)
+                        .map(|i| {
+                            let mut idx = *comp;
+                            idx[mu] = i;
+                            eval_at_index(idx)
+                        })
+                        .collect()
+                })
+                .collect();
+            let mut fiber_mat: Mat<f64> = Mat::zeros(n_mu, ns);
+            for (s, col) in fiber_cols.iter().enumerate() {
+                for (i, &val) in col.iter().enumerate() {
+                    fiber_mat[(i, s)] = val;
                 }
             }
 
@@ -859,7 +879,7 @@ fn build_kron_frame(left: &Mat<f64>, right: &Mat<f64>, n_l: usize, n_r: usize) -
 ///
 /// Computes R = (U_left ⊗ U_right)^T @ M_t where M_t is the mode-t matricization of f.
 /// Then SVD of R gives the transfer tensor B_t ∈ ℝ^{k_t × k_left × k_right}.
-fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64>(
+fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64 + Sync>(
     eval: &E,
     shape: &[usize; 6],
     _node_idx: usize,
@@ -886,71 +906,78 @@ fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64>(
     //
     // For efficiency, first compute F_proj ∈ ℝ^{n_left × n_right} for each comp index,
     // then project: R[:, comp] = (U_left^T @ F_proj @ U_right) vectorized.
-    let mut proj_mat: Mat<f64> = Mat::zeros(k_lr, n_comp);
-
-    for comp_flat in 0..n_comp {
-        // Decode comp_flat
-        let mut comp_idx = vec![0usize; comp_dims.len()];
-        let mut rem = comp_flat;
-        for ci in (0..comp_dims.len()).rev() {
-            comp_idx[ci] = rem % shape[comp_dims[ci]];
-            rem /= shape[comp_dims[ci]];
-        }
-
-        // Build the slice matrix S ∈ ℝ^{n_left × n_right} for this comp index
-        // Then project: R[:, comp] = vec(U_left^T @ S @ U_right)
-        // We compute this without forming S explicitly:
-        // First: T = S @ U_right ∈ ℝ^{n_left × k_right}
-        let mut t_mat = vec![0.0f64; n_left_phys * k_right];
-        for left_flat in 0..n_left_phys {
-            let mut left_idx_vals = vec![0usize; left_dims.len()];
-            let mut rem_l = left_flat;
-            for li in (0..left_dims.len()).rev() {
-                left_idx_vals[li] = rem_l % shape[left_dims[li]];
-                rem_l /= shape[left_dims[li]];
+    // Parallelize over comp_flat — each column of proj_mat is independent
+    let proj_cols: Vec<Vec<f64>> = (0..n_comp)
+        .into_par_iter()
+        .map(|comp_flat| {
+            // Decode comp_flat
+            let mut comp_idx = vec![0usize; comp_dims.len()];
+            let mut rem = comp_flat;
+            for ci in (0..comp_dims.len()).rev() {
+                comp_idx[ci] = rem % shape[comp_dims[ci]];
+                rem /= shape[comp_dims[ci]];
             }
 
-            for right_flat in 0..n_right_phys {
-                let mut right_idx_vals = vec![0usize; right_dims.len()];
-                let mut rem_r = right_flat;
-                for ri in (0..right_dims.len()).rev() {
-                    right_idx_vals[ri] = rem_r % shape[right_dims[ri]];
-                    rem_r /= shape[right_dims[ri]];
+            // Build T = S @ U_right ∈ ℝ^{n_left × k_right}
+            let mut t_mat = vec![0.0f64; n_left_phys * k_right];
+            for left_flat in 0..n_left_phys {
+                let mut left_idx_vals = vec![0usize; left_dims.len()];
+                let mut rem_l = left_flat;
+                for li in (0..left_dims.len()).rev() {
+                    left_idx_vals[li] = rem_l % shape[left_dims[li]];
+                    rem_l /= shape[left_dims[li]];
                 }
 
-                let mut idx = [0usize; 6];
-                for (li, &d) in left_dims.iter().enumerate() {
-                    idx[d] = left_idx_vals[li];
-                }
-                for (ri, &d) in right_dims.iter().enumerate() {
-                    idx[d] = right_idx_vals[ri];
-                }
-                for (ci, &d) in comp_dims.iter().enumerate() {
-                    idx[d] = comp_idx[ci];
-                }
+                for right_flat in 0..n_right_phys {
+                    let mut right_idx_vals = vec![0usize; right_dims.len()];
+                    let mut rem_r = right_flat;
+                    for ri in (0..right_dims.len()).rev() {
+                        right_idx_vals[ri] = rem_r % shape[right_dims[ri]];
+                        rem_r /= shape[right_dims[ri]];
+                    }
 
-                let val = eval(idx);
-                if val.abs() < 1e-30 {
-                    continue;
-                }
+                    let mut idx = [0usize; 6];
+                    for (li, &d) in left_dims.iter().enumerate() {
+                        idx[d] = left_idx_vals[li];
+                    }
+                    for (ri, &d) in right_dims.iter().enumerate() {
+                        idx[d] = right_idx_vals[ri];
+                    }
+                    for (ci, &d) in comp_dims.iter().enumerate() {
+                        idx[d] = comp_idx[ci];
+                    }
 
-                // Accumulate into T = S @ U_right
+                    let val = eval(idx);
+                    if val.abs() < 1e-30 {
+                        continue;
+                    }
+
+                    for jr in 0..k_right {
+                        t_mat[left_flat * k_right + jr] += val * right_frame[(right_flat, jr)];
+                    }
+                }
+            }
+
+            // Compute R[:, comp] = vec(U_left^T @ T)
+            let mut col = vec![0.0f64; k_lr];
+            for jl in 0..k_left {
                 for jr in 0..k_right {
-                    t_mat[left_flat * k_right + jr] += val * right_frame[(right_flat, jr)];
+                    let mut s = 0.0;
+                    for left_flat in 0..n_left_phys {
+                        s += left_frame[(left_flat, jl)] * t_mat[left_flat * k_right + jr];
+                    }
+                    col[jl * k_right + jr] = s;
                 }
             }
-        }
+            col
+        })
+        .collect();
 
-        // Now compute R[:, comp] = vec(U_left^T @ T)
-        // R[(jl*kr+jr), comp] = Σ_{left_flat} U_left[left_flat, jl] * T[left_flat, jr]
-        for jl in 0..k_left {
-            for jr in 0..k_right {
-                let mut s = 0.0;
-                for left_flat in 0..n_left_phys {
-                    s += left_frame[(left_flat, jl)] * t_mat[left_flat * k_right + jr];
-                }
-                proj_mat[(jl * k_right + jr, comp_flat)] = s;
-            }
+    // Assemble proj_mat from parallel results
+    let mut proj_mat: Mat<f64> = Mat::zeros(k_lr, n_comp);
+    for (comp_flat, col) in proj_cols.iter().enumerate() {
+        for (row, &val) in col.iter().enumerate() {
+            proj_mat[(row, comp_flat)] = val;
         }
     }
 
@@ -978,6 +1005,7 @@ fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64>(
 
 impl HtTensor {
     /// Evaluate at a single 6D grid point. Cost: O(d·k³).
+    #[inline]
     pub fn evaluate(&self, indices: [usize; 6]) -> f64 {
         let root_vec = self.node_vector(ROOT, &indices);
         debug_assert_eq!(root_vec.len(), 1);
@@ -985,6 +1013,7 @@ impl HtTensor {
     }
 
     /// Contracted vector at a node for given indices.
+    #[inline]
     fn node_vector(&self, node_idx: usize, indices: &[usize; 6]) -> Vec<f64> {
         match &self.nodes[node_idx] {
             HtNode::Leaf { dim, frame } => {
@@ -1694,36 +1723,38 @@ impl PhaseSpaceRepr for HtTensor {
         let (f2, _) = leaf_data(&self.nodes[2]);
         let (kt6, kl6, kr6, t6) = get_interior(&self.nodes[6]);
 
-        let mut density = vec![0.0f64; nx1 * nx2 * nx3];
-
-        for i0 in 0..nx1 {
-            // eff_i0[k8] = sum_{j8} eff8[j8, k8] * f0[i0, j8]
-            let mut eff_i0 = vec![0.0f64; kr8];
-            for k8 in 0..kr8 {
-                let mut s = 0.0;
-                for j8 in 0..kl8 {
-                    s += eff8[j8 * kr8 + k8] * f0[(i0, j8)];
-                }
-                eff_i0[k8] = s;
-            }
-
-            for i1 in 0..nx2 {
-                for i2 in 0..nx3 {
-                    let mut val = 0.0;
-                    for k8 in 0..kr8 {
-                        let mut n6 = 0.0;
-                        for j6 in 0..kl6 {
-                            let lv = f1[(i1, j6)];
-                            for k6 in 0..kr6 {
-                                n6 += t6[k8 * kl6 * kr6 + j6 * kr6 + k6] * lv * f2[(i2, k6)];
-                            }
-                        }
-                        val += eff_i0[k8] * n6;
+        let density: Vec<f64> = (0..nx1)
+            .into_par_iter()
+            .flat_map(|i0| {
+                let mut eff_i0 = vec![0.0f64; kr8];
+                for k8 in 0..kr8 {
+                    let mut s = 0.0;
+                    for j8 in 0..kl8 {
+                        s += eff8[j8 * kr8 + k8] * f0[(i0, j8)];
                     }
-                    density[i0 * nx2 * nx3 + i1 * nx3 + i2] = val * dv3;
+                    eff_i0[k8] = s;
                 }
-            }
-        }
+
+                let mut row = vec![0.0f64; nx2 * nx3];
+                for i1 in 0..nx2 {
+                    for i2 in 0..nx3 {
+                        let mut val = 0.0;
+                        for k8 in 0..kr8 {
+                            let mut n6 = 0.0;
+                            for j6 in 0..kl6 {
+                                let lv = f1[(i1, j6)];
+                                for k6 in 0..kr6 {
+                                    n6 += t6[k8 * kl6 * kr6 + j6 * kr6 + k6] * lv * f2[(i2, k6)];
+                                }
+                            }
+                            val += eff_i0[k8] * n6;
+                        }
+                        row[i1 * nx3 + i2] = val * dv3;
+                    }
+                }
+                row
+            })
+            .collect();
 
         DensityField {
             data: density,
@@ -1740,8 +1771,8 @@ impl PhaseSpaceRepr for HtTensor {
         let old_ht = self.clone();
         let dx = self.domain.dx();
         let dv = self.domain.dv();
-        let lx = ext_f64(&self.domain.spatial);
-        let lv = ext_f64_v(&self.domain.velocity);
+        let lx = self.domain.lx();
+        let lv = self.domain.lv();
         let shape = self.shape;
         let periodic = matches!(self.domain.spatial_bc, SpatialBoundType::Periodic);
         let tol = self.tolerance;
@@ -1810,8 +1841,8 @@ impl PhaseSpaceRepr for HtTensor {
         let old_ht = self.clone();
         let dx = self.domain.dx();
         let dv = self.domain.dv();
-        let lx = ext_f64(&self.domain.spatial);
-        let lv = ext_f64_v(&self.domain.velocity);
+        let lx = self.domain.lx();
+        let lv = self.domain.lv();
         let shape = self.shape;
         let [nx1, nx2, nx3, _, _, _] = shape;
         let periodic_v = matches!(self.domain.velocity_bc, VelocityBoundType::Truncated);
@@ -1895,8 +1926,8 @@ impl PhaseSpaceRepr for HtTensor {
     fn moment(&self, position: &[f64; 3], order: usize) -> Tensor {
         let dx = self.domain.dx();
         let dv = self.domain.dv();
-        let lx = ext_f64(&self.domain.spatial);
-        let lv = ext_f64_v(&self.domain.velocity);
+        let lx = self.domain.lx();
+        let lv = self.domain.lv();
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.shape;
 
         let ix = [
@@ -2025,33 +2056,34 @@ impl PhaseSpaceRepr for HtTensor {
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.shape;
         let dv = self.domain.dv();
         let dv23 = dv[1] * dv[2];
-        let mut out = vec![0u32; nx1 * nx2 * nx3];
 
-        for ix1 in 0..nx1 {
-            for ix2 in 0..nx2 {
-                for ix3 in 0..nx3 {
-                    let marginal: Vec<f64> = (0..nv1)
-                        .map(|iv1| {
-                            (0..nv2 * nv3)
-                                .map(|vi| {
-                                    let iv3 = vi % nv3;
-                                    let iv2 = vi / nv3;
-                                    self.evaluate([ix1, ix2, ix3, iv1, iv2, iv3])
-                                })
-                                .sum::<f64>()
-                                * dv23
-                        })
-                        .collect();
-                    let mut peaks = 0u32;
-                    for i in 1..nv1.saturating_sub(1) {
-                        if marginal[i] > marginal[i - 1] && marginal[i] > marginal[i + 1] {
-                            peaks += 1;
-                        }
+        let out: Vec<u32> = (0..nx1 * nx2 * nx3)
+            .into_par_iter()
+            .map(|si| {
+                let ix1 = si / (nx2 * nx3);
+                let ix2 = (si / nx3) % nx2;
+                let ix3 = si % nx3;
+                let marginal: Vec<f64> = (0..nv1)
+                    .map(|iv1| {
+                        (0..nv2 * nv3)
+                            .map(|vi| {
+                                let iv3 = vi % nv3;
+                                let iv2 = vi / nv3;
+                                self.evaluate([ix1, ix2, ix3, iv1, iv2, iv3])
+                            })
+                            .sum::<f64>()
+                            * dv23
+                    })
+                    .collect();
+                let mut peaks = 0u32;
+                for i in 1..nv1.saturating_sub(1) {
+                    if marginal[i] > marginal[i - 1] && marginal[i] > marginal[i + 1] {
+                        peaks += 1;
                     }
-                    out[ix1 * nx2 * nx3 + ix2 * nx3 + ix3] = peaks;
                 }
-            }
-        }
+                peaks
+            })
+            .collect();
 
         StreamCountField {
             data: out,
@@ -2062,7 +2094,7 @@ impl PhaseSpaceRepr for HtTensor {
     fn velocity_distribution(&self, position: &[f64; 3]) -> Vec<f64> {
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.shape;
         let dx = self.domain.dx();
-        let lx = ext_f64(&self.domain.spatial);
+        let lx = self.domain.lx();
         let ix = [
             ((position[0] + lx[0]) / dx[0])
                 .floor()
@@ -2087,7 +2119,7 @@ impl PhaseSpaceRepr for HtTensor {
     fn total_kinetic_energy(&self) -> f64 {
         let dx = self.domain.dx();
         let dv = self.domain.dv();
-        let lv = ext_f64_v(&self.domain.velocity);
+        let lv = self.domain.lv();
         let vol = dx[0] * dx[1] * dx[2] * dv[0] * dv[1] * dv[2];
         let [_, _, _, nv1, nv2, nv3] = self.shape;
 
@@ -2123,6 +2155,186 @@ impl PhaseSpaceRepr for HtTensor {
     }
 }
 
+// ─── Moment extraction (Phase 3: LoMaC integration) ─────────────────────────
+
+impl HtTensor {
+    /// Compute momentum density J_i(x) = ∫ v_i f(x,v) dv³ for axis i ∈ {0,1,2}.
+    ///
+    /// Same tree contraction as `compute_density()` but with velocity weights
+    /// set to v_i on the corresponding velocity leaf, and 1 on the others.
+    pub fn compute_momentum_density(&self, axis: usize) -> DensityField {
+        assert!(axis < 3, "axis must be 0, 1, or 2");
+        let [nx1, nx2, nx3, nv1, nv2, nv3] = self.shape;
+        let dv = self.domain.dv();
+        let dv3 = dv[0] * dv[1] * dv[2];
+        let lv = self.domain.lv();
+        let nv = [nv1, nv2, nv3];
+
+        // Build velocity weights: v_i for the target axis, 1 for others
+        let mut w3: Vec<f64> = vec![1.0; nv1];
+        let mut w4: Vec<f64> = vec![1.0; nv2];
+        let mut w5: Vec<f64> = vec![1.0; nv3];
+
+        let weights = [&mut w3, &mut w4, &mut w5];
+        for iv in 0..nv[axis] {
+            let v = -lv[axis] + (iv as f64 + 0.5) * dv[axis];
+            weights[axis][iv] = v;
+        }
+
+        self.contract_velocity_weighted(&w3, &w4, &w5, dv3)
+    }
+
+    /// Compute energy density e(x) = ∫ ½|v|² f(x,v) dv³.
+    ///
+    /// Decomposed as: e = ½ ∫ v₁² f dv³ + ½ ∫ v₂² f dv³ + ½ ∫ v₃² f dv³.
+    /// Each term is a separate tree contraction with v_i² weights on one leaf.
+    pub fn compute_energy_density(&self) -> DensityField {
+        let [_, _, _, nv1, nv2, nv3] = self.shape;
+        let dv = self.domain.dv();
+        let dv3 = dv[0] * dv[1] * dv[2];
+        let lv = self.domain.lv();
+        let nv = [nv1, nv2, nv3];
+
+        let mut result: Option<DensityField> = None;
+
+        for axis in 0..3 {
+            let mut w3 = vec![1.0f64; nv1];
+            let mut w4 = vec![1.0f64; nv2];
+            let mut w5 = vec![1.0f64; nv3];
+
+            let weights = [&mut w3, &mut w4, &mut w5];
+            for iv in 0..nv[axis] {
+                let v = -lv[axis] + (iv as f64 + 0.5) * dv[axis];
+                weights[axis][iv] = 0.5 * v * v;
+            }
+
+            let term = self.contract_velocity_weighted(&w3, &w4, &w5, dv3);
+
+            result = Some(match result {
+                None => term,
+                Some(mut acc) => {
+                    for (a, b) in acc.data.iter_mut().zip(term.data.iter()) {
+                        *a += b;
+                    }
+                    acc
+                }
+            });
+        }
+
+        result.unwrap()
+    }
+
+    /// Extract all macroscopic moments needed for LoMaC: (ρ, J₁, J₂, J₃, e).
+    /// Returns per-spatial-cell `MacroState` vectors.
+    pub fn extract_macro_state(&self) -> Vec<crate::tooling::core::conservation::kfvs::MacroState> {
+        let density = self.compute_density();
+        let j0 = self.compute_momentum_density(0);
+        let j1 = self.compute_momentum_density(1);
+        let j2 = self.compute_momentum_density(2);
+        let energy = self.compute_energy_density();
+
+        density
+            .data
+            .iter()
+            .zip(j0.data.iter())
+            .zip(j1.data.iter())
+            .zip(j2.data.iter())
+            .zip(energy.data.iter())
+            .map(|((((&rho, &jx), &jy), &jz), &e)| {
+                crate::tooling::core::conservation::kfvs::MacroState {
+                    density: rho,
+                    momentum: [jx, jy, jz],
+                    energy: e,
+                }
+            })
+            .collect()
+    }
+
+    /// Generalized velocity contraction: same algorithm as `compute_density()` but
+    /// with arbitrary weights on velocity leaves instead of uniform ones.
+    fn contract_velocity_weighted(
+        &self,
+        w_v1: &[f64],
+        w_v2: &[f64],
+        w_v3: &[f64],
+        dv3: f64,
+    ) -> DensityField {
+        let [nx1, nx2, nx3, _, _, _] = self.shape;
+
+        let c3 = contract_leaf_weights(&self.nodes[3], w_v1);
+        let c4 = contract_leaf_weights(&self.nodes[4], w_v2);
+        let c5 = contract_leaf_weights(&self.nodes[5], w_v3);
+
+        let c7 = self.contract_interior_vec(7, &c4, &c5);
+        let c9 = self.contract_interior_vec(9, &c3, &c7);
+
+        let (_, kl_root, kr_root, t_root) = get_interior(&self.nodes[ROOT]);
+        let mut eff_left = vec![0.0f64; kl_root];
+        for j in 0..kl_root {
+            let mut s = 0.0;
+            for k in 0..kr_root {
+                s += t_root[j * kr_root + k] * c9[k];
+            }
+            eff_left[j] = s;
+        }
+
+        let (kt8, kl8, kr8, t8) = get_interior(&self.nodes[8]);
+        let mut eff8 = vec![0.0f64; kl8 * kr8];
+        for j8 in 0..kl8 {
+            for k8 in 0..kr8 {
+                let mut s = 0.0;
+                for j in 0..kt8 {
+                    s += eff_left[j] * t8[j * kl8 * kr8 + j8 * kr8 + k8];
+                }
+                eff8[j8 * kr8 + k8] = s;
+            }
+        }
+
+        let (f0, _) = leaf_data(&self.nodes[0]);
+        let (f1, _) = leaf_data(&self.nodes[1]);
+        let (f2, _) = leaf_data(&self.nodes[2]);
+        let (_, kl6, kr6, t6) = get_interior(&self.nodes[6]);
+
+        let density: Vec<f64> = (0..nx1)
+            .into_par_iter()
+            .flat_map(|i0| {
+                let mut eff_i0 = vec![0.0f64; kr8];
+                for k8 in 0..kr8 {
+                    let mut s = 0.0;
+                    for j8 in 0..kl8 {
+                        s += eff8[j8 * kr8 + k8] * f0[(i0, j8)];
+                    }
+                    eff_i0[k8] = s;
+                }
+
+                let mut row = vec![0.0f64; nx2 * nx3];
+                for i1 in 0..nx2 {
+                    for i2 in 0..nx3 {
+                        let mut val = 0.0;
+                        for k8 in 0..kr8 {
+                            let mut n6 = 0.0;
+                            for j6 in 0..kl6 {
+                                let lv = f1[(i1, j6)];
+                                for k6 in 0..kr6 {
+                                    n6 += t6[k8 * kl6 * kr6 + j6 * kr6 + k6] * lv * f2[(i2, k6)];
+                                }
+                            }
+                            val += eff_i0[k8] * n6;
+                        }
+                        row[i1 * nx3 + i2] = val * dv3;
+                    }
+                }
+                row
+            })
+            .collect();
+
+        DensityField {
+            data: density,
+            shape: [nx1, nx2, nx3],
+        }
+    }
+}
+
 // ─── Private HtTensor helpers ───────────────────────────────────────────────
 
 impl HtTensor {
@@ -2135,6 +2347,7 @@ impl HtTensor {
 
 // ─── Free functions ─────────────────────────────────────────────────────────
 
+#[inline]
 fn flat_index(shape: &[usize; 6], idx: [usize; 6]) -> usize {
     let mut flat = 0;
     let mut stride = 1;
@@ -2145,6 +2358,7 @@ fn flat_index(shape: &[usize; 6], idx: [usize; 6]) -> usize {
     flat
 }
 
+#[inline]
 fn parent_of(child: usize) -> usize {
     match child {
         0 => 8,
@@ -2161,6 +2375,7 @@ fn parent_of(child: usize) -> usize {
     }
 }
 
+#[inline]
 fn leaf_data(node: &HtNode) -> (&Mat<f64>, usize) {
     match node {
         HtNode::Leaf { dim, frame } => (frame, *dim),
@@ -2168,6 +2383,7 @@ fn leaf_data(node: &HtNode) -> (&Mat<f64>, usize) {
     }
 }
 
+#[inline]
 fn get_interior(node: &HtNode) -> (usize, usize, usize, &[f64]) {
     match node {
         HtNode::Interior {
@@ -2177,6 +2393,7 @@ fn get_interior(node: &HtNode) -> (usize, usize, usize, &[f64]) {
     }
 }
 
+#[inline]
 fn interior_data(node: &HtNode) -> (usize, usize, &[f64], [usize; 3]) {
     match node {
         HtNode::Interior {
@@ -2189,6 +2406,7 @@ fn interior_data(node: &HtNode) -> (usize, usize, &[f64], [usize; 3]) {
     }
 }
 
+#[inline]
 fn contract_transfer(
     t: &[f64],
     kt: usize,
@@ -2212,33 +2430,16 @@ fn contract_transfer(
     result
 }
 
+#[inline]
 fn contract_leaf_weights(node: &HtNode, weights: &[f64]) -> Vec<f64> {
     let (frame, _) = leaf_data(node);
-    let (n, k) = (frame.nrows(), frame.ncols());
+    let n = frame.nrows();
+    let k = frame.ncols();
     assert_eq!(n, weights.len());
-    let mut r = vec![0.0f64; k];
-    for j in 0..k {
-        for i in 0..n {
-            r[j] += frame[(i, j)] * weights[i];
-        }
-    }
-    r
-}
-
-fn ext_f64(s: &super::super::init::domain::SpatialDom) -> [f64; 3] {
-    [
-        s.x1.to_f64().unwrap(),
-        s.x2.to_f64().unwrap(),
-        s.x3.to_f64().unwrap(),
-    ]
-}
-
-fn ext_f64_v(v: &super::super::init::domain::VelocityDom) -> [f64; 3] {
-    [
-        v.v1.to_f64().unwrap(),
-        v.v2.to_f64().unwrap(),
-        v.v3.to_f64().unwrap(),
-    ]
+    // Build a n×1 matrix from weights, then use faer's optimized mat-mul
+    let w = Mat::from_fn(n, 1, |i, _| weights[i]);
+    let result = frame.transpose() * &w;
+    (0..k).map(|i| result[(i, 0)]).collect()
 }
 
 // ─── Linear algebra helpers ─────────────────────────────────────────────────
@@ -2285,6 +2486,7 @@ fn multi_mode_unfold(data: &[f64], shape: &[usize; 6], modes: &[usize]) -> Mat<f
     mat
 }
 
+#[inline]
 fn thin_svd(mat: &Mat<f64>) -> (Mat<f64>, Vec<f64>, Mat<f64>) {
     let m = mat.nrows();
     let n = mat.ncols();
@@ -2300,6 +2502,7 @@ fn thin_svd(mat: &Mat<f64>) -> (Mat<f64>, Vec<f64>, Mat<f64>) {
     (u, s, vt)
 }
 
+#[inline]
 fn truncation_rank(sv: &[f64], eps: f64) -> usize {
     let eps2 = eps * eps;
     let mut tail_sq = 0.0;
@@ -2312,6 +2515,7 @@ fn truncation_rank(sv: &[f64], eps: f64) -> usize {
     1
 }
 
+#[inline]
 fn qr_decompose(mat: &Mat<f64>) -> (Mat<f64>, Mat<f64>) {
     let m = mat.nrows();
     let n = mat.ncols();
@@ -2322,6 +2526,7 @@ fn qr_decompose(mat: &Mat<f64>) -> (Mat<f64>, Mat<f64>) {
     (qr.compute_thin_Q(), qr.thin_R().to_owned())
 }
 
+#[inline]
 fn s_times_vt(s: &[f64], vt: &Mat<f64>, rank: usize) -> Mat<f64> {
     let n = vt.ncols();
     let mut r = Mat::zeros(rank, n);
@@ -2333,6 +2538,7 @@ fn s_times_vt(s: &[f64], vt: &Mat<f64>, rank: usize) -> Mat<f64> {
     r
 }
 
+#[inline]
 fn vec_to_mat(data: &[f64], rows: usize, cols: usize) -> Mat<f64> {
     let mut m = Mat::zeros(rows, cols);
     for i in 0..rows {
@@ -2343,6 +2549,7 @@ fn vec_to_mat(data: &[f64], rows: usize, cols: usize) -> Mat<f64> {
     m
 }
 
+#[inline]
 fn mat_to_vec(m: &Mat<f64>, rows: usize, cols: usize) -> Vec<f64> {
     let mut v = vec![0.0f64; rows * cols];
     for i in 0..rows {
@@ -2353,22 +2560,9 @@ fn mat_to_vec(m: &Mat<f64>, rows: usize, cols: usize) -> Vec<f64> {
     v
 }
 
+#[inline]
 fn matmul_at_b(a: &Mat<f64>, b: &Mat<f64>) -> Mat<f64> {
-    let m = a.ncols();
-    let n = b.ncols();
-    let p = a.nrows();
-    assert_eq!(p, b.nrows());
-    let mut c = Mat::zeros(m, n);
-    for i in 0..m {
-        for j in 0..n {
-            let mut s = 0.0;
-            for k in 0..p {
-                s += a[(k, i)] * b[(k, j)];
-            }
-            c[(i, j)] = s;
-        }
-    }
-    c
+    a.transpose() * b
 }
 
 /// Compute transfer tensor for an interior node.
@@ -2704,8 +2898,8 @@ mod tests {
         let sigma = 0.4;
         let dx = domain.dx();
         let dv = domain.dv();
-        let lx = ext_f64(&domain.spatial);
-        let lv = ext_f64_v(&domain.velocity);
+        let lx = domain.lx();
+        let lv = domain.lv();
 
         let mut data = vec![0.0f64; total];
         for i0 in 0..n {
@@ -3169,8 +3363,8 @@ mod tests {
         // Compare against analytic: f(x - v*dt, v)
         let dx = domain.dx();
         let dv = domain.dv();
-        let lx = ext_f64(&domain.spatial);
-        let lv = ext_f64_v(&domain.velocity);
+        let lx = domain.lx();
+        let lv = domain.lv();
 
         let mut err_sq = 0.0;
         let mut norm_sq = 0.0;
@@ -3250,8 +3444,8 @@ mod tests {
         // Compare: analytic is f_ic(x, v - a*dt)
         let dx = domain.dx();
         let dv = domain.dv();
-        let lx = ext_f64(&domain.spatial);
-        let lv = ext_f64_v(&domain.velocity);
+        let lx = domain.lx();
+        let lv = domain.lv();
 
         let mut err_sq = 0.0;
         let mut norm_sq = 0.0;
@@ -3448,8 +3642,8 @@ mod tests {
         // Create a quadratic: f(x,v) = 1 + x1 + 0.5*x1^2 + x2*x3
         let dx = domain.dx();
         let dv = domain.dv();
-        let lx = ext_f64(&domain.spatial);
-        let lv = ext_f64_v(&domain.velocity);
+        let lx = domain.lx();
+        let lv = domain.lv();
         let shape = [8usize; 6];
 
         let quadratic = |idx: [usize; 6]| -> f64 {

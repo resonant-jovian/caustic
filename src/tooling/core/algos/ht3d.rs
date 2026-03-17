@@ -22,6 +22,7 @@
 
 use super::aca::{BlackBoxMatrix, FnMatrix, Xorshift64, aca_partial_pivot};
 use faer::Mat;
+use rayon::prelude::*;
 
 // ─── Fixed 3D dimension tree topology ────────────────────────────────────────
 //   0: leaf [x1]
@@ -50,6 +51,7 @@ pub enum HtNode3D {
 }
 
 impl HtNode3D {
+    #[inline]
     pub fn rank(&self) -> usize {
         match self {
             HtNode3D::Leaf { frame, .. } => frame.ncols(),
@@ -89,6 +91,7 @@ impl HtTensor3D {
     }
 
     /// Extract column vector from leaf frame at given index.
+    #[inline]
     fn leaf_vector(&self, node: usize, idx: usize) -> Vec<f64> {
         match &self.nodes[node] {
             HtNode3D::Leaf { frame, .. } => {
@@ -100,6 +103,7 @@ impl HtTensor3D {
     }
 
     /// Contract an interior node's transfer tensor with left and right vectors.
+    #[inline]
     fn contract_interior(&self, node: usize, left: &[f64], right: &[f64]) -> Vec<f64> {
         match &self.nodes[node] {
             HtNode3D::Interior {
@@ -392,22 +396,31 @@ impl HtTensor3D {
         // Project f onto leaf bases for dims 1,2
         // R[l1*k2+l2, i0] = Σ_{i1,i2} U1[i1,l1] * U2[i2,l2] * f(i0, i1, i2)
         let k12 = k1 * k2;
-        let mut projected3: Mat<f64> = Mat::zeros(k12, n0);
-
-        for i0 in 0..n0 {
-            for i1 in 0..n1 {
-                for i2 in 0..n2 {
-                    let val = f([i0, i1, i2]);
-                    if val.abs() < 1e-30 {
-                        continue;
-                    }
-                    for l1 in 0..k1 {
-                        for l2 in 0..k2 {
-                            projected3[(l1 * k2 + l2, i0)] +=
-                                frame1[(i1, l1)] * frame2[(i2, l2)] * val;
+        let projected3_flat: Vec<f64> = (0..n0)
+            .into_par_iter()
+            .flat_map(|i0| {
+                let mut col = vec![0.0; k12];
+                for i1 in 0..n1 {
+                    for i2 in 0..n2 {
+                        let val = f([i0, i1, i2]);
+                        if val.abs() < 1e-30 {
+                            continue;
+                        }
+                        for l1 in 0..k1 {
+                            for l2 in 0..k2 {
+                                col[l1 * k2 + l2] += frame1[(i1, l1)] * frame2[(i2, l2)] * val;
+                            }
                         }
                     }
                 }
+                col
+            })
+            .collect();
+
+        let mut projected3: Mat<f64> = Mat::zeros(k12, n0);
+        for i0 in 0..n0 {
+            for row in 0..k12 {
+                projected3[(row, i0)] = projected3_flat[i0 * k12 + row];
             }
         }
 
@@ -440,27 +453,42 @@ impl HtTensor3D {
 
         // Phase C: root transfer tensor
         // M[l0, l1, l2] = Σ_{i0,i1,i2} U0[i0,l0] * U1[i1,l1] * U2[i2,l2] * f(i0,i1,i2)
-        let mut m_tensor = vec![0.0; k0 * k1 * k2];
-        for i0 in 0..n0 {
-            for i1 in 0..n1 {
-                for i2 in 0..n2 {
-                    let val = f([i0, i1, i2]);
-                    if val.abs() < 1e-30 {
-                        continue;
-                    }
-                    for l0 in 0..k0 {
-                        let u0v = frame0[(i0, l0)];
-                        for l1 in 0..k1 {
-                            let u01v = u0v * frame1[(i1, l1)];
-                            for l2 in 0..k2 {
-                                m_tensor[l0 * k1 * k2 + l1 * k2 + l2] +=
-                                    u01v * frame2[(i2, l2)] * val;
+        let kk = k0 * k1 * k2;
+        let m_tensor: Vec<f64> = (0..n0)
+            .into_par_iter()
+            .fold(
+                || vec![0.0; kk],
+                |mut acc, i0| {
+                    for i1 in 0..n1 {
+                        for i2 in 0..n2 {
+                            let val = f([i0, i1, i2]);
+                            if val.abs() < 1e-30 {
+                                continue;
+                            }
+                            for l0 in 0..k0 {
+                                let u0v = frame0[(i0, l0)];
+                                for l1 in 0..k1 {
+                                    let u01v = u0v * frame1[(i1, l1)];
+                                    for l2 in 0..k2 {
+                                        acc[l0 * k1 * k2 + l1 * k2 + l2] +=
+                                            u01v * frame2[(i2, l2)] * val;
+                                    }
+                                }
                             }
                         }
                     }
-                }
-            }
-        }
+                    acc
+                },
+            )
+            .reduce(
+                || vec![0.0; kk],
+                |mut a, b| {
+                    for i in 0..kk {
+                        a[i] += b[i];
+                    }
+                    a
+                },
+            );
 
         // R_root[l0, t3] = Σ_{l1,l2} B3[t3,l1,l2] * M[l0,l1,l2]
         let mut root_mat: Mat<f64> = Mat::zeros(k0, k3);
@@ -818,6 +846,7 @@ pub enum HtNode3DComplex {
 }
 
 impl HtNode3DComplex {
+    #[inline]
     pub fn rank(&self) -> usize {
         match self {
             HtNode3DComplex::Leaf { frame_re, .. } => frame_re.ncols(),
@@ -850,6 +879,7 @@ impl HtTensor3DComplex {
         (z4_re[0], z4_im[0])
     }
 
+    #[inline]
     fn leaf_vector_complex(&self, node: usize, idx: usize) -> (Vec<f64>, Vec<f64>) {
         match &self.nodes[node] {
             HtNode3DComplex::Leaf {
@@ -866,6 +896,7 @@ impl HtTensor3DComplex {
 
     /// Contract interior node with complex left and right vectors.
     /// Transfer tensor B is real; complex arithmetic on vectors only.
+    #[inline]
     fn contract_interior_complex(
         &self,
         node: usize,

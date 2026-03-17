@@ -17,7 +17,6 @@ use super::super::{
     phasespace::PhaseSpaceRepr,
     types::*,
 };
-use rust_decimal::prelude::ToPrimitive;
 use std::any::Any;
 
 /// One Lagrangian tracer particle on the dark matter sheet.
@@ -41,6 +40,10 @@ pub struct SheetTracker {
     pub domain: Domain,
     pub stream_threshold: f64,
     pub particle_mass: f64,
+    // Cached domain values
+    cached_dx: [f64; 3],
+    cached_lx: [f64; 3],
+    cached_is_periodic: bool,
 }
 
 impl SheetTracker {
@@ -55,11 +58,7 @@ impl SheetTracker {
             domain.spatial_res.x3 as usize,
         ];
         let dx = domain.dx();
-        let lx = [
-            domain.spatial.x1.to_f64().unwrap(),
-            domain.spatial.x2.to_f64().unwrap(),
-            domain.spatial.x3.to_f64().unwrap(),
-        ];
+        let lx = domain.lx();
 
         let n_total = shape[0] * shape[1] * shape[2];
         let particle_mass = 1.0 / n_total as f64;
@@ -82,12 +81,19 @@ impl SheetTracker {
             }
         }
 
+        let is_periodic = matches!(
+            domain.spatial_bc,
+            super::super::init::domain::SpatialBoundType::Periodic
+        );
         Self {
             particles,
             shape,
             domain,
             stream_threshold: 1.0,
             particle_mass,
+            cached_dx: dx,
+            cached_lx: lx,
+            cached_is_periodic: is_periodic,
         }
     }
 
@@ -102,11 +108,7 @@ impl SheetTracker {
             domain.spatial_res.x3 as usize,
         ];
         let dx = domain.dx();
-        let lx = [
-            domain.spatial.x1.to_f64().unwrap(),
-            domain.spatial.x2.to_f64().unwrap(),
-            domain.spatial.x3.to_f64().unwrap(),
-        ];
+        let lx = domain.lx();
 
         let [sx, sy, sz] = ic.displacement_field(domain);
         let [vx, vy, vz] = ic.velocity_field(domain);
@@ -133,12 +135,19 @@ impl SheetTracker {
             }
         }
 
+        let is_periodic = matches!(
+            domain.spatial_bc,
+            super::super::init::domain::SpatialBoundType::Periodic
+        );
         Self {
             particles,
             shape,
             domain: domain.clone(),
             stream_threshold: 1.0,
             particle_mass,
+            cached_dx: dx,
+            cached_lx: lx,
+            cached_is_periodic: is_periodic,
         }
     }
 
@@ -152,17 +161,9 @@ impl SheetTracker {
         let n_cells = nx * ny * nz;
         let mut counts = vec![0u32; n_cells];
 
-        let dx = self.domain.dx();
-        let lx = [
-            self.domain.spatial.x1.to_f64().unwrap(),
-            self.domain.spatial.x2.to_f64().unwrap(),
-            self.domain.spatial.x3.to_f64().unwrap(),
-        ];
-
-        let is_periodic = matches!(
-            self.domain.spatial_bc,
-            super::super::init::domain::SpatialBoundType::Periodic
-        );
+        let dx = self.cached_dx;
+        let lx = self.cached_lx;
+        let is_periodic = self.cached_is_periodic;
 
         for p in &self.particles {
             let mut skip = false;
@@ -199,11 +200,7 @@ impl SheetTracker {
         let [nx, ny, nz] = self.shape;
         let n_cells = nx * ny * nz;
         let dx = domain.dx();
-        let lx = [
-            domain.spatial.x1.to_f64().unwrap(),
-            domain.spatial.x2.to_f64().unwrap(),
-            domain.spatial.x3.to_f64().unwrap(),
-        ];
+        let lx = domain.lx();
         let cell_vol = dx[0] * dx[1] * dx[2];
 
         let is_periodic = matches!(
@@ -343,17 +340,10 @@ impl SheetTracker {
 
     /// Find the flat spatial cell index for a position, or None if outside domain.
     fn cell_index(&self, pos: &[f64; 3]) -> Option<usize> {
-        let dx = self.domain.dx();
-        let lx = [
-            self.domain.spatial.x1.to_f64().unwrap(),
-            self.domain.spatial.x2.to_f64().unwrap(),
-            self.domain.spatial.x3.to_f64().unwrap(),
-        ];
+        let dx = self.cached_dx;
+        let lx = self.cached_lx;
         let [nx, ny, nz] = self.shape;
-        let is_periodic = matches!(
-            self.domain.spatial_bc,
-            super::super::init::domain::SpatialBoundType::Periodic
-        );
+        let is_periodic = self.cached_is_periodic;
 
         let mut ci = [0usize; 3];
         let ns = [nx, ny, nz];
@@ -396,15 +386,8 @@ impl PhaseSpaceRepr for SheetTracker {
     }
 
     fn advect_x(&mut self, _displacement: &DisplacementField, dt: f64) {
-        let is_periodic = matches!(
-            self.domain.spatial_bc,
-            super::super::init::domain::SpatialBoundType::Periodic
-        );
-        let lx = [
-            self.domain.spatial.x1.to_f64().unwrap(),
-            self.domain.spatial.x2.to_f64().unwrap(),
-            self.domain.spatial.x3.to_f64().unwrap(),
-        ];
+        let is_periodic = self.cached_is_periodic;
+        let lx = self.cached_lx;
 
         self.particles.par_iter_mut().for_each(|p| {
             for (k, &l) in lx.iter().enumerate() {
@@ -418,16 +401,9 @@ impl PhaseSpaceRepr for SheetTracker {
     }
 
     fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
-        let dx = self.domain.dx();
-        let lx = [
-            self.domain.spatial.x1.to_f64().unwrap(),
-            self.domain.spatial.x2.to_f64().unwrap(),
-            self.domain.spatial.x3.to_f64().unwrap(),
-        ];
-        let is_periodic = matches!(
-            self.domain.spatial_bc,
-            super::super::init::domain::SpatialBoundType::Periodic
-        );
+        let dx = self.cached_dx;
+        let lx = self.cached_lx;
+        let is_periodic = self.cached_is_periodic;
 
         self.particles.par_iter_mut().for_each(|p| {
             let a = Self::interpolate_vec_field(
@@ -448,7 +424,7 @@ impl PhaseSpaceRepr for SheetTracker {
 
     fn moment(&self, position: &[f64; 3], order: usize) -> Tensor {
         let indices = self.particles_in_cell(position);
-        let dx = self.domain.dx();
+        let dx = self.cached_dx;
         let cell_vol = dx[0] * dx[1] * dx[2];
 
         match order {
@@ -545,11 +521,11 @@ impl PhaseSpaceRepr for SheetTracker {
     }
 
     fn total_kinetic_energy(&self) -> f64 {
-        let mut ke = 0.0;
-        for p in &self.particles {
-            let v2 = p.v[0] * p.v[0] + p.v[1] * p.v[1] + p.v[2] * p.v[2];
-            ke += v2;
-        }
+        let ke: f64 = self
+            .particles
+            .par_iter()
+            .map(|p| p.v[0] * p.v[0] + p.v[1] * p.v[1] + p.v[2] * p.v[2])
+            .sum();
         0.5 * self.particle_mass * ke
     }
 
@@ -585,16 +561,8 @@ impl PhaseSpaceRepr for SheetTracker {
         ];
         let dx = d.dx();
         let dv = d.dv();
-        let lx = [
-            d.spatial.x1.to_f64().unwrap(),
-            d.spatial.x2.to_f64().unwrap(),
-            d.spatial.x3.to_f64().unwrap(),
-        ];
-        let lv = [
-            d.velocity.v1.to_f64().unwrap(),
-            d.velocity.v2.to_f64().unwrap(),
-            d.velocity.v3.to_f64().unwrap(),
-        ];
+        let lx = d.lx();
+        let lv = d.lv();
 
         let total_6d = nx[0] * nx[1] * nx[2] * nv[0] * nv[1] * nv[2];
         let mut data = vec![0.0f64; total_6d];

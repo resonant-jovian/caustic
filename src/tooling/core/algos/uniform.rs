@@ -8,7 +8,6 @@ use super::super::{
 };
 use super::lagrangian::{sl_shift_1d, sl_shift_1d_into};
 use rayon::prelude::*;
-use rust_decimal::prelude::ToPrimitive;
 use std::any::Any;
 
 /// Stores f on a uniform (Nx1×Nx2×Nx3×Nv1×Nv2×Nv3) grid as a flat `Vec<f64>`.
@@ -43,16 +42,8 @@ impl CachedGrid {
                 domain.velocity_res.v2 as usize,
                 domain.velocity_res.v3 as usize,
             ],
-            lx: [
-                domain.spatial.x1.to_f64().unwrap(),
-                domain.spatial.x2.to_f64().unwrap(),
-                domain.spatial.x3.to_f64().unwrap(),
-            ],
-            lv: [
-                domain.velocity.v1.to_f64().unwrap(),
-                domain.velocity.v2.to_f64().unwrap(),
-                domain.velocity.v3.to_f64().unwrap(),
-            ],
+            lx: domain.lx(),
+            lv: domain.lv(),
             dx: domain.dx(),
             dv: domain.dv(),
         }
@@ -578,36 +569,34 @@ impl PhaseSpaceRepr for UniformGrid6D {
         let dv = self.cached_dv;
         let dv23 = dv[1] * dv[2];
 
-        let mut out = vec![0u32; nx1 * nx2 * nx3];
+        let out: Vec<u32> = (0..nx1 * nx2 * nx3)
+            .into_par_iter()
+            .map(|si| {
+                let ix1 = si / (nx2 * nx3);
+                let ix2 = (si / nx3) % nx2;
+                let ix3 = si % nx3;
+                let marginal: Vec<f64> = (0..nv1)
+                    .map(|iv1| {
+                        (0..nv2 * nv3)
+                            .map(|vi23| {
+                                let iv3 = vi23 % nv3;
+                                let iv2 = vi23 / nv3;
+                                self.data[self.index([ix1, ix2, ix3], [iv1, iv2, iv3])]
+                            })
+                            .sum::<f64>()
+                            * dv23
+                    })
+                    .collect();
 
-        for ix1 in 0..nx1 {
-            for ix2 in 0..nx2 {
-                for ix3 in 0..nx3 {
-                    // Marginal f_1(v1|x) = sum_{v2,v3} f(v|x) * dv2 * dv3
-                    let marginal: Vec<f64> = (0..nv1)
-                        .map(|iv1| {
-                            (0..nv2 * nv3)
-                                .map(|vi23| {
-                                    let iv3 = vi23 % nv3;
-                                    let iv2 = vi23 / nv3;
-                                    self.data[self.index([ix1, ix2, ix3], [iv1, iv2, iv3])]
-                                })
-                                .sum::<f64>()
-                                * dv23
-                        })
-                        .collect();
-
-                    // Count peaks: cells where f[i-1] < f[i] > f[i+1]
-                    let mut peaks = 0u32;
-                    for i in 1..nv1.saturating_sub(1) {
-                        if marginal[i] > marginal[i - 1] && marginal[i] > marginal[i + 1] {
-                            peaks += 1;
-                        }
+                let mut peaks = 0u32;
+                for i in 1..nv1.saturating_sub(1) {
+                    if marginal[i] > marginal[i - 1] && marginal[i] > marginal[i + 1] {
+                        peaks += 1;
                     }
-                    out[ix1 * nx2 * nx3 + ix2 * nx3 + ix3] = peaks;
                 }
-            }
-        }
+                peaks
+            })
+            .collect();
 
         StreamCountField {
             data: out,

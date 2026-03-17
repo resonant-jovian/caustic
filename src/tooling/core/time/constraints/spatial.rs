@@ -2,7 +2,6 @@
 //! not needed for semi-Lagrangian methods.
 
 use super::super::super::init::domain::Domain;
-use rust_decimal::prelude::ToPrimitive;
 
 /// Spatial CFL timestep constraint.
 pub struct SpatialCfl {
@@ -23,9 +22,7 @@ impl SpatialCfl {
 
     /// Maximum velocity magnitude from the domain velocity extents.
     pub fn v_max(domain: &Domain) -> f64 {
-        let lv1 = domain.velocity.v1.to_f64().unwrap();
-        let lv2 = domain.velocity.v2.to_f64().unwrap();
-        let lv3 = domain.velocity.v3.to_f64().unwrap();
-        lv1.max(lv2).max(lv3)
+        let lv = domain.lv();
+        lv[0].max(lv[1]).max(lv[2])
     }
 }

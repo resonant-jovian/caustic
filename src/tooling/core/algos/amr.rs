@@ -6,7 +6,6 @@ use super::super::{
     phasespace::PhaseSpaceRepr,
     types::*,
 };
-use rust_decimal::prelude::ToPrimitive;
 use std::any::Any;
 
 /// One AMR cell in 6D phase space. Leaf cells store a value of f;
@@ -209,22 +208,18 @@ pub struct AmrGrid {
 impl AmrGrid {
     /// Create a new AmrGrid with a single root cell spanning the full 6D domain.
     pub fn new(domain: Domain, refinement_threshold: f64, max_levels: usize) -> Self {
-        let lx1 = domain.spatial.x1.to_f64().unwrap();
-        let lx2 = domain.spatial.x2.to_f64().unwrap();
-        let lx3 = domain.spatial.x3.to_f64().unwrap();
-        let lv1 = domain.velocity.v1.to_f64().unwrap();
-        let lv2 = domain.velocity.v2.to_f64().unwrap();
-        let lv3 = domain.velocity.v3.to_f64().unwrap();
+        let lx = domain.lx();
+        let lv = domain.lv();
 
         let root = AmrCell {
             center: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             size: [
-                2.0 * lx1,
-                2.0 * lx2,
-                2.0 * lx3,
-                2.0 * lv1,
-                2.0 * lv2,
-                2.0 * lv3,
+                2.0 * lx[0],
+                2.0 * lx[1],
+                2.0 * lx[2],
+                2.0 * lv[0],
+                2.0 * lv[1],
+                2.0 * lv[2],
             ],
             value: 0.0,
             children: None,
@@ -259,24 +254,19 @@ impl AmrGrid {
     }
 
     /// Helper: spatial extents as [lx1, lx2, lx3].
+    #[inline]
     fn lx(&self) -> [f64; 3] {
-        [
-            self.domain.spatial.x1.to_f64().unwrap(),
-            self.domain.spatial.x2.to_f64().unwrap(),
-            self.domain.spatial.x3.to_f64().unwrap(),
-        ]
+        self.domain.lx()
     }
 
     /// Helper: velocity extents as [lv1, lv2, lv3].
+    #[inline]
     fn lv(&self) -> [f64; 3] {
-        [
-            self.domain.velocity.v1.to_f64().unwrap(),
-            self.domain.velocity.v2.to_f64().unwrap(),
-            self.domain.velocity.v3.to_f64().unwrap(),
-        ]
+        self.domain.lv()
     }
 
     /// Helper: spatial grid sizes [nx1, nx2, nx3].
+    #[inline]
     fn nx(&self) -> [usize; 3] {
         [
             self.domain.spatial_res.x1 as usize,
@@ -286,6 +276,7 @@ impl AmrGrid {
     }
 
     /// Helper: velocity grid sizes [nv1, nv2, nv3].
+    #[inline]
     fn nv(&self) -> [usize; 3] {
         [
             self.domain.velocity_res.v1 as usize,
@@ -295,6 +286,7 @@ impl AmrGrid {
     }
 
     /// Map a spatial position to a grid index, clamped to [0, n-1].
+    #[inline]
     fn spatial_index(&self, pos: &[f64; 3]) -> [usize; 3] {
         let lx = self.lx();
         let nx = self.nx();

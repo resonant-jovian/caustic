@@ -2,7 +2,7 @@
 //! kinetic energy density, heat flux.
 
 use super::super::{init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
-use rust_decimal::prelude::ToPrimitive;
+use rayon::prelude::*;
 
 /// All velocity moments of the distribution function.
 pub struct VelocityMoments {
@@ -15,17 +15,59 @@ pub struct VelocityMoments {
 
 impl VelocityMoments {
     /// Compute all velocity moments from the distribution function.
+    ///
+    /// Parallelized over spatial cells with rayon; each cell independently
+    /// queries `repr.moment()` for first and second velocity moments.
     pub fn compute(repr: &dyn PhaseSpaceRepr, domain: &Domain) -> Self {
         let density = repr.compute_density();
         let [nx1, nx2, nx3] = density.shape;
         let n_spatial = nx1 * nx2 * nx3;
         let dx = domain.dx();
-        let lx = [
-            domain.spatial.x1.to_f64().unwrap(),
-            domain.spatial.x2.to_f64().unwrap(),
-            domain.spatial.x3.to_f64().unwrap(),
-        ];
+        let lx = domain.lx();
 
+        // Per-cell output: (mean_vel[3], disp[9], ke_density)
+        // Compute in parallel over flat spatial indices.
+        let per_cell: Vec<([f64; 3], [f64; 9], f64)> = (0..n_spatial)
+            .into_par_iter()
+            .map(|idx| {
+                let ix1 = idx / (nx2 * nx3);
+                let ix2 = (idx / nx3) % nx2;
+                let ix3 = idx % nx3;
+
+                let rho = density.data[idx];
+                if rho <= 0.0 {
+                    return ([0.0; 3], [0.0; 9], 0.0);
+                }
+
+                let x1 = -lx[0] + (ix1 as f64 + 0.5) * dx[0];
+                let x2 = -lx[1] + (ix2 as f64 + 0.5) * dx[1];
+                let x3 = -lx[2] + (ix3 as f64 + 0.5) * dx[2];
+                let pos = [x1, x2, x3];
+
+                // Order 1: mean velocity
+                let m1 = repr.moment(&pos, 1);
+                let u = [m1.data[0], m1.data[1], m1.data[2]];
+
+                // Order 2: dispersion tensor
+                let m2 = repr.moment(&pos, 2);
+                let mut d = [0.0; 9];
+                for i in 0..3 {
+                    for j in 0..3 {
+                        let raw = m2.data[i * 3 + j];
+                        d[i * 3 + j] = raw / rho - u[i] * u[j];
+                    }
+                }
+
+                // KE density
+                let trace = d[0] + d[4] + d[8];
+                let u2 = u[0] * u[0] + u[1] * u[1] + u[2] * u[2];
+                let ke = 0.5 * rho * (trace + u2);
+
+                (u, d, ke)
+            })
+            .collect();
+
+        // Scatter per-cell results into output arrays
         let mut mean_vel = [
             vec![0.0; n_spatial],
             vec![0.0; n_spatial],
@@ -33,50 +75,22 @@ impl VelocityMoments {
         ];
         let mut disp = std::array::from_fn::<Vec<f64>, 9, _>(|_| vec![0.0; n_spatial]);
         let mut ke_density = vec![0.0; n_spatial];
+
+        for (idx, (u, d, ke)) in per_cell.into_iter().enumerate() {
+            mean_vel[0][idx] = u[0];
+            mean_vel[1][idx] = u[1];
+            mean_vel[2][idx] = u[2];
+            for k in 0..9 {
+                disp[k][idx] = d[k];
+            }
+            ke_density[idx] = ke;
+        }
+
         let heat_flux = [
             vec![0.0; n_spatial],
             vec![0.0; n_spatial],
             vec![0.0; n_spatial],
         ];
-
-        for ix1 in 0..nx1 {
-            let x1 = -lx[0] + (ix1 as f64 + 0.5) * dx[0];
-            for ix2 in 0..nx2 {
-                let x2 = -lx[1] + (ix2 as f64 + 0.5) * dx[1];
-                for ix3 in 0..nx3 {
-                    let x3 = -lx[2] + (ix3 as f64 + 0.5) * dx[2];
-                    let idx = ix1 * nx2 * nx3 + ix2 * nx3 + ix3;
-                    let pos = [x1, x2, x3];
-                    let rho = density.data[idx];
-
-                    if rho <= 0.0 {
-                        continue;
-                    }
-
-                    // Order 1: mean velocity (already normalized by repr)
-                    let m1 = repr.moment(&pos, 1);
-                    let u = [m1.data[0], m1.data[1], m1.data[2]];
-                    mean_vel[0][idx] = u[0];
-                    mean_vel[1][idx] = u[1];
-                    mean_vel[2][idx] = u[2];
-
-                    // Order 2: raw second moment <f*v_i*v_j>*dv³ (unnormalized)
-                    let m2 = repr.moment(&pos, 2);
-                    // Dispersion: sigma_ij = m2_ij/rho - u_i*u_j
-                    for i in 0..3 {
-                        for j in 0..3 {
-                            let raw = m2.data[i * 3 + j];
-                            disp[i * 3 + j][idx] = raw / rho - u[i] * u[j];
-                        }
-                    }
-
-                    // KE density: 0.5 * rho * (trace(sigma) + |u|²)
-                    let trace = disp[0][idx] + disp[4][idx] + disp[8][idx];
-                    let u2 = u[0] * u[0] + u[1] * u[1] + u[2] * u[2];
-                    ke_density[idx] = 0.5 * rho * (trace + u2);
-                }
-            }
-        }
 
         Self {
             density,

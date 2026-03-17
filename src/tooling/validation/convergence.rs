@@ -12,7 +12,6 @@ fn density_integration_convergence() {
         isolated::{PlummerIC, sample_on_grid},
     };
     use crate::tooling::core::phasespace::PhaseSpaceRepr;
-    use rust_decimal::prelude::ToPrimitive;
 
     let ic = PlummerIC::new(1.0, 1.0, 1.0);
     let mut pairs = Vec::new();
@@ -41,11 +40,7 @@ fn density_integration_convergence() {
 
         let density = grid.compute_density();
         let dx = domain.dx();
-        let lx = [
-            domain.spatial.x1.to_f64().unwrap(),
-            domain.spatial.x2.to_f64().unwrap(),
-            domain.spatial.x3.to_f64().unwrap(),
-        ];
+        let lx = domain.lx();
         let [nx_d, ny_d, nz_d] = density.shape;
 
         // Analytic Plummer density: ρ(r) = (3M)/(4πa³) · (1 + r²/a²)^{-5/2}

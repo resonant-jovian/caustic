@@ -3,14 +3,56 @@
 
 use super::super::types::PhaseSpaceSnapshot;
 use super::domain::Domain;
+use rayon::prelude::*;
+use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 
 /// Cosmological parameters for Friedmann background.
 pub struct CosmologyParams {
-    pub h0: f64,
-    pub omega_m: f64,
-    pub omega_lambda: f64,
-    pub a_init: f64,
+    pub h0: Decimal,
+    pub omega_m: Decimal,
+    pub omega_lambda: Decimal,
+    pub a_init: Decimal,
+    // Cached f64 values for hot-path computation
+    h0_f64: f64,
+    omega_m_f64: f64,
+    omega_lambda_f64: f64,
+    a_init_f64: f64,
+}
+
+impl CosmologyParams {
+    /// Create from f64 parameters (backward-compatible).
+    pub fn new(h0: f64, omega_m: f64, omega_lambda: f64, a_init: f64) -> Self {
+        Self {
+            h0: Decimal::from_f64_retain(h0).unwrap(),
+            omega_m: Decimal::from_f64_retain(omega_m).unwrap(),
+            omega_lambda: Decimal::from_f64_retain(omega_lambda).unwrap(),
+            a_init: Decimal::from_f64_retain(a_init).unwrap(),
+            h0_f64: h0,
+            omega_m_f64: omega_m,
+            omega_lambda_f64: omega_lambda,
+            a_init_f64: a_init,
+        }
+    }
+
+    /// Create from Decimal parameters (exact config).
+    pub fn new_decimal(
+        h0: Decimal,
+        omega_m: Decimal,
+        omega_lambda: Decimal,
+        a_init: Decimal,
+    ) -> Self {
+        Self {
+            h0_f64: h0.to_f64().unwrap(),
+            omega_m_f64: omega_m.to_f64().unwrap(),
+            omega_lambda_f64: omega_lambda.to_f64().unwrap(),
+            a_init_f64: a_init.to_f64().unwrap(),
+            h0,
+            omega_m,
+            omega_lambda,
+            a_init,
+        }
+    }
 }
 
 /// 1D matter power spectrum P(k) for seeding perturbations.
@@ -22,22 +64,58 @@ pub struct PowerSpectrum {
 /// Zel'dovich pancake IC: cold dark matter sheet.
 /// f(x,v,t₀) = ρ̄·δ³(v − v₀(x)) where v₀ is the Zel'dovich velocity field.
 pub struct ZeldovichIC {
-    pub mean_density: f64,
-    pub h0: f64,
-    pub omega_m: f64,
-    pub omega_lambda: f64,
-    pub scale_factor_init: f64,
+    pub mean_density: Decimal,
+    pub h0: Decimal,
+    pub omega_m: Decimal,
+    pub omega_lambda: Decimal,
+    pub scale_factor_init: Decimal,
     pub random_seed: u64,
+    // Cached f64 values for hot-path computation
+    mean_density_f64: f64,
+    h0_f64: f64,
+    omega_m_f64: f64,
+    omega_lambda_f64: f64,
+    scale_factor_init_f64: f64,
 }
 
 impl ZeldovichIC {
+    /// Create from f64 parameters via CosmologyParams (backward-compatible).
     pub fn new(mean_density: f64, cosmology: CosmologyParams, seed: u64) -> Self {
         Self {
-            mean_density,
+            mean_density: Decimal::from_f64_retain(mean_density).unwrap(),
             h0: cosmology.h0,
             omega_m: cosmology.omega_m,
             omega_lambda: cosmology.omega_lambda,
             scale_factor_init: cosmology.a_init,
+            random_seed: seed,
+            mean_density_f64: mean_density,
+            h0_f64: cosmology.h0_f64,
+            omega_m_f64: cosmology.omega_m_f64,
+            omega_lambda_f64: cosmology.omega_lambda_f64,
+            scale_factor_init_f64: cosmology.a_init_f64,
+        }
+    }
+
+    /// Create from Decimal parameters (exact config).
+    pub fn new_decimal(
+        mean_density: Decimal,
+        h0: Decimal,
+        omega_m: Decimal,
+        omega_lambda: Decimal,
+        scale_factor_init: Decimal,
+        seed: u64,
+    ) -> Self {
+        Self {
+            mean_density_f64: mean_density.to_f64().unwrap(),
+            h0_f64: h0.to_f64().unwrap(),
+            omega_m_f64: omega_m.to_f64().unwrap(),
+            omega_lambda_f64: omega_lambda.to_f64().unwrap(),
+            scale_factor_init_f64: scale_factor_init.to_f64().unwrap(),
+            mean_density,
+            h0,
+            omega_m,
+            omega_lambda,
+            scale_factor_init,
             random_seed: seed,
         }
     }
@@ -77,9 +155,10 @@ impl ZeldovichIC {
         let n_total = nx * ny * nz;
 
         // Box lengths: domain is [-L, L], so total length = 2L
-        let lx = 2.0 * domain.spatial.x1.to_f64().unwrap();
-        let ly = 2.0 * domain.spatial.x2.to_f64().unwrap();
-        let lz = 2.0 * domain.spatial.x3.to_f64().unwrap();
+        let lx_half = domain.lx();
+        let lx = 2.0 * lx_half[0];
+        let ly = 2.0 * lx_half[1];
+        let lz = 2.0 * lx_half[2];
         let volume = lx * ly * lz;
 
         let dx_grid = lx / nx as f64;
@@ -255,15 +334,15 @@ impl ZeldovichIC {
     pub fn velocity_field(&self, domain: &Domain) -> [Vec<f64>; 3] {
         let [sx, sy, sz] = self.displacement_field(domain);
 
-        let a = self.scale_factor_init;
+        let a = self.scale_factor_init_f64;
         let a3 = a * a * a;
 
         // E(a) = H(a)/H0
-        let e2 = self.omega_m / a3 + self.omega_lambda;
-        let h_a = self.h0 * e2.sqrt(); // H(a)
+        let e2 = self.omega_m_f64 / a3 + self.omega_lambda_f64;
+        let h_a = self.h0_f64 * e2.sqrt(); // H(a)
 
         // Ω_m(a) at this scale factor
-        let om_a = self.omega_m / (a3 * e2);
+        let om_a = self.omega_m_f64 / (a3 * e2);
 
         // Logarithmic growth rate f ≈ Ω_m(a)^{0.55}
         let f_growth = om_a.powf(0.55);
@@ -295,15 +374,11 @@ impl ZeldovichIC {
         let nv3 = domain.velocity_res.v3 as usize;
 
         let dv = domain.dv();
-        let lv = [
-            domain.velocity.v1.to_f64().unwrap(),
-            domain.velocity.v2.to_f64().unwrap(),
-            domain.velocity.v3.to_f64().unwrap(),
-        ];
+        let lv = domain.lv();
 
         // Velocity spread: cold but resolved
         let sigma = 0.3 * dv[0].max(dv[1]).max(dv[2]);
-        let norm = self.mean_density / ((2.0 * PI).sqrt() * sigma).powi(3);
+        let norm = self.mean_density_f64 / ((2.0 * PI).sqrt() * sigma).powi(3);
 
         // Strides for row-major 6D layout [x1, x2, x3, v1, v2, v3]
         let s_v3 = 1usize;
@@ -318,34 +393,37 @@ impl ZeldovichIC {
 
         let inv_2sig2 = 1.0 / (2.0 * sigma * sigma);
 
-        for ix1 in 0..nx1 {
-            for ix2 in 0..nx2 {
-                for ix3 in 0..nx3 {
-                    let spatial_idx = ix1 * nx2 * nx3 + ix2 * nx3 + ix3;
-                    let v0x = vx0[spatial_idx];
-                    let v0y = vy0[spatial_idx];
-                    let v0z = vz0[spatial_idx];
+        // Parallelize over ix1 slabs — each slab is independent
+        data.par_chunks_mut(s_x1)
+            .enumerate()
+            .for_each(|(ix1, chunk)| {
+                for ix2 in 0..nx2 {
+                    for ix3 in 0..nx3 {
+                        let spatial_idx = ix1 * nx2 * nx3 + ix2 * nx3 + ix3;
+                        let v0x = vx0[spatial_idx];
+                        let v0y = vy0[spatial_idx];
+                        let v0z = vz0[spatial_idx];
 
-                    let base = ix1 * s_x1 + ix2 * s_x2 + ix3 * s_x3;
+                        let base = ix2 * s_x2 + ix3 * s_x3;
 
-                    for iv1 in 0..nv1 {
-                        let v1 = -lv[0] + (iv1 as f64 + 0.5) * dv[0];
-                        let dv1 = v1 - v0x;
-                        for iv2 in 0..nv2 {
-                            let v2 = -lv[1] + (iv2 as f64 + 0.5) * dv[1];
-                            let dv2 = v2 - v0y;
-                            for iv3 in 0..nv3 {
-                                let v3 = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
-                                let dv3 = v3 - v0z;
-                                let v2sq = dv1 * dv1 + dv2 * dv2 + dv3 * dv3;
-                                let f = norm * (-v2sq * inv_2sig2).exp();
-                                data[base + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3] = f;
+                        for iv1 in 0..nv1 {
+                            let v1 = -lv[0] + (iv1 as f64 + 0.5) * dv[0];
+                            let dv1 = v1 - v0x;
+                            for iv2 in 0..nv2 {
+                                let v2 = -lv[1] + (iv2 as f64 + 0.5) * dv[1];
+                                let dv2 = v2 - v0y;
+                                for iv3 in 0..nv3 {
+                                    let v3 = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
+                                    let dv3 = v3 - v0z;
+                                    let v2sq = dv1 * dv1 + dv2 * dv2 + dv3 * dv3;
+                                    let f = norm * (-v2sq * inv_2sig2).exp();
+                                    chunk[base + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3] = f;
+                                }
                             }
                         }
                     }
                 }
-            }
-        }
+            });
 
         PhaseSpaceSnapshot {
             data,
@@ -434,16 +512,8 @@ impl ZeldovichSingleMode {
 
         let dx = domain.dx();
         let dv = domain.dv();
-        let lx = [
-            domain.spatial.x1.to_f64().unwrap(),
-            domain.spatial.x2.to_f64().unwrap(),
-            domain.spatial.x3.to_f64().unwrap(),
-        ];
-        let lv = [
-            domain.velocity.v1.to_f64().unwrap(),
-            domain.velocity.v2.to_f64().unwrap(),
-            domain.velocity.v3.to_f64().unwrap(),
-        ];
+        let lx = domain.lx();
+        let lv = domain.lv();
 
         let s_v3 = 1usize;
         let s_v2 = nv3;
@@ -501,8 +571,8 @@ impl ZeldovichSingleMode {
 /// where Ω_m(a) = Ω_m / (Ω_m + Ω_Λ a³) and Ω_Λ(a) = Ω_Λ a³ / (Ω_m + Ω_Λ a³).
 /// Normalized so D(a) → a in the matter-dominated era.
 pub fn growth_factor(a: f64, params: &CosmologyParams) -> f64 {
-    let om = params.omega_m;
-    let ol = params.omega_lambda;
+    let om = params.omega_m_f64;
+    let ol = params.omega_lambda_f64;
 
     // E²(a) = Ω_m/a³ + Ω_Λ  (flat universe, Ω_k = 0)
     let a3 = a * a * a;
@@ -542,12 +612,7 @@ mod tests {
             .velocity_bc(VelocityBoundType::Open)
             .build()
             .unwrap();
-        let cosmo = CosmologyParams {
-            h0: 70.0,
-            omega_m: 0.3,
-            omega_lambda: 0.7,
-            a_init: 0.01,
-        };
+        let cosmo = CosmologyParams::new(70.0, 0.3, 0.7, 0.01);
         let ic = ZeldovichIC::new(1.0, cosmo, 42);
         let [sx, sy, sz] = ic.displacement_field(&domain);
         let n = 8 * 8 * 8;
@@ -577,12 +642,7 @@ mod tests {
             .velocity_bc(VelocityBoundType::Open)
             .build()
             .unwrap();
-        let cosmo = CosmologyParams {
-            h0: 1.0,
-            omega_m: 0.3,
-            omega_lambda: 0.7,
-            a_init: 1.0,
-        };
+        let cosmo = CosmologyParams::new(1.0, 0.3, 0.7, 1.0);
         let ic = ZeldovichIC::new(1.0, cosmo, 42);
         let snap = ic.sample_on_grid(&domain);
         assert_eq!(snap.shape, [8, 8, 8, 8, 8, 8]);
