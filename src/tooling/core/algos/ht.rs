@@ -1027,18 +1027,22 @@ impl HtTensor {
     /// Evaluate at a single 6D grid point. Cost: O(d·k³).
     #[inline]
     pub fn evaluate(&self, indices: [usize; 6]) -> f64 {
-        let root_vec = self.node_vector(ROOT, &indices);
-        debug_assert_eq!(root_vec.len(), 1);
-        root_vec[0]
+        let mut buf = [0.0f64; 256];
+        self.node_vector_into(ROOT, &indices, &mut buf);
+        buf[0]
     }
 
-    /// Contracted vector at a node for given indices.
+    /// Contracted vector at a node, writing into caller-provided buffer (no allocation).
     #[inline]
-    fn node_vector(&self, node_idx: usize, indices: &[usize; 6]) -> Vec<f64> {
+    fn node_vector_into(&self, node_idx: usize, indices: &[usize; 6], out: &mut [f64]) -> usize {
         match &self.nodes[node_idx] {
             HtNode::Leaf { dim, frame } => {
                 let row = indices[*dim];
-                (0..frame.ncols()).map(|c| frame[(row, c)]).collect()
+                let k = frame.ncols();
+                for c in 0..k {
+                    out[c] = frame[(row, c)];
+                }
+                k
             }
             HtNode::Interior {
                 left,
@@ -1047,9 +1051,20 @@ impl HtTensor {
                 ranks,
             } => {
                 let [kt, kl, kr] = *ranks;
-                let lv = self.node_vector(*left, indices);
-                let rv = self.node_vector(*right, indices);
-                contract_transfer(transfer, kt, kl, kr, &lv, &rv)
+                let mut left_buf = [0.0f64; 256];
+                let mut right_buf = [0.0f64; 256];
+                self.node_vector_into(*left, indices, &mut left_buf);
+                self.node_vector_into(*right, indices, &mut right_buf);
+                contract_transfer_into(
+                    transfer,
+                    kt,
+                    kl,
+                    kr,
+                    &left_buf[..kl],
+                    &right_buf[..kr],
+                    out,
+                );
+                kt
             }
         }
     }
@@ -1108,15 +1123,16 @@ impl HtTensor {
                 let [kt, kl, kr] = ranks;
                 let mat = vec_to_mat(&transfer, kt, kl * kr);
                 let (q, r) = qr_decompose(&mat);
-                let new_kt = q.ncols();
-                let new_transfer = mat_to_vec(&q, new_kt, kl * kr);
+                let new_kt = r.nrows();
+                let new_transfer = mat_to_vec(&r, new_kt, kl * kr);
+                let absorb = q.transpose().to_owned();
                 self.nodes[node_idx] = HtNode::Interior {
                     left,
                     right,
                     transfer: new_transfer,
                     ranks: [new_kt, kl, kr],
                 };
-                self.absorb_r_into_parent(parent_of(node_idx), node_idx, &r);
+                self.absorb_r_into_parent(parent_of(node_idx), node_idx, &absorb);
             }
             _ => {}
         }
@@ -1242,15 +1258,15 @@ impl HtTensor {
                     self.nodes[node_idx] = node;
                     return;
                 }
-                let new_t = mat_to_vec(&u, new_rank, kl * kr);
                 let sv = s_times_vt(&s, &vt, new_rank);
+                let absorb = u.subcols(0, new_rank).transpose().to_owned();
                 self.nodes[node_idx] = HtNode::Interior {
                     left,
                     right,
-                    transfer: new_t,
+                    transfer: mat_to_vec(&sv, new_rank, kl * kr),
                     ranks: [new_rank, kl, kr],
                 };
-                self.absorb_r_into_parent(parent_of(node_idx), node_idx, &sv);
+                self.absorb_r_into_parent(parent_of(node_idx), node_idx, &absorb);
             }
             other => {
                 self.nodes[node_idx] = other;
@@ -1286,13 +1302,14 @@ impl HtTensor {
                 let (u, s, vt) = thin_svd(&mat);
                 let r = max_rank.min(u.ncols());
                 let sv = s_times_vt(&s, &vt, r);
+                let absorb = u.subcols(0, r).transpose().to_owned();
                 self.nodes[node_idx] = HtNode::Interior {
                     left,
                     right,
-                    transfer: mat_to_vec(&u, r, kl * kr),
+                    transfer: mat_to_vec(&sv, r, kl * kr),
                     ranks: [r, kl, kr],
                 };
-                self.absorb_r_into_parent(parent_of(node_idx), node_idx, &sv);
+                self.absorb_r_into_parent(parent_of(node_idx), node_idx, &absorb);
             }
             other => {
                 self.nodes[node_idx] = other;
@@ -2472,15 +2489,43 @@ fn contract_transfer(
 }
 
 #[inline]
+fn contract_transfer_into(
+    t: &[f64],
+    kt: usize,
+    kl: usize,
+    kr: usize,
+    left: &[f64],
+    right: &[f64],
+    out: &mut [f64],
+) {
+    for i in 0..kt {
+        let mut sum = 0.0;
+        for j in 0..kl {
+            let lj = left[j];
+            let base = i * kl * kr + j * kr;
+            for k in 0..kr {
+                sum += t[base + k] * lj * right[k];
+            }
+        }
+        out[i] = sum;
+    }
+}
+
+#[inline]
 fn contract_leaf_weights(node: &HtNode, weights: &[f64]) -> Vec<f64> {
     let (frame, _) = leaf_data(node);
     let n = frame.nrows();
     let k = frame.ncols();
     assert_eq!(n, weights.len());
-    // Build a n×1 matrix from weights, then use faer's optimized mat-mul
-    let w = Mat::from_fn(n, 1, |i, _| weights[i]);
-    let result = frame.transpose() * &w;
-    (0..k).map(|i| result[(i, 0)]).collect()
+    (0..k)
+        .map(|c| {
+            let mut sum = 0.0;
+            for r in 0..n {
+                sum += frame[(r, c)] * weights[r];
+            }
+            sum
+        })
+        .collect()
 }
 
 // ─── Linear algebra helpers ─────────────────────────────────────────────────

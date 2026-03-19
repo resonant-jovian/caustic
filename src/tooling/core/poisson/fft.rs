@@ -141,12 +141,14 @@ impl FftPoisson {
         // --- z-axis: R2C on contiguous rows → write directly via par_chunks_mut ---
         let r2c = &self.r2c_z;
         let mut buf = vec![Complex::new(0.0, 0.0); n_total_c];
-        buf.par_chunks_mut(nz_c).enumerate().for_each(|(row, out_chunk)| {
-            let start = row * nz;
-            let mut inbuf = vec![0.0f64; nz];
-            inbuf.copy_from_slice(&input[start..start + nz]);
-            r2c.process(&mut inbuf, out_chunk).unwrap();
-        });
+        buf.par_chunks_mut(nz_c)
+            .enumerate()
+            .for_each(|(row, out_chunk)| {
+                let start = row * nz;
+                let mut inbuf = vec![0.0f64; nz];
+                inbuf.copy_from_slice(&input[start..start + nz]);
+                r2c.process(&mut inbuf, out_chunk).unwrap();
+            });
 
         // --- y-axis: C2C on half-complex grid ---
         let fft_y = &self.fwd[1];
@@ -257,11 +259,14 @@ impl FftPoisson {
 
         // Write directly via par_chunks_mut — eliminates nx*ny output vector allocations
         let mut output = vec![0.0f64; n_total_real];
-        output.par_chunks_mut(nz).enumerate().for_each(|(row, out_chunk)| {
-            let base = row * nz_c;
-            let mut inbuf = buf[base..base + nz_c].to_vec();
-            c2r.process(&mut inbuf, out_chunk).unwrap();
-        });
+        output
+            .par_chunks_mut(nz)
+            .enumerate()
+            .for_each(|(row, out_chunk)| {
+                let base = row * nz_c;
+                let mut inbuf = buf[base..base + nz_c].to_vec();
+                c2r.process(&mut inbuf, out_chunk).unwrap();
+            });
         output
     }
 }

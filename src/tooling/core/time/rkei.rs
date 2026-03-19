@@ -17,6 +17,7 @@ use super::super::{
     advecator::Advector, integrator::TimeIntegrator, phasespace::PhaseSpaceRepr,
     solver::PoissonSolver, types::*,
 };
+use rayon::prelude::*;
 
 /// RKEI: 3rd-order unsplit Runge-Kutta time integrator.
 ///
@@ -76,8 +77,8 @@ impl TimeIntegrator for RkeiIntegrator {
             let adv_snap = repr.to_snapshot(0.0);
             let combined: Vec<f64> = f_n
                 .data
-                .iter()
-                .zip(adv_snap.data.iter())
+                .par_iter()
+                .zip(adv_snap.data.par_iter())
                 .map(|(&a, &b)| 0.75 * a + 0.25 * b)
                 .collect();
             repr.load_snapshot(PhaseSpaceSnapshot {
@@ -105,8 +106,8 @@ impl TimeIntegrator for RkeiIntegrator {
             let adv_snap = repr.to_snapshot(0.0);
             let combined: Vec<f64> = f_n
                 .data
-                .iter()
-                .zip(adv_snap.data.iter())
+                .par_iter()
+                .zip(adv_snap.data.par_iter())
                 .map(|(&a, &b)| (1.0 / 3.0) * a + (2.0 / 3.0) * b)
                 .collect();
             repr.load_snapshot(PhaseSpaceSnapshot {

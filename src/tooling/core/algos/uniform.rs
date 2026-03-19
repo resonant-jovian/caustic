@@ -454,9 +454,15 @@ impl PhaseSpaceRepr for UniformGrid6D {
                 }
             }
             1 => {
-                let vc1: Vec<f64> = (0..nv1).map(|i| -lv[0] + (i as f64 + 0.5) * dv[0]).collect();
-                let vc2: Vec<f64> = (0..nv2).map(|i| -lv[1] + (i as f64 + 0.5) * dv[1]).collect();
-                let vc3: Vec<f64> = (0..nv3).map(|i| -lv[2] + (i as f64 + 0.5) * dv[2]).collect();
+                let vc1: Vec<f64> = (0..nv1)
+                    .map(|i| -lv[0] + (i as f64 + 0.5) * dv[0])
+                    .collect();
+                let vc2: Vec<f64> = (0..nv2)
+                    .map(|i| -lv[1] + (i as f64 + 0.5) * dv[1])
+                    .collect();
+                let vc3: Vec<f64> = (0..nv3)
+                    .map(|i| -lv[2] + (i as f64 + 0.5) * dv[2])
+                    .collect();
                 let base = self.index([ix1, ix2, ix3], [0, 0, 0]);
                 let block = &self.data[base..base + nv1 * nv2 * nv3];
                 let mut vbar = [0.0f64; 3];
@@ -481,9 +487,15 @@ impl PhaseSpaceRepr for UniformGrid6D {
                 }
             }
             2 => {
-                let vc1: Vec<f64> = (0..nv1).map(|i| -lv[0] + (i as f64 + 0.5) * dv[0]).collect();
-                let vc2: Vec<f64> = (0..nv2).map(|i| -lv[1] + (i as f64 + 0.5) * dv[1]).collect();
-                let vc3: Vec<f64> = (0..nv3).map(|i| -lv[2] + (i as f64 + 0.5) * dv[2]).collect();
+                let vc1: Vec<f64> = (0..nv1)
+                    .map(|i| -lv[0] + (i as f64 + 0.5) * dv[0])
+                    .collect();
+                let vc2: Vec<f64> = (0..nv2)
+                    .map(|i| -lv[1] + (i as f64 + 0.5) * dv[1])
+                    .collect();
+                let vc3: Vec<f64> = (0..nv3)
+                    .map(|i| -lv[2] + (i as f64 + 0.5) * dv[2])
+                    .collect();
                 let base = self.index([ix1, ix2, ix3], [0, 0, 0]);
                 let block = &self.data[base..base + nv1 * nv2 * nv3];
                 let mut m2 = [0.0f64; 9];

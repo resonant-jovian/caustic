@@ -446,8 +446,16 @@ impl PhaseSpaceRepr for SpectralV {
                                         _ => m0 * n_modes * n_modes + m1 * n_modes + (m2 - 1),
                                     };
                                     spatial_gradient_1d_impl(
-                                        &old_coeffs, mi_lower, dim, ix, iy, iz,
-                                        periodic, spatial_shape, n_modes, &dx,
+                                        &old_coeffs,
+                                        mi_lower,
+                                        dim,
+                                        ix,
+                                        iy,
+                                        iz,
+                                        periodic,
+                                        spatial_shape,
+                                        n_modes,
+                                        &dx,
                                     )
                                 } else {
                                     0.0
@@ -460,8 +468,16 @@ impl PhaseSpaceRepr for SpectralV {
                                         _ => m0 * n_modes * n_modes + m1 * n_modes + (m2 + 1),
                                     };
                                     spatial_gradient_1d_impl(
-                                        &old_coeffs, mi_upper, dim, ix, iy, iz,
-                                        periodic, spatial_shape, n_modes, &dx,
+                                        &old_coeffs,
+                                        mi_upper,
+                                        dim,
+                                        ix,
+                                        iy,
+                                        iz,
+                                        periodic,
+                                        spatial_shape,
+                                        n_modes,
+                                        &dx,
                                     )
                                 } else {
                                     0.0
