@@ -1,7 +1,9 @@
 //! Criterion benchmarks for hot solver kernels.
 //!
 //! Covers: density computation, advection, Poisson solvers (FFT periodic,
-//! FFT isolated, TensorPoisson), spectral acceleration, full timesteps,
+//! FFT isolated, TensorPoisson, Multigrid, TreePoisson, SphericalHarmonics),
+//! spectral acceleration, full timesteps (Strang, Yoshida, RKEI),
+//! conservation (KFVS, LoMaC, extract_moments),
 //! and HT tensor operations at multiple grid sizes.
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
@@ -10,7 +12,9 @@ use caustic::prelude::*;
 use caustic::tooling::core::algos::lagrangian::sl_shift_1d;
 use caustic::tooling::core::algos::uniform::UniformGrid6D;
 use caustic::{
-    FftIsolated, FftPoisson, PlummerIC, SemiLagrangian, StrangSplitting, TensorPoisson,
+    FftIsolated, FftPoisson, KfvsSolver, LoMaC, Multigrid, PlummerIC, RkeiIntegrator,
+    SemiLagrangian, SphericalHarmonicsPoisson, StrangSplitting, TensorPoisson, TreePoisson,
+    YoshidaSplitting,
 };
 
 fn make_plummer_grid(nx: i128, nv: i128) -> (UniformGrid6D, Domain) {
@@ -43,6 +47,36 @@ fn make_isolated_domain(nx: i128, nv: i128) -> Domain {
         .unwrap()
 }
 
+/// Create a Maxwellian 6D distribution for conservation benchmarks.
+fn make_maxwellian_6d(
+    spatial_shape: [usize; 3],
+    velocity_shape: [usize; 3],
+    dv: [f64; 3],
+    v_min: [f64; 3],
+) -> Vec<f64> {
+    let [nx, ny, nz] = spatial_shape;
+    let [nv1, nv2, nv3] = velocity_shape;
+    let n_spatial = nx * ny * nz;
+    let n_vel = nv1 * nv2 * nv3;
+
+    let mut f = vec![0.0; n_spatial * n_vel];
+    for ix in 0..n_spatial {
+        for iv1 in 0..nv1 {
+            for iv2 in 0..nv2 {
+                for iv3 in 0..nv3 {
+                    let iv = iv1 * nv2 * nv3 + iv2 * nv3 + iv3;
+                    let v1 = v_min[0] + (iv1 as f64 + 0.5) * dv[0];
+                    let v2 = v_min[1] + (iv2 as f64 + 0.5) * dv[1];
+                    let v3 = v_min[2] + (iv3 as f64 + 0.5) * dv[2];
+                    let v2_total = v1 * v1 + v2 * v2 + v3 * v3;
+                    f[ix * n_vel + iv] = (-v2_total / 2.0).exp();
+                }
+            }
+        }
+    }
+    f
+}
+
 // ─── Density computation ────────────────────────────────────────────────────
 
 fn bench_compute_density(c: &mut Criterion) {
@@ -64,7 +98,7 @@ fn bench_compute_density(c: &mut Criterion) {
 
 fn bench_advect_x(c: &mut Criterion) {
     let mut group = c.benchmark_group("advect_x");
-    for &(nx, nv) in &[(8i128, 8i128), (16, 8)] {
+    for &(nx, nv) in &[(8i128, 8i128), (16, 8), (16, 16)] {
         let (mut grid, _) = make_plummer_grid(nx, nv);
         let dummy = DisplacementField {
             dx: vec![],
@@ -85,7 +119,7 @@ fn bench_advect_x(c: &mut Criterion) {
 
 fn bench_advect_v(c: &mut Criterion) {
     let mut group = c.benchmark_group("advect_v");
-    for &(nx, nv) in &[(8i128, 8i128), (16, 8)] {
+    for &(nx, nv) in &[(8i128, 8i128), (16, 8), (16, 16)] {
         let (mut grid, domain) = make_plummer_grid(nx, nv);
         let poisson = FftPoisson::new(&domain);
         let density = grid.compute_density();
@@ -155,6 +189,61 @@ fn bench_tensor_poisson(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_multigrid(c: &mut Criterion) {
+    let mut group = c.benchmark_group("multigrid");
+    group.sample_size(10);
+    for &n in &[8i128, 16, 32] {
+        let (grid, domain) = make_plummer_grid(n, 4);
+        let density = grid.compute_density();
+        let mg = Multigrid::new(&domain, 4, 3);
+        group.bench_with_input(BenchmarkId::new("N", n), &(density, mg), |b, (d, mg)| {
+            b.iter(|| mg.solve(d, 1.0));
+        });
+    }
+    group.finish();
+}
+
+fn bench_tree_poisson(c: &mut Criterion) {
+    let mut group = c.benchmark_group("tree_poisson");
+    group.sample_size(10);
+    for &n in &[8i128, 16] {
+        let domain = make_isolated_domain(n, 4);
+        let ic = PlummerIC::new(1.0, 1.0, 1.0);
+        let snap = caustic::tooling::core::init::isolated::sample_on_grid(&ic, &domain);
+        let grid = UniformGrid6D::from_snapshot(snap, domain.clone());
+        let density = grid.compute_density();
+        let tree = TreePoisson::new(domain, 0.7);
+        group.bench_with_input(
+            BenchmarkId::new("N", n),
+            &(density, tree),
+            |b, (d, t)| {
+                b.iter(|| t.solve(d, 1.0));
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_spherical_poisson(c: &mut Criterion) {
+    let mut group = c.benchmark_group("spherical_poisson");
+    group.sample_size(10);
+    for &n in &[8i128, 16] {
+        let (grid, domain) = make_plummer_grid(n, 4);
+        let density = grid.compute_density();
+        let dx = domain.dx();
+        let shape = [n as usize; 3];
+        let solver = SphericalHarmonicsPoisson::new(4, 32, shape, dx);
+        group.bench_with_input(
+            BenchmarkId::new("N", n),
+            &(density, solver),
+            |b, (d, s)| {
+                b.iter(|| s.solve(d, 1.0));
+            },
+        );
+    }
+    group.finish();
+}
+
 // ─── Spectral acceleration (compute_acceleration) ───────────────────────────
 
 fn bench_compute_acceleration(c: &mut Criterion) {
@@ -179,12 +268,54 @@ fn bench_compute_acceleration(c: &mut Criterion) {
 
 fn bench_full_timestep(c: &mut Criterion) {
     let mut group = c.benchmark_group("full_timestep");
-    for &(nx, nv) in &[(8i128, 8i128), (16, 8)] {
+    for &(nx, nv) in &[(8i128, 8i128), (16, 8), (16, 16)] {
         let (grid, domain) = make_plummer_grid(nx, nv);
         let poisson = FftPoisson::new(&domain);
         let advector = SemiLagrangian::new();
         let mut integrator = StrangSplitting::new(1.0);
         let mut grid = grid;
+        group.bench_with_input(
+            BenchmarkId::new("grid", format!("{}x{}", nx, nv)),
+            &(),
+            |b, _| {
+                b.iter(|| {
+                    integrator.advance(&mut grid, &poisson, &advector, 0.01);
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_yoshida_timestep(c: &mut Criterion) {
+    let mut group = c.benchmark_group("yoshida_timestep");
+    group.sample_size(10);
+    for &(nx, nv) in &[(8i128, 8i128)] {
+        let (mut grid, domain) = make_plummer_grid(nx, nv);
+        let poisson = FftPoisson::new(&domain);
+        let advector = SemiLagrangian::new();
+        let mut integrator = YoshidaSplitting::new(1.0);
+        group.bench_with_input(
+            BenchmarkId::new("grid", format!("{}x{}", nx, nv)),
+            &(),
+            |b, _| {
+                b.iter(|| {
+                    integrator.advance(&mut grid, &poisson, &advector, 0.01);
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_rkei_timestep(c: &mut Criterion) {
+    let mut group = c.benchmark_group("rkei_timestep");
+    group.sample_size(10);
+    for &(nx, nv) in &[(8i128, 8i128)] {
+        let (mut grid, domain) = make_plummer_grid(nx, nv);
+        let poisson = FftPoisson::new(&domain);
+        let advector = SemiLagrangian::new();
+        let mut integrator = RkeiIntegrator::new(1.0);
         group.bench_with_input(
             BenchmarkId::new("grid", format!("{}x{}", nx, nv)),
             &(),
@@ -283,6 +414,82 @@ fn bench_ht_truncation(c: &mut Criterion) {
     group.finish();
 }
 
+// ─── Conservation framework ─────────────────────────────────────────────────
+
+fn bench_extract_moments(c: &mut Criterion) {
+    let mut group = c.benchmark_group("extract_moments");
+    for &(ns, nv) in &[(8usize, 4usize), (16, 4)] {
+        let spatial_shape = [ns, ns, ns];
+        let velocity_shape = [nv, nv, nv];
+        let dv = [1.0; 3];
+        let v_min = [-2.0; 3];
+        let f = make_maxwellian_6d(spatial_shape, velocity_shape, dv, v_min);
+        group.bench_with_input(
+            BenchmarkId::new("grid", format!("{}x{}", ns, nv)),
+            &f,
+            |b, f| {
+                b.iter(|| {
+                    caustic::conservative_svd::extract_moments(
+                        f,
+                        spatial_shape,
+                        velocity_shape,
+                        dv,
+                        v_min,
+                    )
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_kfvs_step(c: &mut Criterion) {
+    let mut group = c.benchmark_group("kfvs_step");
+    for &ns in &[8usize, 16] {
+        let shape = [ns, ns, ns];
+        let dx = [0.5; 3];
+        let n = ns * ns * ns;
+        let mut solver = KfvsSolver::new(shape, dx);
+        // Initialize uniform thermal state
+        for s in &mut solver.state {
+            s.density = 1.0;
+            s.momentum = [0.1, 0.0, 0.0];
+            s.energy = 1.5;
+        }
+        let acc = vec![[0.0; 3]; n];
+        group.bench_with_input(BenchmarkId::new("N", ns), &acc, |b, acc| {
+            b.iter(|| solver.step(0.01, acc));
+        });
+    }
+    group.finish();
+}
+
+fn bench_lomac_projection(c: &mut Criterion) {
+    let mut group = c.benchmark_group("lomac_projection");
+    let spatial = [4usize, 4, 4];
+    let velocity = [4usize, 4, 4];
+    let dx = [0.5; 3];
+    let dv = [1.0; 3];
+    let v_min = [-2.0; 3];
+    let f = make_maxwellian_6d(spatial, velocity, dv, v_min);
+    let mut lomac = LoMaC::new(spatial, velocity, dx, dv, v_min);
+    lomac.initialize_from_kinetic(&f);
+
+    // Perturb f to simulate truncation
+    let f_damaged: Vec<f64> = f
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| v * (1.0 + 0.2 * (i as f64 * 1.3).sin()))
+        .collect();
+
+    group.bench_function("4x4", |b| {
+        b.iter(|| lomac.project(&f_damaged));
+    });
+    group.finish();
+}
+
+// ─── Criterion group registration ───────────────────────────────────────────
+
 criterion_group!(
     benches,
     bench_compute_density,
@@ -291,10 +498,18 @@ criterion_group!(
     bench_fft_poisson,
     bench_fft_isolated,
     bench_tensor_poisson,
+    bench_multigrid,
+    bench_tree_poisson,
+    bench_spherical_poisson,
     bench_compute_acceleration,
     bench_full_timestep,
+    bench_yoshida_timestep,
+    bench_rkei_timestep,
     bench_catmull_rom,
     bench_ht_construction,
     bench_ht_truncation,
+    bench_extract_moments,
+    bench_kfvs_step,
+    bench_lomac_projection,
 );
 criterion_main!(benches);

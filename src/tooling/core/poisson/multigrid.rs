@@ -75,6 +75,8 @@ fn idx(ix: usize, iy: usize, iz: usize, shape: [usize; 3]) -> usize {
 /// Red-black Gauss-Seidel smoothing on the 7-point discrete Laplacian.
 ///
 /// Updates `phi` in-place using `n_sweeps` full sweeps (each sweep = red then black pass).
+/// Each parity pass is parallelized: red cells depend only on black neighbors and vice versa,
+/// so all cells of one color can be updated simultaneously.
 fn smooth_red_black(
     phi: &mut [f64],
     rhs: &[f64],
@@ -84,6 +86,7 @@ fn smooth_red_black(
     bc: &SpatialBoundType,
 ) {
     let [nx, ny, nz] = shape;
+    let n_total = nx * ny * nz;
     let inv_dx2_x = 1.0 / (dx[0] * dx[0]);
     let inv_dx2_y = 1.0 / (dx[1] * dx[1]);
     let inv_dx2_z = 1.0 / (dx[2] * dx[2]);
@@ -91,81 +94,67 @@ fn smooth_red_black(
 
     let is_periodic = matches!(bc, SpatialBoundType::Periodic);
 
+    // Pre-compute flat indices for each parity
+    let mut red_indices = Vec::new();
+    let mut black_indices = Vec::new();
+    for flat in 0..n_total {
+        let ix = flat / (ny * nz);
+        let iy = (flat / nz) % ny;
+        let iz = flat % nz;
+        if (ix + iy + iz) % 2 == 0 {
+            red_indices.push(flat);
+        } else {
+            black_indices.push(flat);
+        }
+    }
+    let parity_sets = [&red_indices, &black_indices];
+
     for _sweep in 0..n_sweeps {
-        // Two passes: parity 0 (red) then parity 1 (black)
-        for parity in 0..2u8 {
-            for ix in 0..nx {
-                for iy in 0..ny {
-                    for iz in 0..nz {
-                        if ((ix + iy + iz) % 2) as u8 != parity {
-                            continue;
-                        }
+        for indices in &parity_sets {
+            // Collect-then-write: compute new values in parallel, then write back sequentially.
+            // This avoids unsafe while maintaining the red-black correctness guarantee.
+            let new_values: Vec<(usize, f64)> = indices
+                .par_iter()
+                .map(|&flat| {
+                    let ix = flat / (ny * nz);
+                    let iy = (flat / nz) % ny;
+                    let iz = flat % nz;
 
-                        let i = idx(ix, iy, iz, shape);
+                    let (phi_xm, phi_xp, phi_ym, phi_yp, phi_zm, phi_zp);
 
-                        // Fetch neighbors with boundary handling
-                        let phi_xm;
-                        let phi_xp;
-                        let phi_ym;
-                        let phi_yp;
-                        let phi_zm;
-                        let phi_zp;
+                    if is_periodic {
+                        let ixm = if ix == 0 { nx - 1 } else { ix - 1 };
+                        let ixp = if ix == nx - 1 { 0 } else { ix + 1 };
+                        let iym = if iy == 0 { ny - 1 } else { iy - 1 };
+                        let iyp = if iy == ny - 1 { 0 } else { iy + 1 };
+                        let izm = if iz == 0 { nz - 1 } else { iz - 1 };
+                        let izp = if iz == nz - 1 { 0 } else { iz + 1 };
 
-                        if is_periodic {
-                            let ixm = if ix == 0 { nx - 1 } else { ix - 1 };
-                            let ixp = if ix == nx - 1 { 0 } else { ix + 1 };
-                            let iym = if iy == 0 { ny - 1 } else { iy - 1 };
-                            let iyp = if iy == ny - 1 { 0 } else { iy + 1 };
-                            let izm = if iz == 0 { nz - 1 } else { iz - 1 };
-                            let izp = if iz == nz - 1 { 0 } else { iz + 1 };
-
-                            phi_xm = phi[idx(ixm, iy, iz, shape)];
-                            phi_xp = phi[idx(ixp, iy, iz, shape)];
-                            phi_ym = phi[idx(ix, iym, iz, shape)];
-                            phi_yp = phi[idx(ix, iyp, iz, shape)];
-                            phi_zm = phi[idx(ix, iy, izm, shape)];
-                            phi_zp = phi[idx(ix, iy, izp, shape)];
-                        } else {
-                            // Dirichlet zero BC: boundary neighbors are 0
-                            phi_xm = if ix > 0 {
-                                phi[idx(ix - 1, iy, iz, shape)]
-                            } else {
-                                0.0
-                            };
-                            phi_xp = if ix < nx - 1 {
-                                phi[idx(ix + 1, iy, iz, shape)]
-                            } else {
-                                0.0
-                            };
-                            phi_ym = if iy > 0 {
-                                phi[idx(ix, iy - 1, iz, shape)]
-                            } else {
-                                0.0
-                            };
-                            phi_yp = if iy < ny - 1 {
-                                phi[idx(ix, iy + 1, iz, shape)]
-                            } else {
-                                0.0
-                            };
-                            phi_zm = if iz > 0 {
-                                phi[idx(ix, iy, iz - 1, shape)]
-                            } else {
-                                0.0
-                            };
-                            phi_zp = if iz < nz - 1 {
-                                phi[idx(ix, iy, iz + 1, shape)]
-                            } else {
-                                0.0
-                            };
-                        }
-
-                        let sum_neighbors = (phi_xm + phi_xp) * inv_dx2_x
-                            + (phi_ym + phi_yp) * inv_dx2_y
-                            + (phi_zm + phi_zp) * inv_dx2_z;
-
-                        phi[i] = (sum_neighbors - rhs[i]) / diag;
+                        phi_xm = phi[idx(ixm, iy, iz, shape)];
+                        phi_xp = phi[idx(ixp, iy, iz, shape)];
+                        phi_ym = phi[idx(ix, iym, iz, shape)];
+                        phi_yp = phi[idx(ix, iyp, iz, shape)];
+                        phi_zm = phi[idx(ix, iy, izm, shape)];
+                        phi_zp = phi[idx(ix, iy, izp, shape)];
+                    } else {
+                        phi_xm = if ix > 0 { phi[idx(ix - 1, iy, iz, shape)] } else { 0.0 };
+                        phi_xp = if ix < nx - 1 { phi[idx(ix + 1, iy, iz, shape)] } else { 0.0 };
+                        phi_ym = if iy > 0 { phi[idx(ix, iy - 1, iz, shape)] } else { 0.0 };
+                        phi_yp = if iy < ny - 1 { phi[idx(ix, iy + 1, iz, shape)] } else { 0.0 };
+                        phi_zm = if iz > 0 { phi[idx(ix, iy, iz - 1, shape)] } else { 0.0 };
+                        phi_zp = if iz < nz - 1 { phi[idx(ix, iy, iz + 1, shape)] } else { 0.0 };
                     }
-                }
+
+                    let sum_neighbors = (phi_xm + phi_xp) * inv_dx2_x
+                        + (phi_ym + phi_yp) * inv_dx2_y
+                        + (phi_zm + phi_zp) * inv_dx2_z;
+
+                    (flat, (sum_neighbors - rhs[flat]) / diag)
+                })
+                .collect();
+
+            for (flat, val) in new_values {
+                phi[flat] = val;
             }
         }
     }
@@ -433,9 +422,9 @@ fn v_cycle(
 
     // Prolongate correction to fine grid and add to phi
     let correction = prolongate(&e_coarse, coarse_shape, shape);
-    for i in 0..phi.len() {
-        phi[i] += correction[i];
-    }
+    phi.par_iter_mut()
+        .zip(correction.par_iter())
+        .for_each(|(p, &c)| *p += c);
 
     // Post-smoothing
     smooth_red_black(phi, rhs, shape, dx, n_post, bc);

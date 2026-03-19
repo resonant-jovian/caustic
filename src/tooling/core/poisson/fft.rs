@@ -10,6 +10,9 @@ use realfft::RealFftPlanner;
 use rustfft::{FftPlanner, num_complex::Complex};
 use std::sync::Arc;
 
+/// Three-component complex slab (gx, gy, gz) for spectral differentiation.
+type ComplexSlab = (Vec<Complex<f64>>, Vec<Complex<f64>>, Vec<Complex<f64>>);
+
 // ─── Shared 3D FFT with precomputed plans ──────────────────────────────────
 
 /// Perform a full complex 3D FFT using precomputed plans.
@@ -318,13 +321,13 @@ impl PoissonSolver for FftPoisson {
                     let iy = row % ny;
                     let kx = Self::wavenumber(ix, nx, dx[0]);
                     let ky = Self::wavenumber(iy, ny, dx[1]);
-                    for iz in 0..nz_c {
+                    for (iz, c) in chunk.iter_mut().enumerate() {
                         let kz = 2.0 * std::f64::consts::PI * iz as f64 / (nz as f64 * dx[2]);
                         let k2 = kx * kx + ky * ky + kz * kz;
                         if k2 == 0.0 {
-                            chunk[iz] = Complex::new(0.0, 0.0);
+                            *c = Complex::new(0.0, 0.0);
                         } else {
-                            chunk[iz] *= -4.0 * PI * g / k2;
+                            *c *= -4.0 * PI * g / k2;
                         }
                     }
                 });
@@ -358,7 +361,7 @@ impl PoissonSolver for FftPoisson {
         let dx = self.dx;
         let slab_size = ny * nz;
 
-        let slabs: Vec<(Vec<Complex<f64>>, Vec<Complex<f64>>, Vec<Complex<f64>>)> = (0..nx)
+        let slabs: Vec<ComplexSlab> = (0..nx)
             .into_par_iter()
             .map(|ix| {
                 let kx = Self::wavenumber(ix, nx, dx[0]);
@@ -465,7 +468,7 @@ impl FftIsolated {
                 } else {
                     iy as f64 - ny2 as f64
                 } * dx[1];
-                for iz in 0..nz2 {
+                for (iz, c) in chunk.iter_mut().enumerate() {
                     let rz = if iz <= nz {
                         iz as f64
                     } else {
@@ -473,11 +476,11 @@ impl FftIsolated {
                     } * dx[2];
                     let r = (rx * rx + ry * ry + rz * rz).sqrt();
                     if r > 1e-30 {
-                        chunk[iz] = Complex::new(-1.0 / (4.0 * PI * r), 0.0);
+                        *c = Complex::new(-1.0 / (4.0 * PI * r), 0.0);
                     } else {
                         // Regularized self-potential: G(0) ≈ -2.38·dx/(4π)
                         let dx_avg = (dx[0] + dx[1] + dx[2]) / 3.0;
-                        chunk[iz] = Complex::new(-2.38 * dx_avg / (4.0 * PI), 0.0);
+                        *c = Complex::new(-2.38 * dx_avg / (4.0 * PI), 0.0);
                     }
                 }
             });
@@ -512,8 +515,8 @@ impl PoissonSolver for FftIsolated {
                 let ix = row / ny2;
                 let iy = row % ny2;
                 if ix < nx && iy < ny {
-                    for iz in 0..nz {
-                        chunk[iz] = Complex::new(density.data[ix * ny * nz + iy * nz + iz], 0.0);
+                    for (iz, c) in chunk.iter_mut().take(nz).enumerate() {
+                        *c = Complex::new(density.data[ix * ny * nz + iy * nz + iz], 0.0);
                     }
                 }
             });

@@ -182,46 +182,43 @@ pub fn extract_moments(
     dv: [f64; 3],
     v_min: [f64; 3],
 ) -> Vec<MacroState> {
-    let [nx, ny, nz] = spatial_shape;
     let [nv1, nv2, nv3] = velocity_shape;
-    let n_spatial = nx * ny * nz;
     let n_vel = nv1 * nv2 * nv3;
     let dv3 = dv[0] * dv[1] * dv[2];
 
-    let mut moments = Vec::with_capacity(n_spatial);
+    // Pre-compute 1D velocity coordinate arrays to avoid redundant arithmetic
+    let v1_coords: Vec<f64> = (0..nv1).map(|i| v_min[0] + (i as f64 + 0.5) * dv[0]).collect();
+    let v2_coords: Vec<f64> = (0..nv2).map(|i| v_min[1] + (i as f64 + 0.5) * dv[1]).collect();
+    let v3_coords: Vec<f64> = (0..nv3).map(|i| v_min[2] + (i as f64 + 0.5) * dv[2]).collect();
 
-    for ix in 0..n_spatial {
-        let f_offset = ix * n_vel;
-        let mut rho = 0.0;
-        let mut mom = [0.0f64; 3];
-        let mut energy = 0.0;
+    f.par_chunks(n_vel)
+        .map(|cell| {
+            let mut rho = 0.0;
+            let mut mom = [0.0f64; 3];
+            let mut energy = 0.0;
 
-        for iv1 in 0..nv1 {
-            for iv2 in 0..nv2 {
-                for iv3 in 0..nv3 {
-                    let iv = iv1 * nv2 * nv3 + iv2 * nv3 + iv3;
-                    let fval = f[f_offset + iv];
-                    let v1 = v_min[0] + (iv1 as f64 + 0.5) * dv[0];
-                    let v2 = v_min[1] + (iv2 as f64 + 0.5) * dv[1];
-                    let v3 = v_min[2] + (iv3 as f64 + 0.5) * dv[2];
+            for (iv1, &v1) in v1_coords.iter().enumerate() {
+                for (iv2, &v2) in v2_coords.iter().enumerate() {
+                    for (iv3, &v3) in v3_coords.iter().enumerate() {
+                        let iv = iv1 * nv2 * nv3 + iv2 * nv3 + iv3;
+                        let fval = cell[iv];
 
-                    rho += fval * dv3;
-                    mom[0] += fval * v1 * dv3;
-                    mom[1] += fval * v2 * dv3;
-                    mom[2] += fval * v3 * dv3;
-                    energy += 0.5 * fval * (v1 * v1 + v2 * v2 + v3 * v3) * dv3;
+                        rho += fval * dv3;
+                        mom[0] += fval * v1 * dv3;
+                        mom[1] += fval * v2 * dv3;
+                        mom[2] += fval * v3 * dv3;
+                        energy += 0.5 * fval * (v1 * v1 + v2 * v2 + v3 * v3) * dv3;
+                    }
                 }
             }
-        }
 
-        moments.push(MacroState {
-            density: rho,
-            momentum: mom,
-            energy,
-        });
-    }
-
-    moments
+            MacroState {
+                density: rho,
+                momentum: mom,
+                energy,
+            }
+        })
+        .collect()
 }
 
 /// Invert a 5×5 matrix using Gaussian elimination with partial pivoting.
