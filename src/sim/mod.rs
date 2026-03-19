@@ -110,12 +110,21 @@ impl Simulation {
             .cloned()
             .unwrap_or_default();
 
+        // Extend sub_step tracking to include post-advance phases
+        if let Some(ref p) = self.progress {
+            let snap = p.read();
+            let post_count: u8 = 2 + u8::from(self.lomac.is_some());
+            p.set_sub_step(snap.sub_step, snap.sub_step_total + post_count);
+        }
+
         // LoMaC conservation projection: advance macroscopic state in sync
         // with kinetic, then project f to restore exact moments.
         if self.lomac.is_some()
             && let Some(ref p) = self.progress
         {
+            let sub = p.read().sub_step;
             p.set_phase(StepPhase::LoMaC);
+            p.set_sub_step(sub + 1, p.read().sub_step_total);
         }
         if let Some(ref mut lomac) = self.lomac {
             let t0 = std::time::Instant::now();
@@ -176,10 +185,21 @@ impl Simulation {
 
         // Post-advance density computation (for diagnostics + caching)
         if let Some(ref p) = self.progress {
+            let sub = p.read().sub_step;
             p.set_phase(StepPhase::PostDensity);
+            p.set_sub_step(sub + 1, p.read().sub_step_total);
         }
         let t0 = std::time::Instant::now();
-        let density = self.repr.compute_density();
+        // When LoMaC is active, the post-projection density equals the KFVS
+        // target density by construction, so skip the redundant compute_density().
+        let density = if let Some(ref lomac) = self.lomac {
+            DensityField {
+                data: lomac.kfvs.state.iter().map(|m| m.density).collect(),
+                shape: lomac.spatial_shape,
+            }
+        } else {
+            self.repr.compute_density()
+        };
         let potential = self.poisson.solve(&density, self.g);
         timings.density_ms += t0.elapsed().as_secs_f64() * 1000.0;
 
@@ -190,7 +210,9 @@ impl Simulation {
         self.cached_rho_max = Some(density.data.iter().cloned().fold(0.0_f64, f64::max));
 
         if let Some(ref p) = self.progress {
+            let sub = p.read().sub_step;
             p.set_phase(StepPhase::Diagnostics);
+            p.set_sub_step(sub + 1, p.read().sub_step_total);
         }
         let t0 = std::time::Instant::now();
         let diag = self.diagnostics.compute_with_density(

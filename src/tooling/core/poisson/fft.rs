@@ -42,6 +42,9 @@ pub struct FftPoisson {
     // Cached C2C plans: used for y/x in R2C path and full-complex (compute_acceleration)
     fwd: [Arc<dyn rustfft::Fft<f64>>; 3],
     inv: [Arc<dyn rustfft::Fft<f64>>; 3],
+    /// Cached scratch buffer for FFT transposes. Avoids per-call allocation.
+    /// Protected by Mutex for interior mutability (PoissonSolver::solve takes &self).
+    scratch_cache: std::sync::Mutex<Vec<Complex<f64>>>,
 }
 
 impl FftPoisson {
@@ -77,6 +80,7 @@ impl FftPoisson {
             c2r_z,
             fwd,
             inv,
+            scratch_cache: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -112,38 +116,32 @@ impl FftPoisson {
                 r2c.process(&mut inbuf, out_chunk).unwrap();
             });
 
-        // --- y-axis: C2C via transpose on half-complex grid ---
-        let mut scratch = vec![Complex::new(0.0, 0.0); n_total_c];
-        // Transpose buf(x,y,zc) → scratch(x,zc,y)
-        scratch
+        // Take cached scratch (avoids per-call allocation)
+        let mut scratch = std::mem::take(&mut *self.scratch_cache.lock().unwrap());
+        scratch.resize(n_total_c, Complex::new(0.0, 0.0));
+
+        // --- y-axis: C2C via tiled transpose on half-complex grid ---
+        scratch[..n_total_c]
             .par_chunks_mut(nz_c * ny)
             .enumerate()
             .for_each(|(ix, slab)| {
-                for iz in 0..nz_c {
-                    for iy in 0..ny {
-                        slab[iz * ny + iy] = buf[ix * ny * nz_c + iy * nz_c + iz];
-                    }
-                }
+                let src = &buf[ix * ny * nz_c..(ix + 1) * ny * nz_c];
+                super::fft_utils::transpose_tiled(src, slab, ny, nz_c);
             });
         scratch[..nx * nz_c * ny]
             .par_chunks_mut(ny)
             .for_each(|row| {
                 self.fwd[1].process(row);
             });
-        // Transpose back
         buf.par_chunks_mut(ny * nz_c)
             .enumerate()
             .for_each(|(ix, slab)| {
-                for iz in 0..nz_c {
-                    for iy in 0..ny {
-                        slab[iy * nz_c + iz] = scratch[ix * nz_c * ny + iz * ny + iy];
-                    }
-                }
+                let src = &scratch[ix * nz_c * ny..(ix + 1) * nz_c * ny];
+                super::fft_utils::transpose_tiled(src, slab, nz_c, ny);
             });
 
         // --- x-axis: C2C via transpose on half-complex grid ---
-        // Transpose buf(x,y,zc) → scratch(y,zc,x)
-        scratch
+        scratch[..n_total_c]
             .par_chunks_mut(nz_c * nx)
             .enumerate()
             .for_each(|(iy, slab)| {
@@ -158,7 +156,6 @@ impl FftPoisson {
             .for_each(|row| {
                 self.fwd[0].process(row);
             });
-        // Transpose back
         buf.par_chunks_mut(ny * nz_c)
             .enumerate()
             .for_each(|(ix, slab)| {
@@ -169,6 +166,9 @@ impl FftPoisson {
                 }
             });
 
+        // Return scratch to cache
+        *self.scratch_cache.lock().unwrap() = scratch;
+
         buf
     }
 
@@ -178,11 +178,13 @@ impl FftPoisson {
         let [nx, ny, nz] = self.shape;
         let nz_c = nz / 2 + 1;
 
-        // --- x-axis: C2C inverse via transpose ---
+        // Take cached scratch (avoids per-call allocation)
         let n_total_c = nx * ny * nz_c;
-        let mut scratch = vec![Complex::new(0.0, 0.0); n_total_c];
-        // Transpose buf(x,y,zc) → scratch(y,zc,x)
-        scratch
+        let mut scratch = std::mem::take(&mut *self.scratch_cache.lock().unwrap());
+        scratch.resize(n_total_c, Complex::new(0.0, 0.0));
+
+        // --- x-axis: C2C inverse via transpose ---
+        scratch[..n_total_c]
             .par_chunks_mut(nz_c * nx)
             .enumerate()
             .for_each(|(iy, slab)| {
@@ -197,7 +199,6 @@ impl FftPoisson {
             .for_each(|row| {
                 self.inv[0].process(row);
             });
-        // Transpose back
         buf.par_chunks_mut(ny * nz_c)
             .enumerate()
             .for_each(|(ix, slab)| {
@@ -208,32 +209,24 @@ impl FftPoisson {
                 }
             });
 
-        // --- y-axis: C2C inverse via transpose ---
-        // Transpose buf(x,y,zc) → scratch(x,zc,y)
-        scratch
+        // --- y-axis: C2C inverse via tiled transpose ---
+        scratch[..n_total_c]
             .par_chunks_mut(nz_c * ny)
             .enumerate()
             .for_each(|(ix, slab)| {
-                for iz in 0..nz_c {
-                    for iy in 0..ny {
-                        slab[iz * ny + iy] = buf[ix * ny * nz_c + iy * nz_c + iz];
-                    }
-                }
+                let src = &buf[ix * ny * nz_c..(ix + 1) * ny * nz_c];
+                super::fft_utils::transpose_tiled(src, slab, ny, nz_c);
             });
         scratch[..nx * nz_c * ny]
             .par_chunks_mut(ny)
             .for_each(|row| {
                 self.inv[1].process(row);
             });
-        // Transpose back
         buf.par_chunks_mut(ny * nz_c)
             .enumerate()
             .for_each(|(ix, slab)| {
-                for iz in 0..nz_c {
-                    for iy in 0..ny {
-                        slab[iy * nz_c + iz] = scratch[ix * nz_c * ny + iz * ny + iy];
-                    }
-                }
+                let src = &scratch[ix * nz_c * ny..(ix + 1) * nz_c * ny];
+                super::fft_utils::transpose_tiled(src, slab, nz_c, ny);
             });
 
         // --- z-axis: C2R ---
@@ -246,6 +239,9 @@ impl FftPoisson {
                 buf[base + nz_c - 1].im = 0.0;
             }
         }
+
+        // Return scratch to cache
+        *self.scratch_cache.lock().unwrap() = scratch;
 
         let c2r = &self.c2r_z;
         let n_total_real = nx * ny * nz;
@@ -318,7 +314,12 @@ impl PoissonSolver for FftPoisson {
             .iter()
             .map(|&p| Complex::new(p, 0.0))
             .collect();
-        fft_3d_c2c(&mut phi_hat, self.shape, &self.fwd);
+
+        // Use cached scratch for all C2C FFTs (saves 4 allocations per call)
+        let mut scratch = std::mem::take(&mut *self.scratch_cache.lock().unwrap());
+        scratch.resize(n_total, Complex::new(0.0, 0.0));
+
+        super::fft_utils::fft_3d_c2c_scratch(&mut phi_hat, &mut scratch, self.shape, &self.fwd);
 
         // Spectral differentiation: compute gx, gy, gz in a single parallel pass
         // (avoids 3 clones of phi_hat)
@@ -359,9 +360,12 @@ impl PoissonSolver for FftPoisson {
             gz_hat.extend_from_slice(&gz);
         }
 
-        fft_3d_c2c(&mut gx_hat, self.shape, &self.inv);
-        fft_3d_c2c(&mut gy_hat, self.shape, &self.inv);
-        fft_3d_c2c(&mut gz_hat, self.shape, &self.inv);
+        super::fft_utils::fft_3d_c2c_scratch(&mut gx_hat, &mut scratch, self.shape, &self.inv);
+        super::fft_utils::fft_3d_c2c_scratch(&mut gy_hat, &mut scratch, self.shape, &self.inv);
+        super::fft_utils::fft_3d_c2c_scratch(&mut gz_hat, &mut scratch, self.shape, &self.inv);
+
+        // Return scratch to cache
+        *self.scratch_cache.lock().unwrap() = scratch;
 
         let inv_norm = 1.0 / n_total as f64;
         AccelerationField {
@@ -385,6 +389,8 @@ pub struct FftIsolated {
     /// Cached C2C plans for the (2N)³ padded grid.
     fwd: [Arc<dyn rustfft::Fft<f64>>; 3],
     inv: [Arc<dyn rustfft::Fft<f64>>; 3],
+    /// Cached scratch buffer for (2N)³ FFT transposes.
+    scratch_cache: std::sync::Mutex<Vec<Complex<f64>>>,
 }
 
 impl FftIsolated {
@@ -459,6 +465,7 @@ impl FftIsolated {
             green_hat: green,
             fwd,
             inv,
+            scratch_cache: std::sync::Mutex::new(Vec::new()),
         }
     }
 }
@@ -486,8 +493,17 @@ impl PoissonSolver for FftIsolated {
                 }
             });
 
+        // Use cached scratch for (2N)³ FFTs (saves 2 large allocations per solve)
+        let mut scratch = std::mem::take(&mut *self.scratch_cache.lock().unwrap());
+        scratch.resize(n2_total, Complex::new(0.0, 0.0));
+
         // 2. Forward FFT
-        fft_3d_c2c(&mut rho_pad, [nx2, ny2, nz2], &self.fwd);
+        super::fft_utils::fft_3d_c2c_scratch(
+            &mut rho_pad,
+            &mut scratch,
+            [nx2, ny2, nz2],
+            &self.fwd,
+        );
 
         // 3. Pointwise multiply: Φ̂ = 4πG · Ĝ · ρ̂ (parallel)
         let dx3 = self.dx[0] * self.dx[1] * self.dx[2];
@@ -500,7 +516,15 @@ impl PoissonSolver for FftIsolated {
             });
 
         // 4. Inverse FFT
-        fft_3d_c2c(&mut rho_pad, [nx2, ny2, nz2], &self.inv);
+        super::fft_utils::fft_3d_c2c_scratch(
+            &mut rho_pad,
+            &mut scratch,
+            [nx2, ny2, nz2],
+            &self.inv,
+        );
+
+        // Return scratch to cache
+        *self.scratch_cache.lock().unwrap() = scratch;
         let norm = n2_total as f64;
 
         // 5. Extract N³ sub-grid (parallel over z-rows)

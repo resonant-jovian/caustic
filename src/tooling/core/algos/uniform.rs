@@ -147,58 +147,36 @@ impl PhaseSpaceRepr for UniformGrid6D {
         let lv = self.cached_lv;
         let periodic = matches!(self.domain.spatial_bc, SpatialBoundType::Periodic);
 
-        let s_v3 = 1usize;
-        let s_v2 = nv3;
-        let s_v1 = nv2 * nv3;
-        let s_x3 = nv1 * s_v1;
-        let s_x2 = nx3 * s_x3;
-        let s_x1 = nx2 * s_x2;
-
-        let flat_idx = |ix: [usize; 3], iv: [usize; 3]| -> usize {
-            ix[0] * s_x1 + ix[1] * s_x2 + ix[2] * s_x3 + iv[0] * s_v1 + iv[1] * s_v2 + iv[2] * s_v3
-        };
-
         let n_vel = nv1 * nv2 * nv3;
-        // Take ownership of data to avoid a full clone; the parallel iterator
-        // reads from `src` and writes results into a new vec.
         let src = std::mem::take(&mut self.data);
         let n_total = src.len();
         let n_sp = nx1 * nx2 * nx3;
         let max_n = nx1.max(nx2).max(nx3);
 
-        // Each velocity cell can be shifted independently in parallel.
-        // Build new data directly instead of scatter-back.
-        let mut new_data = vec![0.0f64; n_total];
+        // Pre-allocate intermediates: velocity-major layout [vi][si].
+        // Each velocity cell writes to its own n_sp-sized chunk, eliminating
+        // the per-task `local` Vec allocation.
+        let mut intermediates = vec![0.0f64; n_total];
 
-        // Process each velocity cell in parallel, writing into new_data slices.
-        // We partition new_data by velocity cell: new_data is indexed by
-        // [ix1][ix2][ix3][iv1][iv2][iv3], so velocity cells are interleaved.
-        // Collect shifted blocks and scatter back.
-        let shifted_blocks: Vec<(usize, Vec<f64>)> = (0..n_vel)
-            .into_par_iter()
-            .map(|vi| {
+        intermediates
+            .par_chunks_mut(n_sp)
+            .enumerate()
+            .for_each(|(vi, local)| {
                 let iv3 = vi % nv3;
                 let iv2 = (vi / nv3) % nv2;
                 let iv1 = vi / (nv2 * nv3);
-                let iv = [iv1, iv2, iv3];
                 let vx = -lv[0] + (iv1 as f64 + 0.5) * dv[0];
                 let vy = -lv[1] + (iv2 as f64 + 0.5) * dv[1];
                 let vz = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
                 let disp = [vx * dt, vy * dt, vz * dt];
 
-                // Pre-allocate reusable line buffers
                 let mut line = vec![0.0f64; max_n];
                 let mut shifted = vec![0.0f64; max_n];
-                let mut local = vec![0.0f64; n_sp];
 
                 // Extract spatial slice for this velocity cell
-                for ix1 in 0..nx1 {
-                    for ix2 in 0..nx2 {
-                        for ix3 in 0..nx3 {
-                            let si = ix1 * nx2 * nx3 + ix2 * nx3 + ix3;
-                            local[si] = src[flat_idx([ix1, ix2, ix3], iv)];
-                        }
-                    }
+                let iv_offset = iv1 * (nv2 * nv3) + iv2 * nv3 + iv3;
+                for si in 0..n_sp {
+                    local[si] = src[si * n_vel + iv_offset];
                 }
 
                 // Shift along x1
@@ -263,26 +241,18 @@ impl PhaseSpaceRepr for UniformGrid6D {
                         }
                     }
                 }
+            });
 
-                (vi, local)
-            })
-            .collect();
-
-        // Scatter results back
-        for (vi, local) in shifted_blocks {
-            let iv3 = vi % nv3;
-            let iv2 = (vi / nv3) % nv2;
-            let iv1 = vi / (nv2 * nv3);
-            let iv = [iv1, iv2, iv3];
-            for ix1 in 0..nx1 {
-                for ix2 in 0..nx2 {
-                    for ix3 in 0..nx3 {
-                        let si = ix1 * nx2 * nx3 + ix2 * nx3 + ix3;
-                        new_data[flat_idx([ix1, ix2, ix3], iv)] = local[si];
-                    }
+        // Parallel transpose: intermediates[vi * n_sp + si] → new_data[si * n_vel + vi]
+        let mut new_data = vec![0.0f64; n_total];
+        new_data
+            .par_chunks_mut(n_vel)
+            .enumerate()
+            .for_each(|(si, vel_block)| {
+                for vi in 0..n_vel {
+                    vel_block[vi] = intermediates[vi * n_sp + si];
                 }
-            }
-        }
+            });
         self.data = new_data;
     }
 
@@ -293,50 +263,30 @@ impl PhaseSpaceRepr for UniformGrid6D {
         let lv = self.cached_lv;
         let periodic_v = matches!(self.domain.velocity_bc, VelocityBoundType::Truncated);
 
-        let s_v3 = 1usize;
-        let s_v2 = nv3;
-        let s_v1 = nv2 * nv3;
-        let s_x3 = nv1 * s_v1;
-        let s_x2 = nx3 * s_x3;
-        let s_x1 = nx2 * s_x2;
-
-        let flat_idx = |ix: [usize; 3], iv: [usize; 3]| -> usize {
-            ix[0] * s_x1 + ix[1] * s_x2 + ix[2] * s_x3 + iv[0] * s_v1 + iv[1] * s_v2 + iv[2] * s_v3
-        };
-
-        let n_spatial = nx1 * nx2 * nx3;
         let n_vel = nv1 * nv2 * nv3;
         let max_nv = nv1.max(nv2).max(nv3);
         let src = std::mem::take(&mut self.data);
-        let n_total = src.len();
 
-        let shifted_blocks: Vec<(usize, Vec<f64>)> = (0..n_spatial)
-            .into_par_iter()
-            .map(|si| {
-                let ix3 = si % nx3;
-                let ix2 = (si / nx3) % nx2;
-                let ix1 = si / (nx2 * nx3);
-                let ix = [ix1, ix2, ix3];
-                let flat_ix = ix1 * nx2 * nx3 + ix2 * nx3 + ix3;
-                let ax = acceleration.gx[flat_ix];
-                let ay = acceleration.gy[flat_ix];
-                let az = acceleration.gz[flat_ix];
+        // Result has same layout as self.data: [si * n_vel + vi].
+        // Each spatial cell writes directly to its n_vel-sized chunk,
+        // eliminating the per-task `local` allocation and the serial scatter.
+        let mut result = vec![0.0f64; src.len()];
+
+        result
+            .par_chunks_mut(n_vel)
+            .enumerate()
+            .for_each(|(si, local)| {
+                let ax = acceleration.gx[si];
+                let ay = acceleration.gy[si];
+                let az = acceleration.gz[si];
                 let disp = [ax * dt, ay * dt, az * dt];
 
-                // Pre-allocate reusable line buffers
                 let mut line = vec![0.0f64; max_nv];
                 let mut shifted = vec![0.0f64; max_nv];
-                let mut local = vec![0.0f64; n_vel];
 
-                // Extract velocity slice for this spatial cell
-                for iv1 in 0..nv1 {
-                    for iv2 in 0..nv2 {
-                        for iv3 in 0..nv3 {
-                            let vi = iv1 * nv2 * nv3 + iv2 * nv3 + iv3;
-                            local[vi] = src[flat_idx(ix, [iv1, iv2, iv3])];
-                        }
-                    }
-                }
+                // Copy velocity slice (contiguous in memory)
+                let base = si * n_vel;
+                local.copy_from_slice(&src[base..base + n_vel]);
 
                 // Shift along v1
                 for iv2 in 0..nv2 {
@@ -400,28 +350,9 @@ impl PhaseSpaceRepr for UniformGrid6D {
                         }
                     }
                 }
+            });
 
-                (si, local)
-            })
-            .collect();
-
-        // Scatter results back
-        let mut new_data = vec![0.0f64; n_total];
-        for (si, local) in shifted_blocks {
-            let ix3 = si % nx3;
-            let ix2 = (si / nx3) % nx2;
-            let ix1 = si / (nx2 * nx3);
-            let ix = [ix1, ix2, ix3];
-            for iv1 in 0..nv1 {
-                for iv2 in 0..nv2 {
-                    for iv3 in 0..nv3 {
-                        let vi = iv1 * nv2 * nv3 + iv2 * nv3 + iv3;
-                        new_data[flat_idx(ix, [iv1, iv2, iv3])] = local[vi];
-                    }
-                }
-            }
-        }
-        self.data = new_data;
+        self.data = result;
     }
 
     fn moment(&self, position: &[f64; 3], order: usize) -> Tensor {
