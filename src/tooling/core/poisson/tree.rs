@@ -165,25 +165,28 @@ fn build_tree(
     let [nx, ny, nz] = density.shape;
     let cell_vol = dx[0] * dx[1] * dx[2];
 
-    // Convert non-zero density cells to particles
-    let mut particles = Vec::new();
-    for ix in 0..nx {
-        for iy in 0..ny {
-            for iz in 0..nz {
-                let idx = ix * ny * nz + iy * nz + iz;
-                let rho = density.data[idx];
-                if rho.abs() > 0.0 {
-                    let mass = rho * cell_vol;
-                    let pos = [
+    // Convert non-zero density cells to particles (parallel filter-map)
+    let particles: Vec<Particle> = (0..nx * ny * nz)
+        .into_par_iter()
+        .filter_map(|flat| {
+            let rho = density.data[flat];
+            if rho.abs() > 0.0 {
+                let ix = flat / (ny * nz);
+                let iy = (flat / nz) % ny;
+                let iz = flat % nz;
+                Some(Particle {
+                    pos: [
                         origin[0] + (ix as f64 + 0.5) * dx[0],
                         origin[1] + (iy as f64 + 0.5) * dx[1],
                         origin[2] + (iz as f64 + 0.5) * dx[2],
-                    ];
-                    particles.push(Particle { pos, mass });
-                }
+                    ],
+                    mass: rho * cell_vol,
+                })
+            } else {
+                None
             }
-        }
-    }
+        })
+        .collect();
 
     if particles.is_empty() {
         return None;

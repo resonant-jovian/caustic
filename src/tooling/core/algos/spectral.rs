@@ -419,71 +419,63 @@ impl PhaseSpaceRepr for SpectralV {
             // da_{m}/dt = -sigma * [sqrt((m_d+1)/2) * grad_d(a_{m_d+1}) + sqrt(m_d/2) * grad_d(a_{m_d-1})]
             // where m_d is the mode index in velocity dimension `dim` and grad_d is the spatial gradient.
 
-            // Compute spatial gradient via centered differences
-            for si in 0..self.n_spatial() {
-                let iz = si % nz;
-                let iy = (si / nz) % ny;
-                let ix = si / (ny * nz);
+            // Compute spatial gradient via centered differences — parallel over spatial cells
+            let spatial_shape = self.spatial_shape;
+            new_coeffs
+                .par_chunks_mut(n_modes3)
+                .enumerate()
+                .for_each(|(si, chunk)| {
+                    let iz = si % nz;
+                    let iy = (si / nz) % ny;
+                    let ix = si / (ny * nz);
 
-                for m0 in 0..n_modes {
-                    for m1 in 0..n_modes {
-                        for m2 in 0..n_modes {
-                            let mi = m0 * n_modes * n_modes + m1 * n_modes + m2;
-                            let md = match dim {
-                                0 => m0,
-                                1 => m1,
-                                _ => m2,
-                            };
-
-                            // Gradient of a_{m_d-1} and a_{m_d+1} along spatial dimension `dim`
-                            let grad_lower = if md > 0 {
-                                let mi_lower = match dim {
-                                    0 => (m0 - 1) * n_modes * n_modes + m1 * n_modes + m2,
-                                    1 => m0 * n_modes * n_modes + (m1 - 1) * n_modes + m2,
-                                    _ => m0 * n_modes * n_modes + m1 * n_modes + (m2 - 1),
+                    for m0 in 0..n_modes {
+                        for m1 in 0..n_modes {
+                            for m2 in 0..n_modes {
+                                let mi = m0 * n_modes * n_modes + m1 * n_modes + m2;
+                                let md = match dim {
+                                    0 => m0,
+                                    1 => m1,
+                                    _ => m2,
                                 };
-                                self.spatial_gradient_1d(
-                                    &old_coeffs,
-                                    mi_lower,
-                                    dim,
-                                    ix,
-                                    iy,
-                                    iz,
-                                    periodic,
-                                )
-                            } else {
-                                0.0
-                            };
 
-                            let grad_upper = if md + 1 < n_modes {
-                                let mi_upper = match dim {
-                                    0 => (m0 + 1) * n_modes * n_modes + m1 * n_modes + m2,
-                                    1 => m0 * n_modes * n_modes + (m1 + 1) * n_modes + m2,
-                                    _ => m0 * n_modes * n_modes + m1 * n_modes + (m2 + 1),
+                                let grad_lower = if md > 0 {
+                                    let mi_lower = match dim {
+                                        0 => (m0 - 1) * n_modes * n_modes + m1 * n_modes + m2,
+                                        1 => m0 * n_modes * n_modes + (m1 - 1) * n_modes + m2,
+                                        _ => m0 * n_modes * n_modes + m1 * n_modes + (m2 - 1),
+                                    };
+                                    spatial_gradient_1d_impl(
+                                        &old_coeffs, mi_lower, dim, ix, iy, iz,
+                                        periodic, spatial_shape, n_modes, &dx,
+                                    )
+                                } else {
+                                    0.0
                                 };
-                                self.spatial_gradient_1d(
-                                    &old_coeffs,
-                                    mi_upper,
-                                    dim,
-                                    ix,
-                                    iy,
-                                    iz,
-                                    periodic,
-                                )
-                            } else {
-                                0.0
-                            };
 
-                            let coupling = sigma
-                                * (((md + 1) as f64 / 2.0).sqrt() * grad_upper
-                                    + (md as f64 / 2.0).sqrt() * grad_lower);
+                                let grad_upper = if md + 1 < n_modes {
+                                    let mi_upper = match dim {
+                                        0 => (m0 + 1) * n_modes * n_modes + m1 * n_modes + m2,
+                                        1 => m0 * n_modes * n_modes + (m1 + 1) * n_modes + m2,
+                                        _ => m0 * n_modes * n_modes + m1 * n_modes + (m2 + 1),
+                                    };
+                                    spatial_gradient_1d_impl(
+                                        &old_coeffs, mi_upper, dim, ix, iy, iz,
+                                        periodic, spatial_shape, n_modes, &dx,
+                                    )
+                                } else {
+                                    0.0
+                                };
 
-                            new_coeffs[si * n_modes3 + mi] =
-                                old_coeffs[si * n_modes3 + mi] - dt * coupling;
+                                let coupling = sigma
+                                    * (((md + 1) as f64 / 2.0).sqrt() * grad_upper
+                                        + (md as f64 / 2.0).sqrt() * grad_lower);
+
+                                chunk[mi] = old_coeffs[si * n_modes3 + mi] - dt * coupling;
+                            }
                         }
                     }
-                }
-            }
+                });
 
             // Move results for next dimension pass (avoids clone)
             self.coefficients = new_coeffs;
@@ -927,57 +919,84 @@ impl SpectralV {
         iz: usize,
         periodic: bool,
     ) -> f64 {
-        let [nx, ny, nz] = self.spatial_shape;
-        let dx = self.domain.dx();
-        let n_modes3 = self.n_modes * self.n_modes * self.n_modes;
-
-        let get_coeff = |x: usize, y: usize, z: usize| -> f64 {
-            let si = x * ny * nz + y * nz + z;
-            coeffs[si * n_modes3 + mode_idx]
-        };
-
-        let (n_d, idx_d) = match dim {
-            0 => (nx, ix),
-            1 => (ny, iy),
-            _ => (nz, iz),
-        };
-
-        let cell_size = dx[dim];
-
-        if n_d < 2 {
-            return 0.0;
-        }
-
-        let (idx_minus, idx_plus) = if periodic {
-            (
-                if idx_d == 0 { n_d - 1 } else { idx_d - 1 },
-                if idx_d == n_d - 1 { 0 } else { idx_d + 1 },
-            )
-        } else {
-            (idx_d.saturating_sub(1), (idx_d + 1).min(n_d - 1))
-        };
-
-        let val_minus = match dim {
-            0 => get_coeff(idx_minus, iy, iz),
-            1 => get_coeff(ix, idx_minus, iz),
-            _ => get_coeff(ix, iy, idx_minus),
-        };
-
-        let val_plus = match dim {
-            0 => get_coeff(idx_plus, iy, iz),
-            1 => get_coeff(ix, idx_plus, iz),
-            _ => get_coeff(ix, iy, idx_plus),
-        };
-
-        let denom = if periodic || (idx_d > 0 && idx_d < n_d - 1) {
-            2.0 * cell_size
-        } else {
-            // One-sided at boundaries for non-periodic
-            cell_size
-        };
-
-        (val_plus - val_minus) / denom
+        spatial_gradient_1d_impl(
+            coeffs,
+            mode_idx,
+            dim,
+            ix,
+            iy,
+            iz,
+            periodic,
+            self.spatial_shape,
+            self.n_modes,
+            &self.domain.dx(),
+        )
     }
+}
+
+/// Free-function form of spatial gradient computation, usable from parallel contexts.
+#[allow(clippy::too_many_arguments)]
+fn spatial_gradient_1d_impl(
+    coeffs: &[f64],
+    mode_idx: usize,
+    dim: usize,
+    ix: usize,
+    iy: usize,
+    iz: usize,
+    periodic: bool,
+    spatial_shape: [usize; 3],
+    n_modes: usize,
+    dx: &[f64; 3],
+) -> f64 {
+    let [nx, ny, nz] = spatial_shape;
+    let n_modes3 = n_modes * n_modes * n_modes;
+
+    let get_coeff = |x: usize, y: usize, z: usize| -> f64 {
+        let si = x * ny * nz + y * nz + z;
+        coeffs[si * n_modes3 + mode_idx]
+    };
+
+    let (n_d, idx_d) = match dim {
+        0 => (nx, ix),
+        1 => (ny, iy),
+        _ => (nz, iz),
+    };
+
+    let cell_size = dx[dim];
+
+    if n_d < 2 {
+        return 0.0;
+    }
+
+    let (idx_minus, idx_plus) = if periodic {
+        (
+            if idx_d == 0 { n_d - 1 } else { idx_d - 1 },
+            if idx_d == n_d - 1 { 0 } else { idx_d + 1 },
+        )
+    } else {
+        (idx_d.saturating_sub(1), (idx_d + 1).min(n_d - 1))
+    };
+
+    let val_minus = match dim {
+        0 => get_coeff(idx_minus, iy, iz),
+        1 => get_coeff(ix, idx_minus, iz),
+        _ => get_coeff(ix, iy, idx_minus),
+    };
+
+    let val_plus = match dim {
+        0 => get_coeff(idx_plus, iy, iz),
+        1 => get_coeff(ix, idx_plus, iz),
+        _ => get_coeff(ix, iy, idx_plus),
+    };
+
+    let denom = if periodic || (idx_d > 0 && idx_d < n_d - 1) {
+        2.0 * cell_size
+    } else {
+        // One-sided at boundaries for non-periodic
+        cell_size
+    };
+
+    (val_plus - val_minus) / denom
 }
 
 #[cfg(test)]

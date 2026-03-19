@@ -138,35 +138,18 @@ impl FftPoisson {
         let nz_c = nz / 2 + 1; // Hermitian-symmetric complex output length
         let n_total_c = nx * ny * nz_c;
 
-        // --- z-axis: R2C on contiguous rows ---
+        // --- z-axis: R2C on contiguous rows → write directly via par_chunks_mut ---
         let r2c = &self.r2c_z;
-
-        // Process z-lines in parallel
-        let z_results: Vec<(usize, Vec<Complex<f64>>)> = (0..nx * ny)
-            .into_par_iter()
-            .map(|row| {
-                let ix = row / ny;
-                let iy = row % ny;
-                let start = ix * ny * nz + iy * nz;
-                let mut inbuf: Vec<f64> = input[start..start + nz].to_vec();
-                let mut outbuf = vec![Complex::new(0.0, 0.0); nz_c];
-                r2c.process(&mut inbuf, &mut outbuf).unwrap();
-                (row, outbuf)
-            })
-            .collect();
-
-        // Assemble into half-complex 3D buffer [nx, ny, nz_c]
         let mut buf = vec![Complex::new(0.0, 0.0); n_total_c];
-        for (row, data) in z_results {
-            let ix = row / ny;
-            let iy = row % ny;
-            let base = ix * ny * nz_c + iy * nz_c;
-            buf[base..base + nz_c].copy_from_slice(&data);
-        }
+        buf.par_chunks_mut(nz_c).enumerate().for_each(|(row, out_chunk)| {
+            let start = row * nz;
+            let mut inbuf = vec![0.0f64; nz];
+            inbuf.copy_from_slice(&input[start..start + nz]);
+            r2c.process(&mut inbuf, out_chunk).unwrap();
+        });
 
         // --- y-axis: C2C on half-complex grid ---
         let fft_y = &self.fwd[1];
-
         let y_results: Vec<(usize, usize, Vec<Complex<f64>>)> = (0..nx * nz_c)
             .into_par_iter()
             .map(|idx| {
@@ -179,7 +162,6 @@ impl FftPoisson {
                 (ix, iz, line)
             })
             .collect();
-
         for (ix, iz, line) in y_results {
             for iy in 0..ny {
                 buf[ix * ny * nz_c + iy * nz_c + iz] = line[iy];
@@ -188,7 +170,6 @@ impl FftPoisson {
 
         // --- x-axis: C2C on half-complex grid ---
         let fft_x = &self.fwd[0];
-
         let x_results: Vec<(usize, usize, Vec<Complex<f64>>)> = (0..ny * nz_c)
             .into_par_iter()
             .map(|idx| {
@@ -201,7 +182,6 @@ impl FftPoisson {
                 (iy, iz, line)
             })
             .collect();
-
         for (iy, iz, line) in x_results {
             for ix in 0..nx {
                 buf[ix * ny * nz_c + iy * nz_c + iz] = line[ix];
@@ -275,26 +255,13 @@ impl FftPoisson {
         let c2r = &self.c2r_z;
         let n_total_real = nx * ny * nz;
 
-        let z_results: Vec<(usize, Vec<f64>)> = (0..nx * ny)
-            .into_par_iter()
-            .map(|row| {
-                let ix = row / ny;
-                let iy = row % ny;
-                let base = ix * ny * nz_c + iy * nz_c;
-                let mut inbuf = buf[base..base + nz_c].to_vec();
-                let mut outbuf = vec![0.0f64; nz];
-                c2r.process(&mut inbuf, &mut outbuf).unwrap();
-                (row, outbuf)
-            })
-            .collect();
-
+        // Write directly via par_chunks_mut — eliminates nx*ny output vector allocations
         let mut output = vec![0.0f64; n_total_real];
-        for (row, data) in z_results {
-            let ix = row / ny;
-            let iy = row % ny;
-            let start = ix * ny * nz + iy * nz;
-            output[start..start + nz].copy_from_slice(&data);
-        }
+        output.par_chunks_mut(nz).enumerate().for_each(|(row, out_chunk)| {
+            let base = row * nz_c;
+            let mut inbuf = buf[base..base + nz_c].to_vec();
+            c2r.process(&mut inbuf, out_chunk).unwrap();
+        });
         output
     }
 }

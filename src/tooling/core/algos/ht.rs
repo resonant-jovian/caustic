@@ -2569,36 +2569,19 @@ fn qr_decompose(mat: &Mat<f64>) -> (Mat<f64>, Mat<f64>) {
 
 #[inline]
 fn s_times_vt(s: &[f64], vt: &Mat<f64>, rank: usize) -> Mat<f64> {
-    let n = vt.ncols();
-    let mut r = Mat::zeros(rank, n);
-    for i in 0..rank {
-        for j in 0..n {
-            r[(i, j)] = s[i] * vt[(i, j)];
-        }
-    }
-    r
+    Mat::from_fn(rank, vt.ncols(), |i, j| s[i] * vt[(i, j)])
 }
 
 #[inline]
 fn vec_to_mat(data: &[f64], rows: usize, cols: usize) -> Mat<f64> {
-    let mut m = Mat::zeros(rows, cols);
-    for i in 0..rows {
-        for j in 0..cols {
-            m[(i, j)] = data[i * cols + j];
-        }
-    }
-    m
+    Mat::from_fn(rows, cols, |i, j| data[i * cols + j])
 }
 
 #[inline]
 fn mat_to_vec(m: &Mat<f64>, rows: usize, cols: usize) -> Vec<f64> {
-    let mut v = vec![0.0f64; rows * cols];
-    for i in 0..rows {
-        for j in 0..cols {
-            v[i * cols + j] = m[(i, j)];
-        }
-    }
-    v
+    (0..rows)
+        .flat_map(|i| (0..cols).map(move |j| m[(i, j)]))
+        .collect()
 }
 
 #[inline]
