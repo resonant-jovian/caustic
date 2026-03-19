@@ -22,6 +22,7 @@ use super::exponential_sum::ExponentialSumCoefficients;
 use super::utils::finite_difference_acceleration;
 use crate::tooling::core::algos::ht3d::{HtNode3D, HtNode3DComplex, HtTensor3D, HtTensor3DComplex};
 use faer::Mat;
+use rayon::prelude::*;
 use rustfft::FftPlanner;
 use rustfft::num_complex::Complex64;
 
@@ -147,15 +148,20 @@ impl PoissonSolver for HtPoisson {
         let [nx, ny, nz] = self.shape;
         let [px, py, pz] = self.padded_shape;
 
-        // Step 1: Zero-pad density to (2N)³
+        // Step 1: Zero-pad density to (2N)³ (parallel over i0 slabs)
         let mut padded = vec![0.0f64; px * py * pz];
-        for i0 in 0..nx {
-            for i1 in 0..ny {
-                for i2 in 0..nz {
-                    padded[i0 * py * pz + i1 * pz + i2] = density.data[i0 * ny * nz + i1 * nz + i2];
+        padded
+            .par_chunks_mut(py * pz)
+            .enumerate()
+            .for_each(|(i0, slab)| {
+                if i0 < nx {
+                    for i1 in 0..ny {
+                        for i2 in 0..nz {
+                            slab[i1 * pz + i2] = density.data[i0 * ny * nz + i1 * nz + i2];
+                        }
+                    }
                 }
-            }
-        }
+            });
 
         // Step 2: Convert to HtTensor3D via from_dense
         let rho_ht = HtTensor3D::from_dense(
@@ -205,16 +211,18 @@ impl PoissonSolver for HtPoisson {
         // Step 6: Truncate to re-compress (rank may be R_G × r_ρ)
         phi_ht.truncate(self.tolerance, self.max_rank);
 
-        // Step 7: Extract N³ subgrid and scale by 4πG·dx³
+        // Step 7: Extract N³ subgrid and scale by 4πG·dx³ (parallel over i0 slabs)
         let scale = 4.0 * std::f64::consts::PI * g * self.dv;
         let mut data = vec![0.0f64; nx * ny * nz];
-        for i0 in 0..nx {
-            for i1 in 0..ny {
-                for i2 in 0..nz {
-                    data[i0 * ny * nz + i1 * nz + i2] = phi_ht.evaluate([i0, i1, i2]) * scale;
+        data.par_chunks_mut(ny * nz)
+            .enumerate()
+            .for_each(|(i0, chunk)| {
+                for i1 in 0..ny {
+                    for i2 in 0..nz {
+                        chunk[i1 * nz + i2] = phi_ht.evaluate([i0, i1, i2]) * scale;
+                    }
                 }
-            }
-        }
+            });
 
         PotentialField {
             data,

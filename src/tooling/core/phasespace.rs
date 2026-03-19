@@ -72,4 +72,10 @@ pub trait PhaseSpaceRepr: Send + Sync {
 
     /// Downcast to concrete type for implementation-specific queries (e.g. HT rank data).
     fn as_any(&self) -> &dyn Any;
+
+    /// Approximate memory usage of this representation in bytes.
+    /// Default returns 0; implementations should override for accurate tracking.
+    fn memory_bytes(&self) -> usize {
+        0
+    }
 }

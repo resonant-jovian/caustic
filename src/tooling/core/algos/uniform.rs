@@ -677,4 +677,8 @@ impl PhaseSpaceRepr for UniformGrid6D {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
+    fn memory_bytes(&self) -> usize {
+        self.data.len() * std::mem::size_of::<f64>()
+    }
 }

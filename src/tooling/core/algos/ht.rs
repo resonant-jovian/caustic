@@ -2153,6 +2153,11 @@ impl PhaseSpaceRepr for HtTensor {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
+    fn memory_bytes(&self) -> usize {
+        // Delegate to the inherent method
+        Self::memory_bytes(self)
+    }
 }
 
 // ─── Moment extraction (Phase 3: LoMaC integration) ─────────────────────────

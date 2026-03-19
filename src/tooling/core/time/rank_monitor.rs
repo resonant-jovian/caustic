@@ -4,8 +4,12 @@
 //! before/after each sub-step (drift, kick, Poisson). This lets us attribute
 //! rank growth to specific algorithmic phases.
 
+use std::time::Instant;
+
 use super::super::{
-    advecator::Advector, integrator::TimeIntegrator, phasespace::PhaseSpaceRepr,
+    advecator::Advector,
+    integrator::{StepTimings, TimeIntegrator},
+    phasespace::PhaseSpaceRepr,
     solver::PoissonSolver,
 };
 
@@ -39,11 +43,12 @@ fn max_rank(ranks: &[usize]) -> f64 {
     ranks.iter().copied().max().unwrap_or(1).max(1) as f64
 }
 
-/// Instrumented version of `StrangSplitting` that records per-sub-step ranks.
+/// Instrumented version of `StrangSplitting` that records per-sub-step ranks and timings.
 pub struct InstrumentedStrangSplitting {
     pub inner: super::strang::StrangSplitting,
     /// The diagnostics from the most recent `advance()` call.
     pub last_diagnostics: StepRankDiagnostics,
+    last_timings: StepTimings,
 }
 
 impl InstrumentedStrangSplitting {
@@ -51,6 +56,7 @@ impl InstrumentedStrangSplitting {
         Self {
             inner: super::strang::StrangSplitting::new(g),
             last_diagnostics: StepRankDiagnostics::default(),
+            last_timings: StepTimings::default(),
         }
     }
 }
@@ -64,6 +70,7 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
         dt: f64,
     ) {
         let _span = tracing::info_span!("instrumented_strang_advance").entered();
+        let mut timings = StepTimings::default();
 
         let mut diag = StepRankDiagnostics {
             pre_drift_ranks: extract_ranks(&*repr),
@@ -71,18 +78,26 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
         };
 
         // Drift half-step
+        let t0 = Instant::now();
         advector.drift(repr, dt / 2.0);
+        timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
         diag.post_drift_ranks = extract_ranks(&*repr);
 
         // Poisson solve + kick
+        let t0 = Instant::now();
         let density = repr.compute_density();
         let potential = solver.solve(&density, self.inner.g);
         let accel = solver.compute_acceleration(&potential);
+        timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        let t0 = Instant::now();
         advector.kick(repr, &accel, dt);
+        timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
         diag.post_kick_ranks = extract_ranks(&*repr);
 
         // Drift half-step
+        let t0 = Instant::now();
         advector.drift(repr, dt / 2.0);
+        timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
         diag.post_final_ranks = extract_ranks(&*repr);
 
         // Compute amplification ratios
@@ -100,10 +115,15 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
         }
 
         self.last_diagnostics = diag;
+        self.last_timings = timings;
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
         self.inner.max_dt(repr, cfl_factor)
+    }
+
+    fn last_step_timings(&self) -> Option<&StepTimings> {
+        Some(&self.last_timings)
     }
 }
 
