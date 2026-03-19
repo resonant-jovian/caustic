@@ -380,7 +380,7 @@ impl HtTensor {
         let decay = (2.0_f64 * 6.0 - 3.0).sqrt(); // √(2d-3) ≈ 3.0
         let eps_leaf = tolerance / decay;
         let eps_interior_lo = eps_leaf * decay.sqrt(); // nodes 6, 7
-        let eps_interior_hi = eps_leaf * decay;        // nodes 8, 9
+        let eps_interior_hi = eps_leaf * decay; // nodes 8, 9
         let eps_node = eps_leaf; // default for leaf fiber-sampling
 
         // Helper: convert grid index to physical coordinate for a given dimension
@@ -1184,7 +1184,7 @@ impl HtTensor {
         let decay = (2.0_f64 * 6.0 - 3.0).sqrt(); // √(2d-3) ≈ 3.0
         let eps_leaf = tolerance / decay;
         let eps_interior_lo = eps_leaf * decay.sqrt(); // nodes 6, 7
-        let eps_interior_hi = eps_leaf * decay;        // nodes 8, 9
+        let eps_interior_hi = eps_leaf * decay; // nodes 8, 9
         // Top-down: process higher-level nodes first (coarser tolerance),
         // then refine lower-level nodes (tighter tolerance).
         for &ni in &[8, 9] {

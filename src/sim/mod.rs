@@ -174,13 +174,7 @@ impl Simulation {
         let dx3 = dx[0] * dx[1] * dx[2];
 
         // Cache ρ_max for next step's dt computation (avoids redundant compute_density)
-        self.cached_rho_max = Some(
-            density
-                .data
-                .iter()
-                .cloned()
-                .fold(0.0_f64, f64::max),
-        );
+        self.cached_rho_max = Some(density.data.iter().cloned().fold(0.0_f64, f64::max));
 
         let t0 = std::time::Instant::now();
         let diag = self.diagnostics.compute_with_density(

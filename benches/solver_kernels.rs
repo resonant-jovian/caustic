@@ -144,9 +144,13 @@ fn bench_fft_poisson(c: &mut Criterion) {
         let (grid, domain) = make_plummer_grid(n, 4);
         let density = grid.compute_density();
         let poisson = FftPoisson::new(&domain);
-        group.bench_with_input(BenchmarkId::new("N", n), &(density, poisson), |b, (d, p)| {
-            b.iter(|| p.solve(d, 1.0));
-        });
+        group.bench_with_input(
+            BenchmarkId::new("N", n),
+            &(density, poisson),
+            |b, (d, p)| {
+                b.iter(|| p.solve(d, 1.0));
+            },
+        );
     }
     group.finish();
 }
@@ -160,9 +164,13 @@ fn bench_fft_isolated(c: &mut Criterion) {
         let grid = UniformGrid6D::from_snapshot(snap, domain.clone());
         let density = grid.compute_density();
         let poisson = FftIsolated::new(&domain);
-        group.bench_with_input(BenchmarkId::new("N", n), &(density, poisson), |b, (d, p)| {
-            b.iter(|| p.solve(d, 1.0));
-        });
+        group.bench_with_input(
+            BenchmarkId::new("N", n),
+            &(density, poisson),
+            |b, (d, p)| {
+                b.iter(|| p.solve(d, 1.0));
+            },
+        );
     }
     group.finish();
 }
@@ -178,13 +186,9 @@ fn bench_tensor_poisson(c: &mut Criterion) {
         let dx = domain.dx();
         let shape = [n as usize, n as usize, n as usize];
         let solver = TensorPoisson::new(shape, dx, 1e-4, 1e-4, 15);
-        group.bench_with_input(
-            BenchmarkId::new("N", n),
-            &(density, solver),
-            |b, (d, s)| {
-                b.iter(|| s.solve(d, 1.0));
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("N", n), &(density, solver), |b, (d, s)| {
+            b.iter(|| s.solve(d, 1.0));
+        });
     }
     group.finish();
 }
@@ -213,13 +217,9 @@ fn bench_tree_poisson(c: &mut Criterion) {
         let grid = UniformGrid6D::from_snapshot(snap, domain.clone());
         let density = grid.compute_density();
         let tree = TreePoisson::new(domain, 0.7);
-        group.bench_with_input(
-            BenchmarkId::new("N", n),
-            &(density, tree),
-            |b, (d, t)| {
-                b.iter(|| t.solve(d, 1.0));
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("N", n), &(density, tree), |b, (d, t)| {
+            b.iter(|| t.solve(d, 1.0));
+        });
     }
     group.finish();
 }
@@ -233,13 +233,9 @@ fn bench_spherical_poisson(c: &mut Criterion) {
         let dx = domain.dx();
         let shape = [n as usize; 3];
         let solver = SphericalHarmonicsPoisson::new(4, 32, shape, dx);
-        group.bench_with_input(
-            BenchmarkId::new("N", n),
-            &(density, solver),
-            |b, (d, s)| {
-                b.iter(|| s.solve(d, 1.0));
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("N", n), &(density, solver), |b, (d, s)| {
+            b.iter(|| s.solve(d, 1.0));
+        });
     }
     group.finish();
 }

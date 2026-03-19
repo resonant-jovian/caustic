@@ -187,9 +187,15 @@ pub fn extract_moments(
     let dv3 = dv[0] * dv[1] * dv[2];
 
     // Pre-compute 1D velocity coordinate arrays to avoid redundant arithmetic
-    let v1_coords: Vec<f64> = (0..nv1).map(|i| v_min[0] + (i as f64 + 0.5) * dv[0]).collect();
-    let v2_coords: Vec<f64> = (0..nv2).map(|i| v_min[1] + (i as f64 + 0.5) * dv[1]).collect();
-    let v3_coords: Vec<f64> = (0..nv3).map(|i| v_min[2] + (i as f64 + 0.5) * dv[2]).collect();
+    let v1_coords: Vec<f64> = (0..nv1)
+        .map(|i| v_min[0] + (i as f64 + 0.5) * dv[0])
+        .collect();
+    let v2_coords: Vec<f64> = (0..nv2)
+        .map(|i| v_min[1] + (i as f64 + 0.5) * dv[1])
+        .collect();
+    let v3_coords: Vec<f64> = (0..nv3)
+        .map(|i| v_min[2] + (i as f64 + 0.5) * dv[2])
+        .collect();
 
     f.par_chunks(n_vel)
         .map(|cell| {
