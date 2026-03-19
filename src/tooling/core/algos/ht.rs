@@ -368,7 +368,20 @@ impl HtTensor {
 
         let n_samples = n_initial_samples.unwrap_or(5 * max_rank);
         let mut rng = Xorshift64::new(seed.unwrap_or(42));
-        let eps_node = tolerance / 3.0;
+
+        // SLAR tolerance hierarchy with exponential decay (Zheng et al. 2025, §3.2):
+        // Leaves (depth 0) use the tightest tolerance, with each level up the tree
+        // relaxing by a decay factor. This matches the paper's requirement that
+        // subtrees closer to leaves use tighter tolerances.
+        //   ε_leaf        = tolerance / √(2d-3) = tolerance / 3.0 (for d=6)
+        //   ε_interior_lo = ε_leaf × decay       (nodes 6, 7: leaf-pair interiors)
+        //   ε_interior_hi = ε_leaf × decay²      (nodes 8, 9: spatial/velocity subtrees)
+        //   ε_root        = tolerance             (root: coarsest, set after construction)
+        let decay = (2.0_f64 * 6.0 - 3.0).sqrt(); // √(2d-3) ≈ 3.0
+        let eps_leaf = tolerance / decay;
+        let eps_interior_lo = eps_leaf * decay.sqrt(); // nodes 6, 7
+        let eps_interior_hi = eps_leaf * decay;        // nodes 8, 9
+        let eps_node = eps_leaf; // default for leaf fiber-sampling
 
         // Helper: convert grid index to physical coordinate for a given dimension
         let idx_to_coord = |dim: usize, idx: usize| -> f64 {
@@ -490,7 +503,7 @@ impl HtTensor {
             &leaf_frames[2],
             leaf_ranks[1],
             leaf_ranks[2],
-            eps_node,
+            eps_interior_lo, // leaf-pair interior: moderate tolerance
             max_rank,
             n_samples,
             &mut rng,
@@ -508,7 +521,7 @@ impl HtTensor {
             &leaf_frames[5],
             leaf_ranks[4],
             leaf_ranks[5],
-            eps_node,
+            eps_interior_lo, // leaf-pair interior: moderate tolerance
             max_rank,
             n_samples,
             &mut rng,
@@ -569,7 +582,7 @@ impl HtTensor {
             &eff_frame_6_trunc,
             leaf_ranks[0],
             rank_6,
-            eps_node,
+            eps_interior_hi, // subtree root: coarser tolerance
             max_rank,
             n_samples,
             &mut rng,
@@ -616,7 +629,7 @@ impl HtTensor {
             &eff_frame_7_trunc,
             leaf_ranks[3],
             rank_7,
-            eps_node,
+            eps_interior_hi, // subtree root: coarser tolerance
             max_rank,
             n_samples,
             &mut rng,
@@ -781,7 +794,7 @@ impl HtTensor {
                 sum
             });
 
-            let aca_result = aca_partial_pivot(&root_mat, eps_node, max_rank);
+            let aca_result = aca_partial_pivot(&root_mat, tolerance, max_rank);
             // Fill root_transfer from ACA result
             for j8 in 0..rank_8 {
                 for j9 in 0..rank_9 {
@@ -841,14 +854,21 @@ impl HtTensor {
             ranks: [1, rank_8, rank_9],
         });
 
-        HtTensor {
+        let mut ht = HtTensor {
             nodes,
             shape,
             domain: domain.clone(),
             tolerance,
             max_rank,
             interpolation_mode: InterpolationMode::SparsePolynomial,
-        }
+        };
+
+        // Post-construction HSVD truncation (SLAR §3.2): re-compress the assembled
+        // HT tensor with a coarser tolerance proportional to the approximation norm.
+        // This catches over-ranked nodes from the bottom-up ACA construction.
+        ht.truncate(tolerance);
+
+        ht
     }
 }
 
@@ -1153,12 +1173,28 @@ impl HtTensor {
 
 impl HtTensor {
     /// Truncate ranks to maintain ‖A − Ã‖ ≤ √(2d−3) · tolerance.
+    ///
+    /// Uses a hierarchical tolerance distribution: coarser thresholds at the top of
+    /// the tree, tighter at the leaves. This follows the SLAR paper's exponential
+    /// decay requirement (Zheng et al. 2025, §3.2) and the HSVD quasi-best
+    /// approximation bound (Grasedyck 2010).
     pub fn truncate(&mut self, tolerance: f64) {
         let _span = tracing::info_span!("ht_truncate").entered();
         self.orthogonalize_left();
-        let eps = tolerance / 3.0;
-        for &ni in &[8, 9, 6, 7, 0, 1, 2, 3, 4, 5] {
-            self.truncate_node(ni, eps);
+        let decay = (2.0_f64 * 6.0 - 3.0).sqrt(); // √(2d-3) ≈ 3.0
+        let eps_leaf = tolerance / decay;
+        let eps_interior_lo = eps_leaf * decay.sqrt(); // nodes 6, 7
+        let eps_interior_hi = eps_leaf * decay;        // nodes 8, 9
+        // Top-down: process higher-level nodes first (coarser tolerance),
+        // then refine lower-level nodes (tighter tolerance).
+        for &ni in &[8, 9] {
+            self.truncate_node(ni, eps_interior_hi);
+        }
+        for &ni in &[6, 7] {
+            self.truncate_node(ni, eps_interior_lo);
+        }
+        for &ni in &[0, 1, 2, 3, 4, 5] {
+            self.truncate_node(ni, eps_leaf);
         }
     }
 
