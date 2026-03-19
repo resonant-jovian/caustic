@@ -137,12 +137,36 @@ fn smooth_red_black(
                         phi_zm = phi[idx(ix, iy, izm, shape)];
                         phi_zp = phi[idx(ix, iy, izp, shape)];
                     } else {
-                        phi_xm = if ix > 0 { phi[idx(ix - 1, iy, iz, shape)] } else { 0.0 };
-                        phi_xp = if ix < nx - 1 { phi[idx(ix + 1, iy, iz, shape)] } else { 0.0 };
-                        phi_ym = if iy > 0 { phi[idx(ix, iy - 1, iz, shape)] } else { 0.0 };
-                        phi_yp = if iy < ny - 1 { phi[idx(ix, iy + 1, iz, shape)] } else { 0.0 };
-                        phi_zm = if iz > 0 { phi[idx(ix, iy, iz - 1, shape)] } else { 0.0 };
-                        phi_zp = if iz < nz - 1 { phi[idx(ix, iy, iz + 1, shape)] } else { 0.0 };
+                        phi_xm = if ix > 0 {
+                            phi[idx(ix - 1, iy, iz, shape)]
+                        } else {
+                            0.0
+                        };
+                        phi_xp = if ix < nx - 1 {
+                            phi[idx(ix + 1, iy, iz, shape)]
+                        } else {
+                            0.0
+                        };
+                        phi_ym = if iy > 0 {
+                            phi[idx(ix, iy - 1, iz, shape)]
+                        } else {
+                            0.0
+                        };
+                        phi_yp = if iy < ny - 1 {
+                            phi[idx(ix, iy + 1, iz, shape)]
+                        } else {
+                            0.0
+                        };
+                        phi_zm = if iz > 0 {
+                            phi[idx(ix, iy, iz - 1, shape)]
+                        } else {
+                            0.0
+                        };
+                        phi_zp = if iz < nz - 1 {
+                            phi[idx(ix, iy, iz + 1, shape)]
+                        } else {
+                            0.0
+                        };
                     }
 
                     let sum_neighbors = (phi_xm + phi_xp) * inv_dx2_x

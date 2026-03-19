@@ -540,16 +540,14 @@ impl PoissonSolver for FftIsolated {
 
         // 5. Extract N³ sub-grid (parallel over z-rows)
         let mut phi = vec![0.0f64; nx * ny * nz];
-        phi.par_chunks_mut(nz)
-            .enumerate()
-            .for_each(|(row, chunk)| {
-                let ix = row / ny;
-                let iy = row % ny;
-                let base = ix * ny2 * nz2 + iy * nz2;
-                for iz in 0..nz {
-                    chunk[iz] = rho_pad[base + iz].re / norm;
-                }
-            });
+        phi.par_chunks_mut(nz).enumerate().for_each(|(row, chunk)| {
+            let ix = row / ny;
+            let iy = row % ny;
+            let base = ix * ny2 * nz2 + iy * nz2;
+            for iz in 0..nz {
+                chunk[iz] = rho_pad[base + iz].re / norm;
+            }
+        });
 
         PotentialField {
             data: phi,
