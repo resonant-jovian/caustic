@@ -1,5 +1,7 @@
 //! Top-level `Simulation` struct. Entry point for library users; matches the README builder API.
 
+use std::sync::Arc;
+
 use rust_decimal::Decimal;
 
 use crate::tooling::core::{
@@ -8,10 +10,11 @@ use crate::tooling::core::{
     conservation::lomac::LoMaC,
     diagnostics::{Diagnostics, GlobalDiagnostics},
     init::{domain::Domain, input::optional::OptionalParams},
-    integrator::TimeIntegrator,
+    integrator::{StepTimings, TimeIntegrator},
     io::{IOManager, OutputFormat},
     output::exit::{package::ExitPackage, standard::ExitEvaluator},
     phasespace::PhaseSpaceRepr,
+    progress::{StepPhase, StepProgress},
     solver::PoissonSolver,
     types::*,
 };
@@ -35,6 +38,14 @@ pub struct Simulation {
     pub time: f64,
     pub step: u64,
     pub start_time: std::time::Instant,
+    /// Cached ρ_max from the previous step's density computation.
+    /// Used to compute Δt without a redundant `compute_density()` call.
+    cached_rho_max: Option<f64>,
+    /// Per-step phase timing breakdown from the most recent `step()` call.
+    /// Includes integrator sub-step timings + post-advance diagnostics timing.
+    pub last_step_timings: StepTimings,
+    /// Optional shared progress state for intra-step TUI visibility.
+    progress: Option<Arc<StepProgress>>,
 }
 
 impl Simulation {
@@ -66,7 +77,19 @@ impl Simulation {
     /// Advance by a single timestep. Returns `Some(reason)` if the simulation should stop.
     pub fn step(&mut self) -> anyhow::Result<Option<ExitReason>> {
         let cfl_factor = self.opts.cfl_factor_f64();
-        let mut dt = self.integrator.max_dt(&*self.repr, cfl_factor);
+
+        // Use cached ρ_max from previous step to avoid redundant compute_density().
+        // Falls back to the integrator's max_dt() on the first step.
+        let mut dt = if let Some(rho_max) = self.cached_rho_max.take() {
+            if rho_max <= 0.0 || self.g <= 0.0 {
+                1e10
+            } else {
+                let t_dyn = 1.0 / (self.g * rho_max).sqrt();
+                cfl_factor * t_dyn
+            }
+        } else {
+            self.integrator.max_dt(&*self.repr, cfl_factor)
+        };
 
         // Clamp dt to not overshoot t_final by more than necessary
         let t_final = {
@@ -80,9 +103,22 @@ impl Simulation {
         self.integrator
             .advance(&mut *self.repr, &*self.poisson, &*self.advector, dt);
 
+        // Capture integrator sub-step timings (drift, poisson, kick)
+        let mut timings = self
+            .integrator
+            .last_step_timings()
+            .cloned()
+            .unwrap_or_default();
+
         // LoMaC conservation projection: advance macroscopic state in sync
         // with kinetic, then project f to restore exact moments.
+        if self.lomac.is_some()
+            && let Some(ref p) = self.progress
+        {
+            p.set_phase(StepPhase::LoMaC);
+        }
         if let Some(ref mut lomac) = self.lomac {
+            let t0 = std::time::Instant::now();
             let density = self.repr.compute_density();
             let potential = self.poisson.solve(&density, self.g);
             let accel = self.poisson.compute_acceleration(&potential);
@@ -132,20 +168,54 @@ impl Simulation {
                     ),
                 );
             }
+            timings.other_ms += t0.elapsed().as_secs_f64() * 1000.0;
         }
 
         self.time += dt;
         self.step += 1;
 
+        // Post-advance density computation (for diagnostics + caching)
+        if let Some(ref p) = self.progress {
+            p.set_phase(StepPhase::PostDensity);
+        }
+        let t0 = std::time::Instant::now();
         let density = self.repr.compute_density();
         let potential = self.poisson.solve(&density, self.g);
+        timings.density_ms += t0.elapsed().as_secs_f64() * 1000.0;
+
         let dx = self.domain.dx();
         let dx3 = dx[0] * dx[1] * dx[2];
-        let diag = self
-            .diagnostics
-            .compute(&*self.repr, &potential, self.time, dx3);
+
+        // Cache ρ_max for next step's dt computation (avoids redundant compute_density)
+        self.cached_rho_max = Some(density.data.iter().cloned().fold(0.0_f64, f64::max));
+
+        if let Some(ref p) = self.progress {
+            p.set_phase(StepPhase::Diagnostics);
+        }
+        let t0 = std::time::Instant::now();
+        let diag = self.diagnostics.compute_with_density(
+            &*self.repr,
+            &density,
+            &potential,
+            self.time,
+            dx3,
+        );
+        timings.diagnostics_ms += t0.elapsed().as_secs_f64() * 1000.0;
+
+        self.last_step_timings = timings;
+
+        if let Some(ref p) = self.progress {
+            p.set_phase(StepPhase::StepComplete);
+        }
 
         Ok(self.exit_evaluator.check(&diag))
+    }
+
+    /// Attach shared progress state for intra-step TUI visibility.
+    /// Propagates to the integrator so sub-step phases are reported.
+    pub fn set_progress(&mut self, p: Arc<StepProgress>) {
+        self.integrator.set_progress(p.clone());
+        self.progress = Some(p);
     }
 
     /// Current simulation time.
@@ -398,6 +468,9 @@ impl SimulationBuilder {
             time: 0.0,
             step: 0,
             start_time: std::time::Instant::now(),
+            cached_rho_max: None,
+            last_step_timings: StepTimings::default(),
+            progress: None,
         })
     }
 }

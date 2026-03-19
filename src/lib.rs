@@ -27,7 +27,7 @@ pub use sim::Simulation;
 pub use tooling::core::advecator::Advector;
 pub use tooling::core::conditions::ExitReason;
 pub use tooling::core::init::domain::{Domain, DomainBuilder};
-pub use tooling::core::integrator::TimeIntegrator;
+pub use tooling::core::integrator::{StepTimings, TimeIntegrator};
 pub use tooling::core::phasespace::PhaseSpaceRepr;
 pub use tooling::core::solver::PoissonSolver;
 pub use tooling::core::types::*;
@@ -63,6 +63,9 @@ pub use tooling::core::time::rkei::RkeiIntegrator;
 pub use tooling::core::time::strang::StrangSplitting;
 pub use tooling::core::time::unsplit::UnsplitIntegrator;
 pub use tooling::core::time::yoshida::YoshidaSplitting;
+
+// Progress tracking (shared atomics for TUI intra-step visibility)
+pub use tooling::core::progress::{ProgressSnapshot, StepPhase, StepProgress};
 
 // Phase-space representations
 pub use tooling::core::algos::amr::AmrGrid;

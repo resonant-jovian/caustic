@@ -368,7 +368,20 @@ impl HtTensor {
 
         let n_samples = n_initial_samples.unwrap_or(5 * max_rank);
         let mut rng = Xorshift64::new(seed.unwrap_or(42));
-        let eps_node = tolerance / 3.0;
+
+        // SLAR tolerance hierarchy with exponential decay (Zheng et al. 2025, §3.2):
+        // Leaves (depth 0) use the tightest tolerance, with each level up the tree
+        // relaxing by a decay factor. This matches the paper's requirement that
+        // subtrees closer to leaves use tighter tolerances.
+        //   ε_leaf        = tolerance / √(2d-3) = tolerance / 3.0 (for d=6)
+        //   ε_interior_lo = ε_leaf × decay       (nodes 6, 7: leaf-pair interiors)
+        //   ε_interior_hi = ε_leaf × decay²      (nodes 8, 9: spatial/velocity subtrees)
+        //   ε_root        = tolerance             (root: coarsest, set after construction)
+        let decay = (2.0_f64 * 6.0 - 3.0).sqrt(); // √(2d-3) ≈ 3.0
+        let eps_leaf = tolerance / decay;
+        let eps_interior_lo = eps_leaf * decay.sqrt(); // nodes 6, 7
+        let eps_interior_hi = eps_leaf * decay; // nodes 8, 9
+        let eps_node = eps_leaf; // default for leaf fiber-sampling
 
         // Helper: convert grid index to physical coordinate for a given dimension
         let idx_to_coord = |dim: usize, idx: usize| -> f64 {
@@ -490,7 +503,7 @@ impl HtTensor {
             &leaf_frames[2],
             leaf_ranks[1],
             leaf_ranks[2],
-            eps_node,
+            eps_interior_lo, // leaf-pair interior: moderate tolerance
             max_rank,
             n_samples,
             &mut rng,
@@ -508,7 +521,7 @@ impl HtTensor {
             &leaf_frames[5],
             leaf_ranks[4],
             leaf_ranks[5],
-            eps_node,
+            eps_interior_lo, // leaf-pair interior: moderate tolerance
             max_rank,
             n_samples,
             &mut rng,
@@ -569,7 +582,7 @@ impl HtTensor {
             &eff_frame_6_trunc,
             leaf_ranks[0],
             rank_6,
-            eps_node,
+            eps_interior_hi, // subtree root: coarser tolerance
             max_rank,
             n_samples,
             &mut rng,
@@ -616,7 +629,7 @@ impl HtTensor {
             &eff_frame_7_trunc,
             leaf_ranks[3],
             rank_7,
-            eps_node,
+            eps_interior_hi, // subtree root: coarser tolerance
             max_rank,
             n_samples,
             &mut rng,
@@ -781,7 +794,7 @@ impl HtTensor {
                 sum
             });
 
-            let aca_result = aca_partial_pivot(&root_mat, eps_node, max_rank);
+            let aca_result = aca_partial_pivot(&root_mat, tolerance, max_rank);
             // Fill root_transfer from ACA result
             for j8 in 0..rank_8 {
                 for j9 in 0..rank_9 {
@@ -841,14 +854,21 @@ impl HtTensor {
             ranks: [1, rank_8, rank_9],
         });
 
-        HtTensor {
+        let mut ht = HtTensor {
             nodes,
             shape,
             domain: domain.clone(),
             tolerance,
             max_rank,
             interpolation_mode: InterpolationMode::SparsePolynomial,
-        }
+        };
+
+        // Post-construction HSVD truncation (SLAR §3.2): re-compress the assembled
+        // HT tensor with a coarser tolerance proportional to the approximation norm.
+        // This catches over-ranked nodes from the bottom-up ACA construction.
+        ht.truncate(tolerance);
+
+        ht
     }
 }
 
@@ -911,7 +931,7 @@ fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64 + Sync>(
         .into_par_iter()
         .map(|comp_flat| {
             // Decode comp_flat
-            let mut comp_idx = vec![0usize; comp_dims.len()];
+            let mut comp_idx = [0usize; 6];
             let mut rem = comp_flat;
             for ci in (0..comp_dims.len()).rev() {
                 comp_idx[ci] = rem % shape[comp_dims[ci]];
@@ -921,7 +941,7 @@ fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64 + Sync>(
             // Build T = S @ U_right ∈ ℝ^{n_left × k_right}
             let mut t_mat = vec![0.0f64; n_left_phys * k_right];
             for left_flat in 0..n_left_phys {
-                let mut left_idx_vals = vec![0usize; left_dims.len()];
+                let mut left_idx_vals = [0usize; 6];
                 let mut rem_l = left_flat;
                 for li in (0..left_dims.len()).rev() {
                     left_idx_vals[li] = rem_l % shape[left_dims[li]];
@@ -929,7 +949,7 @@ fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64 + Sync>(
                 }
 
                 for right_flat in 0..n_right_phys {
-                    let mut right_idx_vals = vec![0usize; right_dims.len()];
+                    let mut right_idx_vals = [0usize; 6];
                     let mut rem_r = right_flat;
                     for ri in (0..right_dims.len()).rev() {
                         right_idx_vals[ri] = rem_r % shape[right_dims[ri]];
@@ -1007,18 +1027,22 @@ impl HtTensor {
     /// Evaluate at a single 6D grid point. Cost: O(d·k³).
     #[inline]
     pub fn evaluate(&self, indices: [usize; 6]) -> f64 {
-        let root_vec = self.node_vector(ROOT, &indices);
-        debug_assert_eq!(root_vec.len(), 1);
-        root_vec[0]
+        let mut buf = [0.0f64; 256];
+        self.node_vector_into(ROOT, &indices, &mut buf);
+        buf[0]
     }
 
-    /// Contracted vector at a node for given indices.
+    /// Contracted vector at a node, writing into caller-provided buffer (no allocation).
     #[inline]
-    fn node_vector(&self, node_idx: usize, indices: &[usize; 6]) -> Vec<f64> {
+    fn node_vector_into(&self, node_idx: usize, indices: &[usize; 6], out: &mut [f64]) -> usize {
         match &self.nodes[node_idx] {
             HtNode::Leaf { dim, frame } => {
                 let row = indices[*dim];
-                (0..frame.ncols()).map(|c| frame[(row, c)]).collect()
+                let k = frame.ncols();
+                for c in 0..k {
+                    out[c] = frame[(row, c)];
+                }
+                k
             }
             HtNode::Interior {
                 left,
@@ -1027,9 +1051,20 @@ impl HtTensor {
                 ranks,
             } => {
                 let [kt, kl, kr] = *ranks;
-                let lv = self.node_vector(*left, indices);
-                let rv = self.node_vector(*right, indices);
-                contract_transfer(transfer, kt, kl, kr, &lv, &rv)
+                let mut left_buf = [0.0f64; 256];
+                let mut right_buf = [0.0f64; 256];
+                self.node_vector_into(*left, indices, &mut left_buf);
+                self.node_vector_into(*right, indices, &mut right_buf);
+                contract_transfer_into(
+                    transfer,
+                    kt,
+                    kl,
+                    kr,
+                    &left_buf[..kl],
+                    &right_buf[..kr],
+                    out,
+                );
+                kt
             }
         }
     }
@@ -1088,15 +1123,16 @@ impl HtTensor {
                 let [kt, kl, kr] = ranks;
                 let mat = vec_to_mat(&transfer, kt, kl * kr);
                 let (q, r) = qr_decompose(&mat);
-                let new_kt = q.ncols();
-                let new_transfer = mat_to_vec(&q, new_kt, kl * kr);
+                let new_kt = r.nrows();
+                let new_transfer = mat_to_vec(&r, new_kt, kl * kr);
+                let absorb = q.transpose().to_owned();
                 self.nodes[node_idx] = HtNode::Interior {
                     left,
                     right,
                     transfer: new_transfer,
                     ranks: [new_kt, kl, kr],
                 };
-                self.absorb_r_into_parent(parent_of(node_idx), node_idx, &r);
+                self.absorb_r_into_parent(parent_of(node_idx), node_idx, &absorb);
             }
             _ => {}
         }
@@ -1153,12 +1189,28 @@ impl HtTensor {
 
 impl HtTensor {
     /// Truncate ranks to maintain ‖A − Ã‖ ≤ √(2d−3) · tolerance.
+    ///
+    /// Uses a hierarchical tolerance distribution: coarser thresholds at the top of
+    /// the tree, tighter at the leaves. This follows the SLAR paper's exponential
+    /// decay requirement (Zheng et al. 2025, §3.2) and the HSVD quasi-best
+    /// approximation bound (Grasedyck 2010).
     pub fn truncate(&mut self, tolerance: f64) {
         let _span = tracing::info_span!("ht_truncate").entered();
         self.orthogonalize_left();
-        let eps = tolerance / 3.0;
-        for &ni in &[8, 9, 6, 7, 0, 1, 2, 3, 4, 5] {
-            self.truncate_node(ni, eps);
+        let decay = (2.0_f64 * 6.0 - 3.0).sqrt(); // √(2d-3) ≈ 3.0
+        let eps_leaf = tolerance / decay;
+        let eps_interior_lo = eps_leaf * decay.sqrt(); // nodes 6, 7
+        let eps_interior_hi = eps_leaf * decay; // nodes 8, 9
+        // Top-down: process higher-level nodes first (coarser tolerance),
+        // then refine lower-level nodes (tighter tolerance).
+        for &ni in &[8, 9] {
+            self.truncate_node(ni, eps_interior_hi);
+        }
+        for &ni in &[6, 7] {
+            self.truncate_node(ni, eps_interior_lo);
+        }
+        for &ni in &[0, 1, 2, 3, 4, 5] {
+            self.truncate_node(ni, eps_leaf);
         }
     }
 
@@ -1206,15 +1258,15 @@ impl HtTensor {
                     self.nodes[node_idx] = node;
                     return;
                 }
-                let new_t = mat_to_vec(&u, new_rank, kl * kr);
                 let sv = s_times_vt(&s, &vt, new_rank);
+                let absorb = u.subcols(0, new_rank).transpose().to_owned();
                 self.nodes[node_idx] = HtNode::Interior {
                     left,
                     right,
-                    transfer: new_t,
+                    transfer: mat_to_vec(&sv, new_rank, kl * kr),
                     ranks: [new_rank, kl, kr],
                 };
-                self.absorb_r_into_parent(parent_of(node_idx), node_idx, &sv);
+                self.absorb_r_into_parent(parent_of(node_idx), node_idx, &absorb);
             }
             other => {
                 self.nodes[node_idx] = other;
@@ -1250,13 +1302,14 @@ impl HtTensor {
                 let (u, s, vt) = thin_svd(&mat);
                 let r = max_rank.min(u.ncols());
                 let sv = s_times_vt(&s, &vt, r);
+                let absorb = u.subcols(0, r).transpose().to_owned();
                 self.nodes[node_idx] = HtNode::Interior {
                     left,
                     right,
-                    transfer: mat_to_vec(&u, r, kl * kr),
+                    transfer: mat_to_vec(&sv, r, kl * kr),
                     ranks: [r, kl, kr],
                 };
-                self.absorb_r_into_parent(parent_of(node_idx), node_idx, &sv);
+                self.absorb_r_into_parent(parent_of(node_idx), node_idx, &absorb);
             }
             other => {
                 self.nodes[node_idx] = other;
@@ -2153,6 +2206,11 @@ impl PhaseSpaceRepr for HtTensor {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
+    fn memory_bytes(&self) -> usize {
+        // Delegate to the inherent method
+        Self::memory_bytes(self)
+    }
 }
 
 // ─── Moment extraction (Phase 3: LoMaC integration) ─────────────────────────
@@ -2431,15 +2489,43 @@ fn contract_transfer(
 }
 
 #[inline]
+fn contract_transfer_into(
+    t: &[f64],
+    kt: usize,
+    kl: usize,
+    kr: usize,
+    left: &[f64],
+    right: &[f64],
+    out: &mut [f64],
+) {
+    for i in 0..kt {
+        let mut sum = 0.0;
+        for j in 0..kl {
+            let lj = left[j];
+            let base = i * kl * kr + j * kr;
+            for k in 0..kr {
+                sum += t[base + k] * lj * right[k];
+            }
+        }
+        out[i] = sum;
+    }
+}
+
+#[inline]
 fn contract_leaf_weights(node: &HtNode, weights: &[f64]) -> Vec<f64> {
     let (frame, _) = leaf_data(node);
     let n = frame.nrows();
     let k = frame.ncols();
     assert_eq!(n, weights.len());
-    // Build a n×1 matrix from weights, then use faer's optimized mat-mul
-    let w = Mat::from_fn(n, 1, |i, _| weights[i]);
-    let result = frame.transpose() * &w;
-    (0..k).map(|i| result[(i, 0)]).collect()
+    (0..k)
+        .map(|c| {
+            let mut sum = 0.0;
+            for r in 0..n {
+                sum += frame[(r, c)] * weights[r];
+            }
+            sum
+        })
+        .collect()
 }
 
 // ─── Linear algebra helpers ─────────────────────────────────────────────────
@@ -2528,36 +2614,19 @@ fn qr_decompose(mat: &Mat<f64>) -> (Mat<f64>, Mat<f64>) {
 
 #[inline]
 fn s_times_vt(s: &[f64], vt: &Mat<f64>, rank: usize) -> Mat<f64> {
-    let n = vt.ncols();
-    let mut r = Mat::zeros(rank, n);
-    for i in 0..rank {
-        for j in 0..n {
-            r[(i, j)] = s[i] * vt[(i, j)];
-        }
-    }
-    r
+    Mat::from_fn(rank, vt.ncols(), |i, j| s[i] * vt[(i, j)])
 }
 
 #[inline]
 fn vec_to_mat(data: &[f64], rows: usize, cols: usize) -> Mat<f64> {
-    let mut m = Mat::zeros(rows, cols);
-    for i in 0..rows {
-        for j in 0..cols {
-            m[(i, j)] = data[i * cols + j];
-        }
-    }
-    m
+    Mat::from_fn(rows, cols, |i, j| data[i * cols + j])
 }
 
 #[inline]
 fn mat_to_vec(m: &Mat<f64>, rows: usize, cols: usize) -> Vec<f64> {
-    let mut v = vec![0.0f64; rows * cols];
-    for i in 0..rows {
-        for j in 0..cols {
-            v[i * cols + j] = m[(i, j)];
-        }
-    }
-    v
+    (0..rows)
+        .flat_map(|i| (0..cols).map(move |j| m[(i, j)]))
+        .collect()
 }
 
 #[inline]

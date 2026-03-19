@@ -11,6 +11,7 @@ pub(crate) mod mpi;
 pub(crate) mod output;
 pub(crate) mod phasespace;
 pub(crate) mod poisson;
+pub mod progress;
 pub(crate) mod solver;
 pub(crate) mod time;
 pub(crate) mod types;

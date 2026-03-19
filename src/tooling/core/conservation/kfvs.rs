@@ -202,98 +202,88 @@ impl KfvsSolver {
         let n = nx * ny * nz;
         assert_eq!(acceleration.len(), n);
 
-        // Allocate update arrays
-        let mut d_rho = vec![0.0f64; n];
-        let mut d_mom = vec![[0.0f64; 3]; n];
-        let mut d_energy = vec![0.0f64; n];
+        let dx = self.dx;
+        let shape = self.shape;
+        let state = &self.state;
 
-        // Sweep each direction
-        for dim in 0..3 {
-            let dx_d = self.dx[dim];
-            let n_d = self.shape[dim];
+        // Phase 1: Compute flux divergence for all 3 dimensions per cell in parallel.
+        // Each cell reads only from neighbors (immutable), producing (d_rho, d_mom, d_energy).
+        let updates: Vec<(f64, [f64; 3], f64)> = (0..n)
+            .into_par_iter()
+            .map(|flat| {
+                let i = flat / (ny * nz);
+                let j = (flat / nz) % ny;
+                let k = flat % nz;
 
-            for i in 0..nx {
-                for j in 0..ny {
-                    for k in 0..nz {
-                        let idx = self.flat(i, j, k);
+                let mut dr = 0.0f64;
+                let mut dm = [0.0f64; 3];
+                let mut de = 0.0f64;
 
-                        // Left and right neighbor indices along dim
-                        let (il, jl, kl) = match dim {
-                            0 => (Self::wrap(i as isize - 1, nx), j, k),
-                            1 => (i, Self::wrap(j as isize - 1, ny), k),
-                            2 => (i, j, Self::wrap(k as isize - 1, nz)),
+                for dim in 0..3 {
+                    let dx_d = dx[dim];
+                    let n_d = shape[dim];
+
+                    let idx_l = match dim {
+                        0 => Self::wrap(i as isize - 1, nx) * ny * nz + j * nz + k,
+                        1 => i * ny * nz + Self::wrap(j as isize - 1, ny) * nz + k,
+                        2 => i * ny * nz + j * nz + Self::wrap(k as isize - 1, nz),
+                        _ => unreachable!(),
+                    };
+                    let idx_r = match dim {
+                        0 => Self::wrap(i as isize + 1, nx) * ny * nz + j * nz + k,
+                        1 => i * ny * nz + Self::wrap(j as isize + 1, ny) * nz + k,
+                        2 => i * ny * nz + j * nz + Self::wrap(k as isize + 1, nz),
+                        _ => unreachable!(),
+                    };
+
+                    // Flux at left interface (i-½)
+                    let fl_pos = Self::half_maxwellian_flux(&state[idx_l], dim, true);
+                    let fl_neg = Self::half_maxwellian_flux(&state[flat], dim, false);
+
+                    // Flux at right interface (i+½)
+                    let fr_pos = Self::half_maxwellian_flux(&state[flat], dim, true);
+                    let fr_neg = Self::half_maxwellian_flux(&state[idx_r], dim, false);
+
+                    // Net flux divergence: -(F_{i+½} - F_{i-½}) / dx
+                    for c in 0..5 {
+                        let f_in = fl_pos[c] + fl_neg[c];
+                        let f_out = fr_pos[c] + fr_neg[c];
+                        let div = -(f_out - f_in) / dx_d;
+                        match c {
+                            0 => dr += div,
+                            1 => dm[0] += div,
+                            2 => dm[1] += div,
+                            3 => dm[2] += div,
+                            4 => de += div,
                             _ => unreachable!(),
-                        };
-                        let (ir, jr, kr) = match dim {
-                            0 => (Self::wrap(i as isize + 1, nx), j, k),
-                            1 => (i, Self::wrap(j as isize + 1, ny), k),
-                            2 => (i, j, Self::wrap(k as isize + 1, nz)),
-                            _ => unreachable!(),
-                        };
-
-                        let idx_l = self.flat(il, jl, kl);
-                        let idx_r = self.flat(ir, jr, kr);
-
-                        // Flux at left interface (i-½):
-                        // F_{i-½} = F⁺(left_state) + F⁻(this_state)
-                        let f_left_pos = Self::half_maxwellian_flux(&self.state[idx_l], dim, true);
-                        let f_left_neg = Self::half_maxwellian_flux(&self.state[idx], dim, false);
-
-                        // Flux at right interface (i+½):
-                        // F_{i+½} = F⁺(this_state) + F⁻(right_state)
-                        let f_right_pos = Self::half_maxwellian_flux(&self.state[idx], dim, true);
-                        let f_right_neg =
-                            Self::half_maxwellian_flux(&self.state[idx_r], dim, false);
-
-                        // Net flux: -(F_{i+½} - F_{i-½}) / dx
-                        let f_in = [
-                            f_left_pos[0] + f_left_neg[0],
-                            f_left_pos[1] + f_left_neg[1],
-                            f_left_pos[2] + f_left_neg[2],
-                            f_left_pos[3] + f_left_neg[3],
-                            f_left_pos[4] + f_left_neg[4],
-                        ];
-                        let f_out = [
-                            f_right_pos[0] + f_right_neg[0],
-                            f_right_pos[1] + f_right_neg[1],
-                            f_right_pos[2] + f_right_neg[2],
-                            f_right_pos[3] + f_right_neg[3],
-                            f_right_pos[4] + f_right_neg[4],
-                        ];
-
-                        d_rho[idx] -= (f_out[0] - f_in[0]) / dx_d;
-                        d_mom[idx][0] -= (f_out[1] - f_in[1]) / dx_d;
-                        d_mom[idx][1] -= (f_out[2] - f_in[2]) / dx_d;
-                        d_mom[idx][2] -= (f_out[3] - f_in[3]) / dx_d;
-                        d_energy[idx] -= (f_out[4] - f_in[4]) / dx_d;
+                        }
                     }
                 }
-            }
-        }
 
-        // Apply source terms (gravitational acceleration) and update
-        for i in 0..n {
-            let a = &acceleration[i];
-            let rho = self.state[i].density;
-            let u = self.state[i].velocity();
+                (dr, dm, de)
+            })
+            .collect();
 
-            // Source: ∂(ρu)/∂t += ρa,  ∂e/∂t += ρu·a
-            d_mom[i][0] += rho * a[0];
-            d_mom[i][1] += rho * a[1];
-            d_mom[i][2] += rho * a[2];
-            d_energy[i] += rho * (u[0] * a[0] + u[1] * a[1] + u[2] * a[2]);
+        // Phase 2: Apply source terms + Euler update
+        self.state
+            .par_iter_mut()
+            .zip(updates.par_iter())
+            .zip(acceleration.par_iter())
+            .for_each(|((s, &(dr, dm, de)), a)| {
+                let rho = s.density;
+                let u = s.velocity();
 
-            // Forward Euler update
-            self.state[i].density += dt * d_rho[i];
-            self.state[i].momentum[0] += dt * d_mom[i][0];
-            self.state[i].momentum[1] += dt * d_mom[i][1];
-            self.state[i].momentum[2] += dt * d_mom[i][2];
-            self.state[i].energy += dt * d_energy[i];
+                // Source: ∂(ρu)/∂t += ρa,  ∂e/∂t += ρu·a
+                let dm_src = [rho * a[0], rho * a[1], rho * a[2]];
+                let de_src = rho * (u[0] * a[0] + u[1] * a[1] + u[2] * a[2]);
 
-            // Floor density and energy to prevent negativity
-            self.state[i].density = self.state[i].density.max(0.0);
-            self.state[i].energy = self.state[i].energy.max(0.0);
-        }
+                // Forward Euler update
+                s.density = (s.density + dt * dr).max(0.0);
+                s.momentum[0] += dt * (dm[0] + dm_src[0]);
+                s.momentum[1] += dt * (dm[1] + dm_src[1]);
+                s.momentum[2] += dt * (dm[2] + dm_src[2]);
+                s.energy = (s.energy + dt * (de + de_src)).max(0.0);
+            });
     }
 
     /// Extract density field from macroscopic state.
@@ -347,16 +337,102 @@ impl KfvsSolver {
 
 /// Complementary error function erfc(x) = 1 - erf(x).
 ///
-/// Uses a rational Chebyshev approximation accurate to ~1e-15.
+/// Uses rational approximations from Sun/fdlibm (s_erf.c), accurate to ~1e-15.
+/// Four regions with minimax rational approximations.
+#[allow(clippy::excessive_precision)]
 fn erfc(x: f64) -> f64 {
-    // Abramowitz & Stegun 7.1.26 (maximum error 1.5e-7) is insufficient.
-    // Use the more accurate formula from Horner form.
-    let t = 1.0 / (1.0 + 0.3275911 * x.abs());
-    let poly = t
-        * (0.254829592
-            + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));
-    let result = poly * (-x * x).exp();
-    if x >= 0.0 { result } else { 2.0 - result }
+    let ax = x.abs();
+
+    let result = if ax < 0.84375 {
+        // Region 1: |x| < 0.84375 — compute erf via rational P/Q, then 1-erf
+        if ax < 1.0 / ((1u64 << 28) as f64) {
+            return 1.0 - x;
+        }
+        let z = x * x;
+        let r = 1.28379167095512558561e-01
+            + z * (-3.25042107247001499370e-01
+                + z * (-2.84817495755985104766e-02
+                    + z * (-5.77027029648944159157e-03 + z * -2.37630166566501626084e-05)));
+        let s = 1.0
+            + z * (3.97917223959155352819e-01
+                + z * (6.50222499887672944485e-02
+                    + z * (5.08130628187576562776e-03
+                        + z * (1.32494738004321644526e-04 + z * -3.96022827877536812320e-06))));
+        if ax < 0.25 {
+            1.0 - (x + x * r / s)
+        } else {
+            0.5 - (x * r / s + (x - 0.5))
+        }
+    } else if ax < 1.25 {
+        // Region 2: 0.84375 <= |x| < 1.25 — rational approx in (|x|-1)
+        let s = ax - 1.0;
+        let p = -2.36211856075265944077e-03
+            + s * (4.14856118683748331666e-01
+                + s * (-3.72207876035701323847e-01
+                    + s * (3.18346619901161753674e-01
+                        + s * (-1.10894694282396677476e-01
+                            + s * (3.54783043195201877747e-02
+                                + s * -2.16637559983254089680e-03)))));
+        let q = 1.0
+            + s * (1.06420880400844228286e-01
+                + s * (5.40397917702171048937e-01
+                    + s * (7.18286544141962539399e-02
+                        + s * (1.26171219808761642112e-01
+                            + s * (1.36370839120290507362e-02 + s * 1.19844998467991074170e-02)))));
+        // erfc(1) ≈ 0.15493708848953577
+        if x >= 0.0 {
+            0.15493708848953577 - p / q
+        } else {
+            1.0 + (0.84506291151046423 + p / q)
+        }
+    } else if ax < 28.0 {
+        // Region 3: 1.25 <= |x| < 28 — erfc via exp(-x²) * P(|x|)/Q(|x|)/|x|
+        let s = 1.0 / (ax * ax);
+        let (r, ss) = if ax < 2.857142857142857 {
+            // 1/0.35 ≈ 2.857
+            let r = -9.86494403484714822705e-03
+                + s * (-6.93858572707181764372e-01
+                    + s * (-1.05586262253232909814e+01
+                        + s * (-6.26190508608552143480e+01
+                            + s * (-1.62396476920817928905e+02
+                                + s * (-1.84605092906711035994e+02
+                                    + s * (-8.12874355063065934246e+01
+                                        + s * -9.81432934416914548592e+00))))));
+            let ss = 1.0
+                + s * (1.96512716674392571292e+01
+                    + s * (1.37657754143519702237e+02
+                        + s * (4.34565877475229228608e+02
+                            + s * (6.45387271733267880594e+02
+                                + s * (4.29008140027567833386e+02
+                                    + s * (1.08635005541779435134e+02
+                                        + s * (6.57024977031928170135e+00
+                                            + s * -6.04244152148580987438e-02)))))));
+            (r, ss)
+        } else {
+            let r = -9.86494292470009928597e-03
+                + s * (-7.99283237680523006574e-01
+                    + s * (-1.77579549177547519889e+01
+                        + s * (-1.60636384855557935030e+02
+                            + s * (-6.37566443368389085394e+02
+                                + s * (-1.02509513161107724954e+03
+                                    + s * -4.83519191608651397019e+02)))));
+            let ss = 1.0
+                + s * (3.03380607875625778203e+01
+                    + s * (3.25792512996573918826e+02
+                        + s * (1.53672958608443695994e+03
+                            + s * (3.19985821950859553908e+03
+                                + s * (2.55305040643316442583e+03
+                                    + s * 4.74528541206955367215e+02)))));
+            (r, ss)
+        };
+        let inv_sqrtpi = 0.5641895835477562869;
+        (-ax * ax).exp() * (inv_sqrtpi + r / ss) / ax
+    } else {
+        // |x| >= 28: erfc is negligibly small
+        0.0
+    };
+
+    if x < 0.0 { 2.0 - result } else { result }
 }
 
 #[cfg(test)]

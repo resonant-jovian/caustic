@@ -270,8 +270,6 @@ pub fn aca_partial_pivot(mat: &dyn BlackBoxMatrix, tolerance: f64, max_rank: usi
         // Norms for convergence check
         let uk_norm_sq: f64 = uk.iter().map(|x| x * x).sum();
         let vk_norm_sq: f64 = vk.iter().map(|x| x * x).sum();
-        let uk_norm = uk_norm_sq.sqrt();
-        let vk_norm = vk_norm_sq.sqrt();
 
         // Update Frobenius norm estimate:
         // ‖A_{k+1}‖²_F = ‖Aₖ‖²_F + ‖uₖ‖²·‖vₖ‖² + 2·Σⱼ<ₖ (uₖᵀuⱼ)(vₖᵀvⱼ)
@@ -297,9 +295,8 @@ pub fn aca_partial_pivot(mat: &dyn BlackBoxMatrix, tolerance: f64, max_rank: usi
         u_vecs.push(uk);
         v_vecs.push(vk);
 
-        // Convergence check
-        let frob_norm = frob_sq.max(0.0).sqrt();
-        if frob_norm > 0.0 && (uk_norm * vk_norm) / frob_norm < tolerance {
+        // Convergence check (squared comparison avoids 2 sqrt calls per iteration)
+        if frob_sq > 0.0 && uk_norm_sq * vk_norm_sq < tolerance * tolerance * frob_sq {
             break;
         }
     }

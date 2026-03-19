@@ -635,16 +635,109 @@ impl HtTensor3D {
 
     /// Expand to dense N³ array.
     pub fn to_full_3d(&self) -> Vec<f64> {
-        let [n0, n1, n2] = self.shape;
-        let mut data = vec![0.0; n0 * n1 * n2];
-        for i0 in 0..n0 {
-            for i1 in 0..n1 {
-                for i2 in 0..n2 {
-                    data[i0 * n1 * n2 + i1 * n2 + i2] = self.evaluate([i0, i1, i2]);
+        self.to_dense_subgrid(self.shape)
+    }
+
+    /// Batch extract a sub-grid [s0, s1, s2] via Khatri-Rao product reconstruction.
+    ///
+    /// Uses only rows `[0..s_d]` of each leaf frame, avoiding computation in the
+    /// zero-padded region. Much faster than per-point `evaluate()`:
+    /// O(n₁·n₂·k₁·k₂·k₃ + n₀·n₁·n₂·k₀) vs O(n₀·n₁·n₂·k₀·k₁·k₂·k₃).
+    pub fn to_dense_subgrid(&self, sub: [usize; 3]) -> Vec<f64> {
+        let [s0, s1, s2] = sub;
+
+        // Extract leaf frames and interior transfer tensors
+        let (u0, u1, u2) = self.leaf_frames();
+        let (b3, rk3) = self.interior_transfer(3);
+        let (b4, rk4) = self.interior_transfer(4);
+        let [_kt3, k1, k2] = rk3;
+        let [_kt4, k0, k3] = rk4;
+
+        // Step 1: Contract B₃ with U₂: T₁[j₃, j₁, i₂] = Σ_{j₂} B₃[j₃, j₁, j₂] · U₂[i₂, j₂]
+        // T₁ shape: k3 × k1 × s2
+        let mut t1 = vec![0.0f64; k3 * k1 * s2];
+        for j3 in 0..k3 {
+            for j1 in 0..k1 {
+                for i2 in 0..s2 {
+                    let mut sum = 0.0;
+                    for j2 in 0..k2 {
+                        sum += b3[j3 * k1 * k2 + j1 * k2 + j2] * u2[(i2, j2)];
+                    }
+                    t1[j3 * k1 * s2 + j1 * s2 + i2] = sum;
                 }
             }
         }
+
+        // Step 2: Contract T₁ with U₁: T₂[j₃, i₁, i₂] = Σ_{j₁} U₁[i₁, j₁] · T₁[j₃, j₁, i₂]
+        // T₂ shape: k3 × s1 × s2
+        let mut t2 = vec![0.0f64; k3 * s1 * s2];
+        for j3 in 0..k3 {
+            for i1 in 0..s1 {
+                for i2 in 0..s2 {
+                    let mut sum = 0.0;
+                    for j1 in 0..k1 {
+                        sum += u1[(i1, j1)] * t1[j3 * k1 * s2 + j1 * s2 + i2];
+                    }
+                    t2[j3 * s1 * s2 + i1 * s2 + i2] = sum;
+                }
+            }
+        }
+
+        // Step 3: Contract B₄ with T₂: T₃[j₀, i₁, i₂] = Σ_{j₃} B₄[0, j₀, j₃] · T₂[j₃, i₁, i₂]
+        // T₃ shape: k0 × s1 × s2
+        let mut t3 = vec![0.0f64; k0 * s1 * s2];
+        for j0 in 0..k0 {
+            for i1 in 0..s1 {
+                for i2 in 0..s2 {
+                    let mut sum = 0.0;
+                    for j3 in 0..k3 {
+                        sum += b4[j0 * k3 + j3] * t2[j3 * s1 * s2 + i1 * s2 + i2];
+                    }
+                    t3[j0 * s1 * s2 + i1 * s2 + i2] = sum;
+                }
+            }
+        }
+
+        // Step 4: Contract with U₀: data[i₀, i₁, i₂] = Σ_{j₀} U₀[i₀, j₀] · T₃[j₀, i₁, i₂]
+        // Parallelize over i₀ slabs
+        let slab_size = s1 * s2;
+        let mut data = vec![0.0f64; s0 * slab_size];
+        data.par_chunks_mut(slab_size)
+            .enumerate()
+            .for_each(|(i0, chunk)| {
+                for i1 in 0..s1 {
+                    for i2 in 0..s2 {
+                        let mut sum = 0.0;
+                        for j0 in 0..k0 {
+                            sum += u0[(i0, j0)] * t3[j0 * slab_size + i1 * s2 + i2];
+                        }
+                        chunk[i1 * s2 + i2] = sum;
+                    }
+                }
+            });
+
         data
+    }
+
+    /// Extract leaf frames as references to faer Mat.
+    fn leaf_frames(&self) -> (&Mat<f64>, &Mat<f64>, &Mat<f64>) {
+        let f = |idx: usize| -> &Mat<f64> {
+            match &self.nodes[idx] {
+                HtNode3D::Leaf { frame, .. } => frame,
+                _ => panic!("Node {idx} is not a leaf"),
+            }
+        };
+        (f(0), f(1), f(2))
+    }
+
+    /// Extract interior transfer tensor and ranks.
+    fn interior_transfer(&self, idx: usize) -> (&[f64], [usize; 3]) {
+        match &self.nodes[idx] {
+            HtNode3D::Interior {
+                transfer, ranks, ..
+            } => (transfer, *ranks),
+            _ => panic!("Node {idx} is not interior"),
+        }
     }
 
     /// Add two HT3D tensors via rank concatenation (block-diagonal transfer tensors).
@@ -777,11 +870,203 @@ impl HtTensor3D {
         }
     }
 
-    /// Truncate ranks via HSVD (orthogonalize then SVD at each node).
+    /// Truncate ranks via in-place HSVD: bottom-up orthogonalization then
+    /// top-down SVD truncation. Complexity O(n·k² + k³) vs O(N³) for dense roundtrip.
     pub fn truncate(&mut self, eps: f64, max_rank: usize) {
-        // Simple approach: expand to dense and rebuild
-        let data = self.to_full_3d();
-        *self = Self::from_dense(&data, self.shape, self.dx, eps, max_rank);
+        // ── Phase 1: Bottom-up orthogonalization ──
+        // QR each leaf frame, absorb R into parent transfer tensor.
+
+        // Leaf 0: U₀ = Q₀ · R₀
+        let (q0, r0) = leaf_qr(&self.nodes[0]);
+        self.nodes[0] = HtNode3D::Leaf { dim: 0, frame: q0 };
+
+        // Leaf 1: U₁ = Q₁ · R₁
+        let (q1, r1) = leaf_qr(&self.nodes[1]);
+        self.nodes[1] = HtNode3D::Leaf { dim: 1, frame: q1 };
+
+        // Leaf 2: U₂ = Q₂ · R₂
+        let (q2, r2) = leaf_qr(&self.nodes[2]);
+        self.nodes[2] = HtNode3D::Leaf { dim: 2, frame: q2 };
+
+        // Interior node 3: absorb R₁ (left) and R₂ (right) into B₃.
+        // For each parent-rank slice t: B₃_abs[t] = R₁ · B₃[t] · R₂ᵀ
+        // Then QR the matricization M[l·k₂+r, t] = B₃_abs[t, l, r]
+        // to orthogonalize node 3's parent dimension.
+        let (b3, rk3) = match &self.nodes[3] {
+            HtNode3D::Interior {
+                transfer, ranks, ..
+            } => (transfer.clone(), *ranks),
+            _ => panic!("Node 3 not interior"),
+        };
+        let [kt3, k1, k2] = rk3;
+
+        // Absorb: B₃_abs[t, l', r'] = Σ_l Σ_r R₁[l', l] · B₃[t, l, r] · R₂[r', r]
+        // R₁ is min(n₁, k₁) × k₁, R₂ is min(n₂, k₂) × k₂
+        let k1_new = r1.nrows(); // min(n1, k1) — may be less than k1 if rank > grid
+        let k2_new = r2.nrows();
+        let mut b3_abs = vec![0.0f64; kt3 * k1_new * k2_new];
+        for t in 0..kt3 {
+            for lp in 0..k1_new {
+                for rp in 0..k2_new {
+                    let mut sum = 0.0;
+                    for l in 0..k1 {
+                        let r1_lp_l = r1[(lp, l)];
+                        if r1_lp_l.abs() < 1e-30 {
+                            continue;
+                        }
+                        for r in 0..k2 {
+                            sum += r1_lp_l * b3[t * k1 * k2 + l * k2 + r] * r2[(rp, r)];
+                        }
+                    }
+                    b3_abs[t * k1_new * k2_new + lp * k2_new + rp] = sum;
+                }
+            }
+        }
+
+        // Matricize B₃_abs as M ∈ ℝ^{k1·k2 × kt3}: M[l·k2+r, t] = B₃_abs[t, l, r]
+        let mat3_rows = k1_new * k2_new;
+        let mut mat3 = Mat::<f64>::zeros(mat3_rows, kt3);
+        for t in 0..kt3 {
+            for l in 0..k1_new {
+                for r in 0..k2_new {
+                    mat3[(l * k2_new + r, t)] = b3_abs[t * k1_new * k2_new + l * k2_new + r];
+                }
+            }
+        }
+
+        // QR of M: M = Q₃ · R₃
+        let qr3 = mat3.as_ref().qr();
+        let q3 = qr3.compute_thin_Q(); // (k1·k2, min(k1·k2, kt3))
+        let r3 = qr3.thin_R().to_owned(); // (min(k1·k2, kt3), kt3)
+        let kt3_orth = q3.ncols(); // orthogonalized parent rank
+
+        // Set B₃ transfer ← Q₃ reshaped: B₃_new[t', l, r] = Q₃[l·k2+r, t']
+        let mut b3_orth = vec![0.0f64; kt3_orth * k1_new * k2_new];
+        for tp in 0..kt3_orth {
+            for l in 0..k1_new {
+                for r in 0..k2_new {
+                    b3_orth[tp * k1_new * k2_new + l * k2_new + r] = q3[(l * k2_new + r, tp)];
+                }
+            }
+        }
+
+        // ── Root node 4: absorb R₀ and R₃ ──
+        // B₄_abs = R₀ · B₄[0] · R₃ᵀ   (k0 × kt3 matrix)
+        let (b4, rk4) = match &self.nodes[4] {
+            HtNode3D::Interior {
+                transfer, ranks, ..
+            } => (transfer.clone(), *ranks),
+            _ => panic!("Node 4 not interior"),
+        };
+        let [_kt4, k0, k3_old] = rk4;
+
+        // R₃ is (kt3_orth, kt3) — transforms old parent rank to new orthogonal rank
+        // B₄[0] is (k0, k3_old) where k3_old = kt3
+        // B₄_abs = R₀ · B₄[0] · R₃ᵀ
+        let k0_new = r0.nrows(); // min(n0, k0)
+        let mut b4_abs = Mat::<f64>::zeros(k0_new, kt3_orth);
+        for jp in 0..k0_new {
+            for tp in 0..kt3_orth {
+                let mut sum = 0.0;
+                for j0 in 0..k0 {
+                    let r0_jp_j0 = r0[(jp, j0)];
+                    if r0_jp_j0.abs() < 1e-30 {
+                        continue;
+                    }
+                    for j3 in 0..k3_old {
+                        sum += r0_jp_j0 * b4[j0 * k3_old + j3] * r3[(tp, j3)];
+                    }
+                }
+                b4_abs[(jp, tp)] = sum;
+            }
+        }
+
+        // ── Phase 2: SVD and truncation at root ──
+        let svd_result = b4_abs.as_ref().thin_svd();
+        let (new_rank, new_leaf0, new_b3, new_b4) = match svd_result {
+            Ok(svd) => {
+                let s_col = svd.S().column_vector();
+                let sv: Vec<f64> = (0..s_col.nrows()).map(|i| s_col[i]).collect();
+                let trunc_k = truncation_rank(&sv, eps).min(max_rank).max(1);
+
+                let u_full = svd.U();
+                let v_full = svd.V();
+
+                // New leaf 0: Q₀ · U[:,0:k] · diag(√σ)
+                let leaf0_frame = match &self.nodes[0] {
+                    HtNode3D::Leaf { frame, .. } => frame,
+                    _ => unreachable!(),
+                };
+                let mut new_leaf0 = Mat::<f64>::zeros(leaf0_frame.nrows(), trunc_k);
+                for i in 0..leaf0_frame.nrows() {
+                    for j in 0..trunc_k {
+                        let mut val = 0.0;
+                        for jp in 0..k0_new {
+                            val += leaf0_frame[(i, jp)] * u_full[(jp, j)];
+                        }
+                        new_leaf0[(i, j)] = val * sv[j].sqrt();
+                    }
+                }
+
+                // New node 3 transfer: B₃_final[j, l, r] = Σ_{t'} √σ[j] · V[t', j] · B₃_orth[t', l, r]
+                let mut new_b3 = vec![0.0f64; trunc_k * k1_new * k2_new];
+                for j in 0..trunc_k {
+                    let sqrt_s = sv[j].sqrt();
+                    for l in 0..k1_new {
+                        for r in 0..k2_new {
+                            let mut sum = 0.0;
+                            for tp in 0..kt3_orth {
+                                sum += v_full[(tp, j)]
+                                    * b3_orth[tp * k1_new * k2_new + l * k2_new + r];
+                            }
+                            new_b3[j * k1_new * k2_new + l * k2_new + r] = sqrt_s * sum;
+                        }
+                    }
+                }
+
+                // New root: identity k × k
+                let mut new_b4 = vec![0.0f64; trunc_k * trunc_k];
+                for j in 0..trunc_k {
+                    new_b4[j * trunc_k + j] = 1.0;
+                }
+
+                (trunc_k, new_leaf0, new_b3, new_b4)
+            }
+            Err(_) => {
+                // SVD failed — fall back to rank 1
+                let leaf0_frame = match &self.nodes[0] {
+                    HtNode3D::Leaf { frame, .. } => frame,
+                    _ => unreachable!(),
+                };
+                let n0 = leaf0_frame.nrows();
+                let mut new_leaf0 = Mat::<f64>::zeros(n0, 1);
+                new_leaf0[(0, 0)] = 1.0;
+                let new_b3 = vec![0.0f64; k1_new * k2_new];
+                let new_b4 = vec![1.0f64; 1];
+                (1, new_leaf0, new_b3, new_b4)
+            }
+        };
+
+        // ── Phase 3: Assemble final nodes ──
+        self.nodes[0] = HtNode3D::Leaf {
+            dim: 0,
+            frame: new_leaf0,
+        };
+        // Leaves 1 and 2 keep their orthogonalized frames (already set above)
+
+        self.nodes[3] = HtNode3D::Interior {
+            left: 1,
+            right: 2,
+            transfer: new_b3,
+            ranks: [new_rank, k1_new, k2_new],
+        };
+
+        self.nodes[4] = HtNode3D::Interior {
+            left: 0,
+            right: 3,
+            transfer: new_b4,
+            ranks: [1, new_rank, new_rank],
+        };
     }
 
     /// Create a zero HT3D tensor.
@@ -1002,6 +1287,65 @@ impl HtTensor3D {
         }
     }
 
+    /// Apply 1D FFT to each leaf column using precomputed plans.
+    /// Plans must match padded leaf sizes: plans[d] handles frame nrows for leaf d.
+    pub fn fft_leaves_with_plans(
+        &self,
+        plans: &[std::sync::Arc<dyn rustfft::Fft<f64>>; 3],
+    ) -> HtTensor3DComplex {
+        use rustfft::num_complex::Complex64;
+
+        let mut nodes = Vec::with_capacity(NUM_NODES_3D);
+
+        for node in &self.nodes {
+            match node {
+                HtNode3D::Leaf { dim, frame } => {
+                    let n = frame.nrows();
+                    let k = frame.ncols();
+                    let mut frame_re = Mat::zeros(n, k);
+                    let mut frame_im = Mat::zeros(n, k);
+                    let fft = &plans[*dim];
+
+                    for col in 0..k {
+                        let mut buffer: Vec<Complex64> = (0..n)
+                            .map(|r| Complex64::new(frame[(r, col)], 0.0))
+                            .collect();
+                        fft.process(&mut buffer);
+                        for r in 0..n {
+                            frame_re[(r, col)] = buffer[r].re;
+                            frame_im[(r, col)] = buffer[r].im;
+                        }
+                    }
+
+                    nodes.push(HtNode3DComplex::Leaf {
+                        dim: *dim,
+                        frame_re,
+                        frame_im,
+                    });
+                }
+                HtNode3D::Interior {
+                    left,
+                    right,
+                    transfer,
+                    ranks,
+                } => {
+                    nodes.push(HtNode3DComplex::Interior {
+                        left: *left,
+                        right: *right,
+                        transfer: transfer.clone(),
+                        ranks: *ranks,
+                    });
+                }
+            }
+        }
+
+        HtTensor3DComplex {
+            nodes,
+            shape: self.shape,
+            dx: self.dx,
+        }
+    }
+
     /// Construct a rank-1 HT3D tensor from three 1D vectors:
     /// T[i,j,k] = v0[i] * v1[j] * v2[k].
     pub fn from_rank1(v0: &[f64], v1: &[f64], v2: &[f64], dx: [f64; 3]) -> Self {
@@ -1095,9 +1439,83 @@ impl HtTensor3DComplex {
             dx: self.dx,
         }
     }
+
+    /// Apply 1D inverse FFT to each leaf column using precomputed plans.
+    pub fn ifft_leaves_with_plans(
+        &self,
+        plans: &[std::sync::Arc<dyn rustfft::Fft<f64>>; 3],
+    ) -> HtTensor3D {
+        use rustfft::num_complex::Complex64;
+
+        let mut nodes = Vec::with_capacity(NUM_NODES_3D);
+
+        for node in &self.nodes {
+            match node {
+                HtNode3DComplex::Leaf {
+                    dim,
+                    frame_re,
+                    frame_im,
+                } => {
+                    let n = frame_re.nrows();
+                    let k = frame_re.ncols();
+                    let mut frame = Mat::zeros(n, k);
+                    let ifft = &plans[*dim];
+                    let scale = 1.0 / n as f64;
+
+                    for col in 0..k {
+                        let mut buffer: Vec<Complex64> = (0..n)
+                            .map(|r| Complex64::new(frame_re[(r, col)], frame_im[(r, col)]))
+                            .collect();
+                        ifft.process(&mut buffer);
+                        for r in 0..n {
+                            frame[(r, col)] = buffer[r].re * scale;
+                        }
+                    }
+
+                    nodes.push(HtNode3D::Leaf { dim: *dim, frame });
+                }
+                HtNode3DComplex::Interior {
+                    left,
+                    right,
+                    transfer,
+                    ranks,
+                } => {
+                    nodes.push(HtNode3D::Interior {
+                        left: *left,
+                        right: *right,
+                        transfer: transfer.clone(),
+                        ranks: *ranks,
+                    });
+                }
+            }
+        }
+
+        HtTensor3D {
+            nodes,
+            shape: self.shape,
+            dx: self.dx,
+        }
+    }
 }
 
 // ─── Utility functions ───────────────────────────────────────────────────────
+
+/// QR-factorize a leaf node's frame: U = Q · R.
+/// Returns (Q, R) where Q has orthonormal columns.
+fn leaf_qr(node: &HtNode3D) -> (Mat<f64>, Mat<f64>) {
+    match node {
+        HtNode3D::Leaf { frame, .. } => {
+            let m = frame.nrows();
+            let n = frame.ncols();
+            if m == 0 || n == 0 {
+                return (Mat::zeros(m.max(1), 1), Mat::zeros(1, n.max(1)));
+            }
+            let qr = frame.as_ref().qr();
+            (qr.compute_thin_Q(), qr.thin_R().to_owned())
+        }
+        _ => panic!("leaf_qr called on non-leaf node"),
+    }
+}
 
 /// Mode-k unfolding SVD: given data matricized as (n_k, rest), compute thin SVD
 /// and truncate. Returns (truncated_rank, leaf_frame).
@@ -1417,5 +1835,89 @@ mod tests {
             "ACA construction error: {max_err}, ranks: {:?}",
             ht.ranks()
         );
+    }
+
+    #[test]
+    fn ht3d_truncate_inplace_vs_dense() {
+        let dx = [0.5; 3];
+        let shape = [8, 8, 8];
+
+        // Build a rank-2 tensor by adding two rank-1 tensors (inflated rank)
+        let a = HtTensor3D::from_rank1(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            &[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            &[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+            dx,
+        );
+        let b = HtTensor3D::from_rank1(
+            &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            &[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            dx,
+        );
+        let sum = a.add(&b);
+
+        // Get reference dense data before truncation
+        let reference = sum.to_full_3d();
+
+        // In-place truncation
+        let mut ht_inplace = sum.clone();
+        ht_inplace.truncate(1e-10, 10);
+
+        // Compare
+        let reconstructed = ht_inplace.to_full_3d();
+        let max_err: f64 = reference
+            .iter()
+            .zip(reconstructed.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0, f64::max);
+
+        let norm: f64 = reference.iter().map(|x| x * x).sum::<f64>().sqrt();
+
+        assert!(
+            max_err / (norm + 1e-15) < 1e-8,
+            "In-place truncation error: {max_err}, norm: {norm}, ranks: {:?}",
+            ht_inplace.ranks()
+        );
+    }
+
+    #[test]
+    fn ht3d_to_dense_subgrid() {
+        let dx = [0.5; 3];
+        let shape = [8, 8, 8];
+
+        // Build a non-trivial rank-2 tensor
+        let a = HtTensor3D::from_rank1(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            &[0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0],
+            &[1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3],
+            dx,
+        );
+        let b = HtTensor3D::from_rank1(
+            &[8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0],
+            &[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+            &[0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.1, 2.4],
+            dx,
+        );
+        let sum = a.add(&b);
+
+        // Full extraction
+        let full = sum.to_full_3d();
+
+        // Subgrid extraction [4, 4, 4]
+        let sub = sum.to_dense_subgrid([4, 4, 4]);
+        assert_eq!(sub.len(), 64);
+
+        let mut max_err = 0.0f64;
+        for i0 in 0..4 {
+            for i1 in 0..4 {
+                for i2 in 0..4 {
+                    let expected = full[i0 * 64 + i1 * 8 + i2];
+                    let got = sub[i0 * 16 + i1 * 4 + i2];
+                    max_err = max_err.max((expected - got).abs());
+                }
+            }
+        }
+        assert!(max_err < 1e-10, "Subgrid extraction error: {max_err}");
     }
 }

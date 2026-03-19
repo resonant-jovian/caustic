@@ -42,8 +42,23 @@ impl Diagnostics {
         dx3: f64,
     ) -> GlobalDiagnostics {
         let density = repr.compute_density();
+        self.compute_with_density(repr, &density, potential, time, dx3)
+    }
+
+    /// Compute all global diagnostics using a pre-computed density field.
+    ///
+    /// This avoids redundant `compute_density()` calls when the caller
+    /// already has the density (e.g. from a Poisson solve in the same step).
+    pub fn compute_with_density(
+        &mut self,
+        repr: &dyn PhaseSpaceRepr,
+        density: &DensityField,
+        potential: &PotentialField,
+        time: f64,
+        dx3: f64,
+    ) -> GlobalDiagnostics {
         let t = Self::kinetic_energy(repr);
-        let w = Self::potential_energy(&density, potential, dx3);
+        let w = Self::potential_energy(density, potential, dx3);
         let e = t + w;
         let c2 = repr.casimir_c2();
         let s = repr.entropy();

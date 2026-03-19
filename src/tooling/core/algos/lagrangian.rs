@@ -59,7 +59,7 @@ pub fn cubic_spline_interpolate(data: &[f64], x: f64, n: usize) -> f64 {
     let a1 = 0.5 * (-p0 + p2);
     let a2 = p0 - 2.5 * p1 + 2.0 * p2 - 0.5 * p3;
     let a3 = -0.5 * p0 + 1.5 * p1 - 1.5 * p2 + 0.5 * p3;
-    a0 + a1 * t + a2 * t * t + a3 * t * t * t
+    a0 + t * (a1 + t * (a2 + t * a3))
 }
 
 /// 4-point Catmull-Rom cubic spline interpolation with clamped (open) boundary.
@@ -76,7 +76,7 @@ fn cubic_spline_interpolate_open(data: &[f64], x: f64, n: usize) -> f64 {
     let a1 = 0.5 * (-p0 + p2);
     let a2 = p0 - 2.5 * p1 + 2.0 * p2 - 0.5 * p3;
     let a3 = -0.5 * p0 + 1.5 * p1 - 1.5 * p2 + 0.5 * p3;
-    a0 + a1 * t + a2 * t * t + a3 * t * t * t
+    a0 + t * (a1 + t * (a2 + t * a3))
 }
 
 /// 1D semi-Lagrangian shift of a grid line.

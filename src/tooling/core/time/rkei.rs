@@ -13,10 +13,17 @@
 //!   Stage 2: f^(2) = ¾ f^n + ¼ advect(f^(1), g^(1), Δt)
 //!   Stage 3: f^{n+1} = ⅓ f^n + ⅔ advect(f^(2), g^(2), Δt)
 
+use std::sync::Arc;
+
 use super::super::{
-    advecator::Advector, integrator::TimeIntegrator, phasespace::PhaseSpaceRepr,
-    solver::PoissonSolver, types::*,
+    advecator::Advector,
+    integrator::TimeIntegrator,
+    phasespace::PhaseSpaceRepr,
+    progress::{StepPhase, StepProgress},
+    solver::PoissonSolver,
+    types::*,
 };
+use rayon::prelude::*;
 
 /// RKEI: 3rd-order unsplit Runge-Kutta time integrator.
 ///
@@ -24,11 +31,12 @@ use super::super::{
 /// with the acceleration field frozen at the beginning of that stage.
 pub struct RkeiIntegrator {
     pub g: f64,
+    progress: Option<Arc<StepProgress>>,
 }
 
 impl RkeiIntegrator {
     pub fn new(g: f64) -> Self {
-        Self { g }
+        Self { g, progress: None }
     }
 }
 
@@ -41,6 +49,12 @@ impl TimeIntegrator for RkeiIntegrator {
         dt: f64,
     ) {
         let _span = tracing::info_span!("rkei_advance").entered();
+
+        if let Some(ref p) = self.progress {
+            p.start_step();
+            p.set_phase(StepPhase::RkeiStage1);
+            p.set_sub_step(0, 3);
+        }
 
         // Save f^n as a snapshot for convex combination
         let f_n = repr.to_snapshot(0.0);
@@ -59,6 +73,10 @@ impl TimeIntegrator for RkeiIntegrator {
         // repr now holds f^(1)
 
         // ── Stage 2: f^(2) = ¾ f^n + ¼ advect(f^(1), g^(1), Δt) ──
+        if let Some(ref p) = self.progress {
+            p.set_phase(StepPhase::RkeiStage2);
+            p.set_sub_step(1, 3);
+        }
         let f_1 = repr.to_snapshot(0.0);
         {
             let _s = tracing::info_span!("rkei_stage_2").entered();
@@ -76,8 +94,8 @@ impl TimeIntegrator for RkeiIntegrator {
             let adv_snap = repr.to_snapshot(0.0);
             let combined: Vec<f64> = f_n
                 .data
-                .iter()
-                .zip(adv_snap.data.iter())
+                .par_iter()
+                .zip(adv_snap.data.par_iter())
                 .map(|(&a, &b)| 0.75 * a + 0.25 * b)
                 .collect();
             repr.load_snapshot(PhaseSpaceSnapshot {
@@ -89,6 +107,10 @@ impl TimeIntegrator for RkeiIntegrator {
         // repr now holds f^(2)
 
         // ── Stage 3: f^{n+1} = ⅓ f^n + ⅔ advect(f^(2), g^(2), Δt) ──
+        if let Some(ref p) = self.progress {
+            p.set_phase(StepPhase::RkeiStage3);
+            p.set_sub_step(2, 3);
+        }
         {
             let _s = tracing::info_span!("rkei_stage_3").entered();
             let density = repr.compute_density();
@@ -105,8 +127,8 @@ impl TimeIntegrator for RkeiIntegrator {
             let adv_snap = repr.to_snapshot(0.0);
             let combined: Vec<f64> = f_n
                 .data
-                .iter()
-                .zip(adv_snap.data.iter())
+                .par_iter()
+                .zip(adv_snap.data.par_iter())
                 .map(|(&a, &b)| (1.0 / 3.0) * a + (2.0 / 3.0) * b)
                 .collect();
             repr.load_snapshot(PhaseSpaceSnapshot {
@@ -125,6 +147,10 @@ impl TimeIntegrator for RkeiIntegrator {
         }
         let t_dyn = 1.0 / (self.g * rho_max).sqrt();
         cfl_factor * t_dyn
+    }
+
+    fn set_progress(&mut self, progress: Arc<StepProgress>) {
+        self.progress = Some(progress);
     }
 }
 

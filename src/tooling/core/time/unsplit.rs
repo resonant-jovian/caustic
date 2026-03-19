@@ -7,9 +7,16 @@
 //!
 //! where g(x) = -grad Phi is the gravitational acceleration.
 
+use std::sync::Arc;
+
 use super::super::{
-    advecator::Advector, init::domain::Domain, integrator::TimeIntegrator,
-    phasespace::PhaseSpaceRepr, solver::PoissonSolver, types::*,
+    advecator::Advector,
+    init::domain::Domain,
+    integrator::TimeIntegrator,
+    phasespace::PhaseSpaceRepr,
+    progress::{StepPhase, StepProgress},
+    solver::PoissonSolver,
+    types::*,
 };
 
 /// Method-of-lines Runge-Kutta integrator for the full 6D Vlasov PDE.
@@ -25,6 +32,7 @@ pub struct UnsplitIntegrator {
     pub g: f64,
     /// Computational domain (grid spacings, extents, BCs).
     pub domain: Domain,
+    progress: Option<Arc<StepProgress>>,
 }
 
 impl UnsplitIntegrator {
@@ -42,6 +50,7 @@ impl UnsplitIntegrator {
             rk_stages,
             g,
             domain,
+            progress: None,
         }
     }
 
@@ -324,6 +333,12 @@ impl TimeIntegrator for UnsplitIntegrator {
     ) {
         let _span = tracing::info_span!("unsplit_advance").entered();
 
+        if let Some(ref p) = self.progress {
+            p.start_step();
+            p.set_phase(StepPhase::UnsplitStage1);
+            p.set_sub_step(0, self.rk_stages as u8);
+        }
+
         let shape = self.sizes();
         let dv = self.domain.dv();
         let g = self.g;
@@ -357,6 +372,10 @@ impl TimeIntegrator for UnsplitIntegrator {
                     .map(|(&y, &k)| y + dt * k)
                     .collect();
 
+                if let Some(ref p) = self.progress {
+                    p.set_phase(StepPhase::UnsplitStage2);
+                    p.set_sub_step(1, 2);
+                }
                 let accel1 = compute_accel(&y_stage);
                 let k2 = self.evaluate_rhs(&y_stage, &accel1);
 
@@ -382,6 +401,10 @@ impl TimeIntegrator for UnsplitIntegrator {
                 let k1 = self.evaluate_rhs(&y0, &accel0);
 
                 // Stage 2: y0 + dt/2 * k1
+                if let Some(ref p) = self.progress {
+                    p.set_phase(StepPhase::UnsplitStage2);
+                    p.set_sub_step(1, 3);
+                }
                 let y_s2: Vec<f64> = y0
                     .iter()
                     .zip(k1.iter())
@@ -391,6 +414,10 @@ impl TimeIntegrator for UnsplitIntegrator {
                 let k2 = self.evaluate_rhs(&y_s2, &accel2);
 
                 // Stage 3: y0 - dt*k1 + 2*dt*k2
+                if let Some(ref p) = self.progress {
+                    p.set_phase(StepPhase::UnsplitStage3);
+                    p.set_sub_step(2, 3);
+                }
                 let y_s3: Vec<f64> = (0..n)
                     .map(|i| y0[i] - dt * k1[i] + 2.0 * dt * k2[i])
                     .collect();
@@ -421,6 +448,10 @@ impl TimeIntegrator for UnsplitIntegrator {
                 let k1 = self.evaluate_rhs(&y0, &accel0);
 
                 // Stage 2: y0 + dt/2 * k1
+                if let Some(ref p) = self.progress {
+                    p.set_phase(StepPhase::UnsplitStage2);
+                    p.set_sub_step(1, 4);
+                }
                 let y_s2: Vec<f64> = y0
                     .iter()
                     .zip(k1.iter())
@@ -430,6 +461,10 @@ impl TimeIntegrator for UnsplitIntegrator {
                 let k2 = self.evaluate_rhs(&y_s2, &accel2);
 
                 // Stage 3: y0 + dt/2 * k2
+                if let Some(ref p) = self.progress {
+                    p.set_phase(StepPhase::UnsplitStage3);
+                    p.set_sub_step(2, 4);
+                }
                 let y_s3: Vec<f64> = y0
                     .iter()
                     .zip(k2.iter())
@@ -439,6 +474,10 @@ impl TimeIntegrator for UnsplitIntegrator {
                 let k3 = self.evaluate_rhs(&y_s3, &accel3);
 
                 // Stage 4: y0 + dt * k3
+                if let Some(ref p) = self.progress {
+                    p.set_phase(StepPhase::UnsplitStage4);
+                    p.set_sub_step(3, 4);
+                }
                 let y_s4: Vec<f64> = y0
                     .iter()
                     .zip(k3.iter())
@@ -501,6 +540,10 @@ impl TimeIntegrator for UnsplitIntegrator {
         };
 
         cfl_factor * dt_spatial.min(dt_velocity)
+    }
+
+    fn set_progress(&mut self, progress: Arc<StepProgress>) {
+        self.progress = Some(progress);
     }
 }
 

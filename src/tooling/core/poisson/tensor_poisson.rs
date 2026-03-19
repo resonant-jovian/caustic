@@ -16,6 +16,7 @@
 //! This allows O(R_G · N) construction instead of O(N³).
 
 use rayon::prelude::*;
+use std::sync::Arc;
 
 use super::super::solver::PoissonSolver;
 use super::super::types::*;
@@ -28,6 +29,7 @@ use rustfft::num_complex::Complex64;
 ///
 /// The Green's function FFT is precomputed during construction,
 /// so repeated solves only require the convolution pipeline.
+/// FFT plans are cached for reuse across `solve()` calls.
 pub struct TensorPoisson {
     pub shape: [usize; 3],
     pub dx: [f64; 3],
@@ -43,6 +45,10 @@ pub struct TensorPoisson {
     /// 2nd-order near-field correction: ∫_{B_δ} [1/|y| - GS(|y|)] r⁴/6 dy.
     /// Applied as Φ_corr_2(x) = -G · I_2 · ∇²ρ(x).
     near_field_integral_2: f64,
+    /// Cached C2C forward plans for padded grid [axis0, axis1, axis2].
+    fft_fwd: [Arc<dyn rustfft::Fft<f64>>; 3],
+    /// Cached C2C inverse plans for padded grid [axis0, axis1, axis2].
+    fft_inv: [Arc<dyn rustfft::Fft<f64>>; 3],
 }
 
 impl TensorPoisson {
@@ -101,8 +107,21 @@ impl TensorPoisson {
                 }
             });
 
+        // Precompute FFT plans for the padded grid
+        let mut planner = FftPlanner::new();
+        let fft_fwd = [
+            planner.plan_fft_forward(padded_shape[0]),
+            planner.plan_fft_forward(padded_shape[1]),
+            planner.plan_fft_forward(padded_shape[2]),
+        ];
+        let fft_inv = [
+            planner.plan_fft_inverse(padded_shape[0]),
+            planner.plan_fft_inverse(padded_shape[1]),
+            planner.plan_fft_inverse(padded_shape[2]),
+        ];
+
         // 3D FFT of Green's function
-        let green_fft = fft_3d_forward(&green, padded_shape);
+        let green_fft = fft_3d_forward(&green, padded_shape, &fft_fwd);
         let dv = dx[0] * dx[1] * dx[2];
 
         // Compute near-field correction integrals (Exl, Mauser & Zhang, JCP 2016)
@@ -117,6 +136,8 @@ impl TensorPoisson {
             dv,
             near_field_integral,
             near_field_integral_2,
+            fft_fwd,
+            fft_inv,
         }
     }
 
@@ -160,7 +181,7 @@ impl PoissonSolver for TensorPoisson {
             });
 
         // Step 2: 3D FFT of padded density
-        let rho_fft = fft_3d_forward(&rho_padded, self.padded_shape);
+        let rho_fft = fft_3d_forward(&rho_padded, self.padded_shape, &self.fft_fwd);
 
         // Step 3: element-wise multiply (convolution in Fourier space) — parallel
         let phi_fft: Vec<Complex64> = rho_fft
@@ -170,7 +191,7 @@ impl PoissonSolver for TensorPoisson {
             .collect();
 
         // Step 4: 3D IFFT
-        let phi_padded = fft_3d_inverse(&phi_fft, self.padded_shape);
+        let phi_padded = fft_3d_inverse(&phi_fft, self.padded_shape, &self.fft_inv);
 
         // Step 5: extract N³ subgrid and scale — parallel over i0 slabs
         let scale = 4.0 * std::f64::consts::PI * g * self.dv;
@@ -226,125 +247,27 @@ fn min_image_dist(i: usize, n: usize) -> f64 {
 }
 
 /// 3D FFT (forward) of a real array, returning complex array.
-///
-/// Parallelized via rayon using the gather-process-scatter pattern:
-/// - Axis 2: contiguous rows processed via `par_chunks_mut`.
-/// - Axis 1 and 0: parallel gather into thread-local line buffers, FFT,
-///   collect results, then sequential scatter back.
-fn fft_3d_forward(data: &[f64], shape: [usize; 3]) -> Vec<Complex64> {
-    let [n0, n1, n2] = shape;
-    let n_total = n0 * n1 * n2;
-    assert_eq!(data.len(), n_total);
-
-    let mut buf: Vec<Complex64> = data.iter().map(|&v| Complex64::new(v, 0.0)).collect();
-
-    let mut planner = FftPlanner::new();
-
-    // FFT along axis 2 (fastest varying) — parallel over (i0, i1) pairs.
-    let fft2 = planner.plan_fft_forward(n2);
-    buf.par_chunks_mut(n2).for_each(|row| {
-        fft2.process(row);
-    });
-
-    // FFT along axis 1 — parallel gather/process, sequential scatter.
-    let fft1 = planner.plan_fft_forward(n1);
-    let results_1: Vec<(usize, usize, Vec<Complex64>)> = (0..n0 * n2)
-        .into_par_iter()
-        .map(|idx| {
-            let i0 = idx / n2;
-            let i2 = idx % n2;
-            let mut line: Vec<Complex64> =
-                (0..n1).map(|i1| buf[i0 * n1 * n2 + i1 * n2 + i2]).collect();
-            fft1.process(&mut line);
-            (i0, i2, line)
-        })
-        .collect();
-    for (i0, i2, line) in results_1 {
-        for i1 in 0..n1 {
-            buf[i0 * n1 * n2 + i1 * n2 + i2] = line[i1];
-        }
-    }
-
-    // FFT along axis 0 — parallel gather/process, sequential scatter.
-    let fft0 = planner.plan_fft_forward(n0);
-    let results_0: Vec<(usize, usize, Vec<Complex64>)> = (0..n1 * n2)
-        .into_par_iter()
-        .map(|idx| {
-            let i1 = idx / n2;
-            let i2 = idx % n2;
-            let mut line: Vec<Complex64> =
-                (0..n0).map(|i0| buf[i0 * n1 * n2 + i1 * n2 + i2]).collect();
-            fft0.process(&mut line);
-            (i1, i2, line)
-        })
-        .collect();
-    for (i1, i2, line) in results_0 {
-        for i0 in 0..n0 {
-            buf[i0 * n1 * n2 + i1 * n2 + i2] = line[i0];
-        }
-    }
-
-    buf
+/// Delegates to shared scratch-buffer implementation.
+fn fft_3d_forward(
+    data: &[f64],
+    shape: [usize; 3],
+    plans: &[Arc<dyn rustfft::Fft<f64>>; 3],
+) -> Vec<Complex64> {
+    let n: usize = shape.iter().product();
+    let mut scratch = vec![Complex64::new(0.0, 0.0); n];
+    super::fft_utils::fft_3d_forward_scratch(data, &mut scratch, shape, plans)
 }
 
 /// 3D IFFT of a complex array, returning real part.
-///
-/// Parallelized via rayon using the gather-process-scatter pattern (same as forward).
-fn fft_3d_inverse(data: &[Complex64], shape: [usize; 3]) -> Vec<f64> {
-    let [n0, n1, n2] = shape;
-    let n_total = n0 * n1 * n2;
-    assert_eq!(data.len(), n_total);
-
-    let mut buf = data.to_vec();
-    let scale = 1.0 / n_total as f64;
-
-    let mut planner = FftPlanner::new();
-
-    // IFFT along axis 2 — parallel over (i0, i1) pairs via contiguous chunks.
-    let ifft2 = planner.plan_fft_inverse(n2);
-    buf.par_chunks_mut(n2).for_each(|row| {
-        ifft2.process(row);
-    });
-
-    // IFFT along axis 1 — parallel gather/process, sequential scatter.
-    let ifft1 = planner.plan_fft_inverse(n1);
-    let results_1: Vec<(usize, usize, Vec<Complex64>)> = (0..n0 * n2)
-        .into_par_iter()
-        .map(|idx| {
-            let i0 = idx / n2;
-            let i2 = idx % n2;
-            let mut line: Vec<Complex64> =
-                (0..n1).map(|i1| buf[i0 * n1 * n2 + i1 * n2 + i2]).collect();
-            ifft1.process(&mut line);
-            (i0, i2, line)
-        })
-        .collect();
-    for (i0, i2, line) in results_1 {
-        for i1 in 0..n1 {
-            buf[i0 * n1 * n2 + i1 * n2 + i2] = line[i1];
-        }
-    }
-
-    // IFFT along axis 0 — parallel gather/process, sequential scatter.
-    let ifft0 = planner.plan_fft_inverse(n0);
-    let results_0: Vec<(usize, usize, Vec<Complex64>)> = (0..n1 * n2)
-        .into_par_iter()
-        .map(|idx| {
-            let i1 = idx / n2;
-            let i2 = idx % n2;
-            let mut line: Vec<Complex64> =
-                (0..n0).map(|i0| buf[i0 * n1 * n2 + i1 * n2 + i2]).collect();
-            ifft0.process(&mut line);
-            (i1, i2, line)
-        })
-        .collect();
-    for (i1, i2, line) in results_0 {
-        for i0 in 0..n0 {
-            buf[i0 * n1 * n2 + i1 * n2 + i2] = line[i0];
-        }
-    }
-
-    buf.par_iter().map(|c| c.re * scale).collect()
+/// Delegates to shared scratch-buffer implementation.
+fn fft_3d_inverse(
+    data: &[Complex64],
+    shape: [usize; 3],
+    plans: &[Arc<dyn rustfft::Fft<f64>>; 3],
+) -> Vec<f64> {
+    let n: usize = shape.iter().product();
+    let mut scratch = vec![Complex64::new(0.0, 0.0); n];
+    super::fft_utils::fft_3d_inverse_scratch(data, &mut scratch, shape, plans)
 }
 
 #[cfg(test)]
