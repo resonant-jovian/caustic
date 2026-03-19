@@ -4,8 +4,12 @@
 use std::sync::Arc;
 
 use super::super::{
-    advecator::Advector, integrator::TimeIntegrator, phasespace::PhaseSpaceRepr,
-    progress::{StepPhase, StepProgress}, solver::PoissonSolver, types::*,
+    advecator::Advector,
+    integrator::TimeIntegrator,
+    phasespace::PhaseSpaceRepr,
+    progress::{StepPhase, StepProgress},
+    solver::PoissonSolver,
+    types::*,
 };
 
 /// Lie (1st-order) operator splitting: drift(Δt) → kick(Δt).

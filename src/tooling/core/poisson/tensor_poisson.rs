@@ -247,122 +247,27 @@ fn min_image_dist(i: usize, n: usize) -> f64 {
 }
 
 /// 3D FFT (forward) of a real array, returning complex array.
-///
-/// Uses precomputed plans for each axis. Parallelized via rayon using the
-/// gather-process-scatter pattern.
+/// Delegates to shared scratch-buffer implementation.
 fn fft_3d_forward(
     data: &[f64],
     shape: [usize; 3],
     plans: &[Arc<dyn rustfft::Fft<f64>>; 3],
 ) -> Vec<Complex64> {
-    let [n0, n1, n2] = shape;
-    let n_total = n0 * n1 * n2;
-    assert_eq!(data.len(), n_total);
-
-    let mut buf: Vec<Complex64> = data.iter().map(|&v| Complex64::new(v, 0.0)).collect();
-
-    // FFT along axis 2 (fastest varying) — parallel over (i0, i1) pairs.
-    buf.par_chunks_mut(n2).for_each(|row| {
-        plans[2].process(row);
-    });
-
-    // FFT along axis 1 — parallel gather/process, sequential scatter.
-    let results_1: Vec<(usize, usize, Vec<Complex64>)> = (0..n0 * n2)
-        .into_par_iter()
-        .map(|idx| {
-            let i0 = idx / n2;
-            let i2 = idx % n2;
-            let mut line: Vec<Complex64> =
-                (0..n1).map(|i1| buf[i0 * n1 * n2 + i1 * n2 + i2]).collect();
-            plans[1].process(&mut line);
-            (i0, i2, line)
-        })
-        .collect();
-    for (i0, i2, line) in results_1 {
-        for i1 in 0..n1 {
-            buf[i0 * n1 * n2 + i1 * n2 + i2] = line[i1];
-        }
-    }
-
-    // FFT along axis 0 — parallel gather/process, sequential scatter.
-    let results_0: Vec<(usize, usize, Vec<Complex64>)> = (0..n1 * n2)
-        .into_par_iter()
-        .map(|idx| {
-            let i1 = idx / n2;
-            let i2 = idx % n2;
-            let mut line: Vec<Complex64> =
-                (0..n0).map(|i0| buf[i0 * n1 * n2 + i1 * n2 + i2]).collect();
-            plans[0].process(&mut line);
-            (i1, i2, line)
-        })
-        .collect();
-    for (i1, i2, line) in results_0 {
-        for i0 in 0..n0 {
-            buf[i0 * n1 * n2 + i1 * n2 + i2] = line[i0];
-        }
-    }
-
-    buf
+    let n: usize = shape.iter().product();
+    let mut scratch = vec![Complex64::new(0.0, 0.0); n];
+    super::fft_utils::fft_3d_forward_scratch(data, &mut scratch, shape, plans)
 }
 
 /// 3D IFFT of a complex array, returning real part.
-///
-/// Uses precomputed plans for each axis. Parallelized via rayon using the
-/// gather-process-scatter pattern.
+/// Delegates to shared scratch-buffer implementation.
 fn fft_3d_inverse(
     data: &[Complex64],
     shape: [usize; 3],
     plans: &[Arc<dyn rustfft::Fft<f64>>; 3],
 ) -> Vec<f64> {
-    let [n0, n1, n2] = shape;
-    let n_total = n0 * n1 * n2;
-    assert_eq!(data.len(), n_total);
-
-    let mut buf = data.to_vec();
-    let scale = 1.0 / n_total as f64;
-
-    // IFFT along axis 2 — parallel over (i0, i1) pairs via contiguous chunks.
-    buf.par_chunks_mut(n2).for_each(|row| {
-        plans[2].process(row);
-    });
-
-    // IFFT along axis 1 — parallel gather/process, sequential scatter.
-    let results_1: Vec<(usize, usize, Vec<Complex64>)> = (0..n0 * n2)
-        .into_par_iter()
-        .map(|idx| {
-            let i0 = idx / n2;
-            let i2 = idx % n2;
-            let mut line: Vec<Complex64> =
-                (0..n1).map(|i1| buf[i0 * n1 * n2 + i1 * n2 + i2]).collect();
-            plans[1].process(&mut line);
-            (i0, i2, line)
-        })
-        .collect();
-    for (i0, i2, line) in results_1 {
-        for i1 in 0..n1 {
-            buf[i0 * n1 * n2 + i1 * n2 + i2] = line[i1];
-        }
-    }
-
-    // IFFT along axis 0 — parallel gather/process, sequential scatter.
-    let results_0: Vec<(usize, usize, Vec<Complex64>)> = (0..n1 * n2)
-        .into_par_iter()
-        .map(|idx| {
-            let i1 = idx / n2;
-            let i2 = idx % n2;
-            let mut line: Vec<Complex64> =
-                (0..n0).map(|i0| buf[i0 * n1 * n2 + i1 * n2 + i2]).collect();
-            plans[0].process(&mut line);
-            (i1, i2, line)
-        })
-        .collect();
-    for (i1, i2, line) in results_0 {
-        for i0 in 0..n0 {
-            buf[i0 * n1 * n2 + i1 * n2 + i2] = line[i0];
-        }
-    }
-
-    buf.par_iter().map(|c| c.re * scale).collect()
+    let n: usize = shape.iter().product();
+    let mut scratch = vec![Complex64::new(0.0, 0.0); n];
+    super::fft_utils::fft_3d_inverse_scratch(data, &mut scratch, shape, plans)
 }
 
 #[cfg(test)]

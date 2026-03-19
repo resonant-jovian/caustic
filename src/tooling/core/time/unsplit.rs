@@ -10,8 +10,12 @@
 use std::sync::Arc;
 
 use super::super::{
-    advecator::Advector, init::domain::Domain, integrator::TimeIntegrator,
-    phasespace::PhaseSpaceRepr, progress::{StepPhase, StepProgress}, solver::PoissonSolver,
+    advecator::Advector,
+    init::domain::Domain,
+    integrator::TimeIntegrator,
+    phasespace::PhaseSpaceRepr,
+    progress::{StepPhase, StepProgress},
+    solver::PoissonSolver,
     types::*,
 };
 

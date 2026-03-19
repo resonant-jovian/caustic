@@ -17,6 +17,7 @@ type ComplexSlab = (Vec<Complex<f64>>, Vec<Complex<f64>>, Vec<Complex<f64>>);
 
 /// Perform a full complex 3D FFT using precomputed plans.
 ///
+/// Uses scratch-buffer-based transpose approach to avoid per-line allocations.
 /// `buf` is a flat row-major complex buffer of size `shape[0] * shape[1] * shape[2]`.
 /// `plans` contains one precomputed plan per axis: [x, y, z].
 fn fft_3d_c2c(
@@ -24,48 +25,9 @@ fn fft_3d_c2c(
     shape: [usize; 3],
     plans: &[Arc<dyn rustfft::Fft<f64>>; 3],
 ) {
-    let [nx, ny, nz] = shape;
-
-    // Axis 2 (z): contiguous rows — in-place via par_chunks_mut
-    buf.par_chunks_mut(nz).for_each(|row| {
-        plans[2].process(row);
-    });
-
-    // Axis 1 (y): stride-nz access — gather, transform, scatter
-    let y_results: Vec<(usize, usize, Vec<Complex<f64>>)> = (0..nx * nz)
-        .into_par_iter()
-        .map(|idx| {
-            let ix = idx / nz;
-            let iz = idx % nz;
-            let mut line: Vec<Complex<f64>> =
-                (0..ny).map(|iy| buf[ix * ny * nz + iy * nz + iz]).collect();
-            plans[1].process(&mut line);
-            (ix, iz, line)
-        })
-        .collect();
-    for (ix, iz, line) in y_results {
-        for iy in 0..ny {
-            buf[ix * ny * nz + iy * nz + iz] = line[iy];
-        }
-    }
-
-    // Axis 0 (x): stride-ny*nz access — gather, transform, scatter
-    let x_results: Vec<(usize, usize, Vec<Complex<f64>>)> = (0..ny * nz)
-        .into_par_iter()
-        .map(|idx| {
-            let iy = idx / nz;
-            let iz = idx % nz;
-            let mut line: Vec<Complex<f64>> =
-                (0..nx).map(|ix| buf[ix * ny * nz + iy * nz + iz]).collect();
-            plans[0].process(&mut line);
-            (iy, iz, line)
-        })
-        .collect();
-    for (iy, iz, line) in x_results {
-        for ix in 0..nx {
-            buf[ix * ny * nz + iy * nz + iz] = line[ix];
-        }
-    }
+    let n: usize = shape.iter().product();
+    let mut scratch = vec![Complex::new(0.0, 0.0); n];
+    super::fft_utils::fft_3d_c2c_scratch(buf, &mut scratch, shape, plans);
 }
 
 /// Periodic-BC Poisson solver. O(N³ log N). For cosmological boxes.
@@ -150,45 +112,62 @@ impl FftPoisson {
                 r2c.process(&mut inbuf, out_chunk).unwrap();
             });
 
-        // --- y-axis: C2C on half-complex grid ---
-        let fft_y = &self.fwd[1];
-        let y_results: Vec<(usize, usize, Vec<Complex<f64>>)> = (0..nx * nz_c)
-            .into_par_iter()
-            .map(|idx| {
-                let ix = idx / nz_c;
-                let iz = idx % nz_c;
-                let mut line: Vec<Complex<f64>> = (0..ny)
-                    .map(|iy| buf[ix * ny * nz_c + iy * nz_c + iz])
-                    .collect();
-                fft_y.process(&mut line);
-                (ix, iz, line)
-            })
-            .collect();
-        for (ix, iz, line) in y_results {
-            for iy in 0..ny {
-                buf[ix * ny * nz_c + iy * nz_c + iz] = line[iy];
-            }
-        }
+        // --- y-axis: C2C via transpose on half-complex grid ---
+        let mut scratch = vec![Complex::new(0.0, 0.0); n_total_c];
+        // Transpose buf(x,y,zc) → scratch(x,zc,y)
+        scratch
+            .par_chunks_mut(nz_c * ny)
+            .enumerate()
+            .for_each(|(ix, slab)| {
+                for iz in 0..nz_c {
+                    for iy in 0..ny {
+                        slab[iz * ny + iy] = buf[ix * ny * nz_c + iy * nz_c + iz];
+                    }
+                }
+            });
+        scratch[..nx * nz_c * ny]
+            .par_chunks_mut(ny)
+            .for_each(|row| {
+                self.fwd[1].process(row);
+            });
+        // Transpose back
+        buf.par_chunks_mut(ny * nz_c)
+            .enumerate()
+            .for_each(|(ix, slab)| {
+                for iz in 0..nz_c {
+                    for iy in 0..ny {
+                        slab[iy * nz_c + iz] = scratch[ix * nz_c * ny + iz * ny + iy];
+                    }
+                }
+            });
 
-        // --- x-axis: C2C on half-complex grid ---
-        let fft_x = &self.fwd[0];
-        let x_results: Vec<(usize, usize, Vec<Complex<f64>>)> = (0..ny * nz_c)
-            .into_par_iter()
-            .map(|idx| {
-                let iy = idx / nz_c;
-                let iz = idx % nz_c;
-                let mut line: Vec<Complex<f64>> = (0..nx)
-                    .map(|ix| buf[ix * ny * nz_c + iy * nz_c + iz])
-                    .collect();
-                fft_x.process(&mut line);
-                (iy, iz, line)
-            })
-            .collect();
-        for (iy, iz, line) in x_results {
-            for ix in 0..nx {
-                buf[ix * ny * nz_c + iy * nz_c + iz] = line[ix];
-            }
-        }
+        // --- x-axis: C2C via transpose on half-complex grid ---
+        // Transpose buf(x,y,zc) → scratch(y,zc,x)
+        scratch
+            .par_chunks_mut(nz_c * nx)
+            .enumerate()
+            .for_each(|(iy, slab)| {
+                for iz in 0..nz_c {
+                    for ix in 0..nx {
+                        slab[iz * nx + ix] = buf[ix * ny * nz_c + iy * nz_c + iz];
+                    }
+                }
+            });
+        scratch[..ny * nz_c * nx]
+            .par_chunks_mut(nx)
+            .for_each(|row| {
+                self.fwd[0].process(row);
+            });
+        // Transpose back
+        buf.par_chunks_mut(ny * nz_c)
+            .enumerate()
+            .for_each(|(ix, slab)| {
+                for iy in 0..ny {
+                    for iz in 0..nz_c {
+                        slab[iy * nz_c + iz] = scratch[iy * nz_c * nx + iz * nx + ix];
+                    }
+                }
+            });
 
         buf
     }
@@ -199,49 +178,63 @@ impl FftPoisson {
         let [nx, ny, nz] = self.shape;
         let nz_c = nz / 2 + 1;
 
-        // --- x-axis: C2C inverse ---
-        let ifft_x = &self.inv[0];
+        // --- x-axis: C2C inverse via transpose ---
+        let n_total_c = nx * ny * nz_c;
+        let mut scratch = vec![Complex::new(0.0, 0.0); n_total_c];
+        // Transpose buf(x,y,zc) → scratch(y,zc,x)
+        scratch
+            .par_chunks_mut(nz_c * nx)
+            .enumerate()
+            .for_each(|(iy, slab)| {
+                for iz in 0..nz_c {
+                    for ix in 0..nx {
+                        slab[iz * nx + ix] = buf[ix * ny * nz_c + iy * nz_c + iz];
+                    }
+                }
+            });
+        scratch[..ny * nz_c * nx]
+            .par_chunks_mut(nx)
+            .for_each(|row| {
+                self.inv[0].process(row);
+            });
+        // Transpose back
+        buf.par_chunks_mut(ny * nz_c)
+            .enumerate()
+            .for_each(|(ix, slab)| {
+                for iy in 0..ny {
+                    for iz in 0..nz_c {
+                        slab[iy * nz_c + iz] = scratch[iy * nz_c * nx + iz * nx + ix];
+                    }
+                }
+            });
 
-        let x_results: Vec<(usize, usize, Vec<Complex<f64>>)> = (0..ny * nz_c)
-            .into_par_iter()
-            .map(|idx| {
-                let iy = idx / nz_c;
-                let iz = idx % nz_c;
-                let mut line: Vec<Complex<f64>> = (0..nx)
-                    .map(|ix| buf[ix * ny * nz_c + iy * nz_c + iz])
-                    .collect();
-                ifft_x.process(&mut line);
-                (iy, iz, line)
-            })
-            .collect();
-
-        for (iy, iz, line) in x_results {
-            for ix in 0..nx {
-                buf[ix * ny * nz_c + iy * nz_c + iz] = line[ix];
-            }
-        }
-
-        // --- y-axis: C2C inverse ---
-        let ifft_y = &self.inv[1];
-
-        let y_results: Vec<(usize, usize, Vec<Complex<f64>>)> = (0..nx * nz_c)
-            .into_par_iter()
-            .map(|idx| {
-                let ix = idx / nz_c;
-                let iz = idx % nz_c;
-                let mut line: Vec<Complex<f64>> = (0..ny)
-                    .map(|iy| buf[ix * ny * nz_c + iy * nz_c + iz])
-                    .collect();
-                ifft_y.process(&mut line);
-                (ix, iz, line)
-            })
-            .collect();
-
-        for (ix, iz, line) in y_results {
-            for iy in 0..ny {
-                buf[ix * ny * nz_c + iy * nz_c + iz] = line[iy];
-            }
-        }
+        // --- y-axis: C2C inverse via transpose ---
+        // Transpose buf(x,y,zc) → scratch(x,zc,y)
+        scratch
+            .par_chunks_mut(nz_c * ny)
+            .enumerate()
+            .for_each(|(ix, slab)| {
+                for iz in 0..nz_c {
+                    for iy in 0..ny {
+                        slab[iz * ny + iy] = buf[ix * ny * nz_c + iy * nz_c + iz];
+                    }
+                }
+            });
+        scratch[..nx * nz_c * ny]
+            .par_chunks_mut(ny)
+            .for_each(|row| {
+                self.inv[1].process(row);
+            });
+        // Transpose back
+        buf.par_chunks_mut(ny * nz_c)
+            .enumerate()
+            .for_each(|(ix, slab)| {
+                for iz in 0..nz_c {
+                    for iy in 0..ny {
+                        slab[iy * nz_c + iz] = scratch[ix * nz_c * ny + iz * ny + iy];
+                    }
+                }
+            });
 
         // --- z-axis: C2R ---
         // Enforce Hermitian symmetry: DC and Nyquist bins must be real

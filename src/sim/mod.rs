@@ -112,10 +112,10 @@ impl Simulation {
 
         // LoMaC conservation projection: advance macroscopic state in sync
         // with kinetic, then project f to restore exact moments.
-        if self.lomac.is_some() {
-            if let Some(ref p) = self.progress {
-                p.set_phase(StepPhase::LoMaC);
-            }
+        if self.lomac.is_some()
+            && let Some(ref p) = self.progress
+        {
+            p.set_phase(StepPhase::LoMaC);
         }
         if let Some(ref mut lomac) = self.lomac {
             let t0 = std::time::Instant::now();

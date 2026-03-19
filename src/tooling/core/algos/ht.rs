@@ -931,7 +931,7 @@ fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64 + Sync>(
         .into_par_iter()
         .map(|comp_flat| {
             // Decode comp_flat
-            let mut comp_idx = vec![0usize; comp_dims.len()];
+            let mut comp_idx = [0usize; 6];
             let mut rem = comp_flat;
             for ci in (0..comp_dims.len()).rev() {
                 comp_idx[ci] = rem % shape[comp_dims[ci]];
@@ -941,7 +941,7 @@ fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64 + Sync>(
             // Build T = S @ U_right ∈ ℝ^{n_left × k_right}
             let mut t_mat = vec![0.0f64; n_left_phys * k_right];
             for left_flat in 0..n_left_phys {
-                let mut left_idx_vals = vec![0usize; left_dims.len()];
+                let mut left_idx_vals = [0usize; 6];
                 let mut rem_l = left_flat;
                 for li in (0..left_dims.len()).rev() {
                     left_idx_vals[li] = rem_l % shape[left_dims[li]];
@@ -949,7 +949,7 @@ fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64 + Sync>(
                 }
 
                 for right_flat in 0..n_right_phys {
-                    let mut right_idx_vals = vec![0usize; right_dims.len()];
+                    let mut right_idx_vals = [0usize; 6];
                     let mut rem_r = right_flat;
                     for ri in (0..right_dims.len()).rev() {
                         right_idx_vals[ri] = rem_r % shape[right_dims[ri]];

@@ -1,5 +1,6 @@
 pub(crate) mod exponential_sum;
 pub(crate) mod fft;
+pub(crate) mod fft_utils;
 pub(crate) mod green_ht;
 pub(crate) mod ht_poisson;
 pub(crate) mod multigrid;

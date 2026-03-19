@@ -19,12 +19,13 @@
 use super::super::solver::PoissonSolver;
 use super::super::types::*;
 use super::exponential_sum::ExponentialSumCoefficients;
-use super::utils::finite_difference_acceleration;
+use super::utils::{finite_difference_acceleration, spectral_laplacian};
 use crate::tooling::core::algos::ht3d::{HtNode3D, HtNode3DComplex, HtTensor3D, HtTensor3DComplex};
 use faer::Mat;
 use rayon::prelude::*;
 use rustfft::FftPlanner;
 use rustfft::num_complex::Complex64;
+use std::sync::Arc;
 
 /// HT-format Poisson solver for isolated BCs.
 ///
@@ -54,6 +55,14 @@ pub struct HtPoisson {
     green_factors: Vec<[Vec<Complex64>; 3]>,
     /// Pre-computed prefactor = -1/(4π).
     prefactor: f64,
+    /// Near-field correction: ∫_{B_δ} [1/|y| - GS(|y|)] dy.
+    near_field_integral: f64,
+    /// 2nd-order near-field correction integral.
+    near_field_integral_2: f64,
+    /// Cached forward FFT plans for leaf frames [axis0, axis1, axis2] at padded size.
+    leaf_fft_plans: [Arc<dyn rustfft::Fft<f64>>; 3],
+    /// Cached inverse FFT plans for leaf frames.
+    leaf_ifft_plans: [Arc<dyn rustfft::Fft<f64>>; 3],
 }
 
 impl HtPoisson {
@@ -76,6 +85,10 @@ impl HtPoisson {
         let dx_avg = (dx[0] + dx[1] + dx[2]) / 3.0;
         let g_origin = -2.38 * dx_avg / (4.0 * std::f64::consts::PI);
         let prefactor = -1.0 / (4.0 * std::f64::consts::PI);
+
+        // Near-field correction integrals (Exl, Mauser & Zhang, JCP 2016)
+        let near_field_integral = exp_sum.near_field_correction_integral(delta);
+        let (_, near_field_integral_2) = exp_sum.near_field_correction_second_order(delta);
 
         // Pre-compute per-term FFT of 1D Gaussian factors:
         // For term k with α_k, the 3D Green's term is:
@@ -105,6 +118,18 @@ impl HtPoisson {
             green_factors.push(factors);
         }
 
+        // Precompute leaf FFT plans for padded dimensions
+        let leaf_fft_plans = [
+            planner.plan_fft_forward(padded_shape[0]),
+            planner.plan_fft_forward(padded_shape[1]),
+            planner.plan_fft_forward(padded_shape[2]),
+        ];
+        let leaf_ifft_plans = [
+            planner.plan_fft_inverse(padded_shape[0]),
+            planner.plan_fft_inverse(padded_shape[1]),
+            planner.plan_fft_inverse(padded_shape[2]),
+        ];
+
         Self {
             shape,
             dx,
@@ -118,6 +143,10 @@ impl HtPoisson {
             g_origin,
             green_factors,
             prefactor,
+            near_field_integral,
+            near_field_integral_2,
+            leaf_fft_plans,
+            leaf_ifft_plans,
         }
     }
 
@@ -172,8 +201,8 @@ impl PoissonSolver for HtPoisson {
             self.max_rank,
         );
 
-        // Step 3: FFT leaves
-        let rho_hat = rho_ht.fft_leaves();
+        // Step 3: FFT leaves (using cached plans)
+        let rho_hat = rho_ht.fft_leaves_with_plans(&self.leaf_fft_plans);
 
         // Step 4: For each Gaussian term, scale density in Fourier space by
         // the rank-1 Green's factor, then accumulate via add.
@@ -205,24 +234,38 @@ impl PoissonSolver for HtPoisson {
             }
         };
 
-        // Step 5: IFFT leaves
-        let mut phi_ht = phi_hat.ifft_leaves();
+        // Step 5: IFFT leaves (using cached plans)
+        let mut phi_ht = phi_hat.ifft_leaves_with_plans(&self.leaf_ifft_plans);
 
         // Step 6: Truncate to re-compress (rank may be R_G × r_ρ)
         phi_ht.truncate(self.tolerance, self.max_rank);
 
-        // Step 7: Extract N³ subgrid and scale by 4πG·dx³ (parallel over i0 slabs)
+        // Step 7: Extract N³ subgrid via batch Khatri-Rao and scale by 4πG·dx³
         let scale = 4.0 * std::f64::consts::PI * g * self.dv;
-        let mut data = vec![0.0f64; nx * ny * nz];
-        data.par_chunks_mut(ny * nz)
-            .enumerate()
-            .for_each(|(i0, chunk)| {
-                for i1 in 0..ny {
-                    for i2 in 0..nz {
-                        chunk[i1 * nz + i2] = phi_ht.evaluate([i0, i1, i2]) * scale;
-                    }
-                }
-            });
+        let mut data = phi_ht.to_dense_subgrid([nx, ny, nz]);
+        data.par_iter_mut().for_each(|v| *v *= scale);
+
+        // Step 8: Apply near-field corrections (Exl, Mauser & Zhang, JCP 2016)
+        // 0th-order: Φ_corr(x) = -G/(4π) · ρ(x) · I₀ · dx³
+        if self.near_field_integral.abs() > 1e-30 {
+            let nf_scale = -g / (4.0 * std::f64::consts::PI) * self.near_field_integral * self.dv;
+            data.par_iter_mut()
+                .zip(density.data.par_iter())
+                .for_each(|(phi, &rho)| {
+                    *phi += nf_scale * rho;
+                });
+        }
+
+        // 2nd-order: Φ_corr_2(x) = -G · I₂ · ∇²ρ(x)
+        if self.near_field_integral_2.abs() > 1e-30 {
+            let lap_rho = spectral_laplacian(density, &self.dx);
+            let nf2_scale = -g * self.near_field_integral_2;
+            data.par_iter_mut()
+                .zip(lap_rho.data.par_iter())
+                .for_each(|(phi, &lap)| {
+                    *phi += nf2_scale * lap;
+                });
+        }
 
         PotentialField {
             data,
@@ -535,9 +578,10 @@ mod tests {
         println!(
             "HtPoisson vs TensorPoisson: rel_diff={rel_diff:.2e}, max_diff={max_diff:.2e}, max_range={max_range:.2e}"
         );
-        // Allow larger tolerance since HT introduces compression error
+        // With near-field correction, HT should closely match Tensor Poisson.
+        // At 8³ with 1e-3 HT tolerance, compression error dominates over near-field.
         assert!(
-            rel_diff < 0.5,
+            rel_diff < 0.3,
             "HtPoisson vs TensorPoisson relative difference too large: {rel_diff}"
         );
     }

@@ -4,8 +4,8 @@
 //! The simulation thread writes phases; the TUI thread reads snapshots
 //! on each ~33ms render frame.
 
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Enumeration of all possible progress phases.
