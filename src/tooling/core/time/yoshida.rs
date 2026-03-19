@@ -1,12 +1,14 @@
 //! Yoshida 4th-order symplectic integrator. Uses 3 Strang-like sub-steps with
 //! specific coefficients w0, w1.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use super::super::{
     advecator::Advector,
     integrator::{StepTimings, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
+    progress::{StepPhase, StepProgress},
     solver::PoissonSolver,
     types::*,
 };
@@ -21,6 +23,7 @@ const YOSHIDA_W0: f64 = -1.7024143839193153;
 pub struct YoshidaSplitting {
     pub g: f64,
     last_timings: StepTimings,
+    progress: Option<Arc<StepProgress>>,
 }
 
 impl YoshidaSplitting {
@@ -28,6 +31,7 @@ impl YoshidaSplitting {
         Self {
             g,
             last_timings: StepTimings::default(),
+            progress: None,
         }
     }
 }
@@ -43,11 +47,19 @@ impl TimeIntegrator for YoshidaSplitting {
         let _span = tracing::info_span!("yoshida_advance").entered();
         let mut timings = StepTimings::default();
 
+        if let Some(ref p) = self.progress {
+            p.start_step();
+        }
+
         // Optimized 3-substep form with 4 drifts and 3 kicks:
         //   drift(w1·dt/2) → kick(w1·dt) → drift((w1+w0)·dt/2) → kick(w0·dt)
         //   → drift((w0+w1)·dt/2) → kick(w1·dt) → drift(w1·dt/2)
 
         // Substep 1: drift w1·dt/2
+        if let Some(ref p) = self.progress {
+            p.set_phase(StepPhase::YoshidaDrift1);
+            p.set_sub_step(0, 7);
+        }
         {
             let _s = tracing::info_span!("yoshida_drift_1").entered();
             let t0 = Instant::now();
@@ -56,6 +68,10 @@ impl TimeIntegrator for YoshidaSplitting {
         }
 
         // Substep 2: kick w1·dt
+        if let Some(ref p) = self.progress {
+            p.set_phase(StepPhase::YoshidaKick1);
+            p.set_sub_step(1, 7);
+        }
         {
             let _s = tracing::info_span!("yoshida_kick_1").entered();
             let t0 = Instant::now();
@@ -69,6 +85,10 @@ impl TimeIntegrator for YoshidaSplitting {
         }
 
         // Substep 3: drift (w1+w0)·dt/2
+        if let Some(ref p) = self.progress {
+            p.set_phase(StepPhase::YoshidaDrift2);
+            p.set_sub_step(2, 7);
+        }
         {
             let _s = tracing::info_span!("yoshida_drift_2").entered();
             let t0 = Instant::now();
@@ -77,6 +97,10 @@ impl TimeIntegrator for YoshidaSplitting {
         }
 
         // Substep 4: kick w0·dt
+        if let Some(ref p) = self.progress {
+            p.set_phase(StepPhase::YoshidaKick2);
+            p.set_sub_step(3, 7);
+        }
         {
             let _s = tracing::info_span!("yoshida_kick_2").entered();
             let t0 = Instant::now();
@@ -90,6 +114,10 @@ impl TimeIntegrator for YoshidaSplitting {
         }
 
         // Substep 5: drift (w0+w1)·dt/2
+        if let Some(ref p) = self.progress {
+            p.set_phase(StepPhase::YoshidaDrift3);
+            p.set_sub_step(4, 7);
+        }
         {
             let _s = tracing::info_span!("yoshida_drift_3").entered();
             let t0 = Instant::now();
@@ -98,6 +126,10 @@ impl TimeIntegrator for YoshidaSplitting {
         }
 
         // Substep 6: kick w1·dt
+        if let Some(ref p) = self.progress {
+            p.set_phase(StepPhase::YoshidaKick3);
+            p.set_sub_step(5, 7);
+        }
         {
             let _s = tracing::info_span!("yoshida_kick_3").entered();
             let t0 = Instant::now();
@@ -111,6 +143,10 @@ impl TimeIntegrator for YoshidaSplitting {
         }
 
         // Substep 7: drift w1·dt/2
+        if let Some(ref p) = self.progress {
+            p.set_phase(StepPhase::YoshidaDrift4);
+            p.set_sub_step(6, 7);
+        }
         {
             let _s = tracing::info_span!("yoshida_drift_4").entered();
             let t0 = Instant::now();
@@ -133,5 +169,9 @@ impl TimeIntegrator for YoshidaSplitting {
 
     fn last_step_timings(&self) -> Option<&StepTimings> {
         Some(&self.last_timings)
+    }
+
+    fn set_progress(&mut self, progress: Arc<StepProgress>) {
+        self.progress = Some(progress);
     }
 }

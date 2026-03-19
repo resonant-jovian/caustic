@@ -1,5 +1,7 @@
 //! Top-level `Simulation` struct. Entry point for library users; matches the README builder API.
 
+use std::sync::Arc;
+
 use rust_decimal::Decimal;
 
 use crate::tooling::core::{
@@ -12,6 +14,7 @@ use crate::tooling::core::{
     io::{IOManager, OutputFormat},
     output::exit::{package::ExitPackage, standard::ExitEvaluator},
     phasespace::PhaseSpaceRepr,
+    progress::{StepPhase, StepProgress},
     solver::PoissonSolver,
     types::*,
 };
@@ -41,6 +44,8 @@ pub struct Simulation {
     /// Per-step phase timing breakdown from the most recent `step()` call.
     /// Includes integrator sub-step timings + post-advance diagnostics timing.
     pub last_step_timings: StepTimings,
+    /// Optional shared progress state for intra-step TUI visibility.
+    progress: Option<Arc<StepProgress>>,
 }
 
 impl Simulation {
@@ -107,6 +112,11 @@ impl Simulation {
 
         // LoMaC conservation projection: advance macroscopic state in sync
         // with kinetic, then project f to restore exact moments.
+        if self.lomac.is_some() {
+            if let Some(ref p) = self.progress {
+                p.set_phase(StepPhase::LoMaC);
+            }
+        }
         if let Some(ref mut lomac) = self.lomac {
             let t0 = std::time::Instant::now();
             let density = self.repr.compute_density();
@@ -165,6 +175,9 @@ impl Simulation {
         self.step += 1;
 
         // Post-advance density computation (for diagnostics + caching)
+        if let Some(ref p) = self.progress {
+            p.set_phase(StepPhase::PostDensity);
+        }
         let t0 = std::time::Instant::now();
         let density = self.repr.compute_density();
         let potential = self.poisson.solve(&density, self.g);
@@ -176,6 +189,9 @@ impl Simulation {
         // Cache ρ_max for next step's dt computation (avoids redundant compute_density)
         self.cached_rho_max = Some(density.data.iter().cloned().fold(0.0_f64, f64::max));
 
+        if let Some(ref p) = self.progress {
+            p.set_phase(StepPhase::Diagnostics);
+        }
         let t0 = std::time::Instant::now();
         let diag = self.diagnostics.compute_with_density(
             &*self.repr,
@@ -188,7 +204,18 @@ impl Simulation {
 
         self.last_step_timings = timings;
 
+        if let Some(ref p) = self.progress {
+            p.set_phase(StepPhase::StepComplete);
+        }
+
         Ok(self.exit_evaluator.check(&diag))
+    }
+
+    /// Attach shared progress state for intra-step TUI visibility.
+    /// Propagates to the integrator so sub-step phases are reported.
+    pub fn set_progress(&mut self, p: Arc<StepProgress>) {
+        self.integrator.set_progress(p.clone());
+        self.progress = Some(p);
     }
 
     /// Current simulation time.
@@ -443,6 +470,7 @@ impl SimulationBuilder {
             start_time: std::time::Instant::now(),
             cached_rho_max: None,
             last_step_timings: StepTimings::default(),
+            progress: None,
         })
     }
 }

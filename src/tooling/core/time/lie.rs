@@ -1,19 +1,22 @@
 //! Lie (first-order) splitting: drift(Δt) → kick(Δt). Only 1st-order accurate.
 //! Use only for testing and comparison.
 
+use std::sync::Arc;
+
 use super::super::{
     advecator::Advector, integrator::TimeIntegrator, phasespace::PhaseSpaceRepr,
-    solver::PoissonSolver, types::*,
+    progress::{StepPhase, StepProgress}, solver::PoissonSolver, types::*,
 };
 
 /// Lie (1st-order) operator splitting: drift(Δt) → kick(Δt).
 pub struct LieSplitting {
     pub g: f64,
+    progress: Option<Arc<StepProgress>>,
 }
 
 impl LieSplitting {
     pub fn new(g: f64) -> Self {
-        Self { g }
+        Self { g, progress: None }
     }
 }
 
@@ -27,8 +30,19 @@ impl TimeIntegrator for LieSplitting {
     ) {
         let _span = tracing::info_span!("lie_advance").entered();
 
+        if let Some(ref p) = self.progress {
+            p.start_step();
+            p.set_phase(StepPhase::DriftHalf1);
+            p.set_sub_step(0, 2);
+        }
+
         // 1. Drift full step
         advector.drift(repr, dt);
+
+        if let Some(ref p) = self.progress {
+            p.set_phase(StepPhase::Kick);
+            p.set_sub_step(1, 2);
+        }
 
         // 2. Compute density → Poisson → acceleration → kick full step
         let density = repr.compute_density();
@@ -45,5 +59,9 @@ impl TimeIntegrator for LieSplitting {
         }
         let t_dyn = 1.0 / (self.g * rho_max).sqrt();
         cfl_factor * t_dyn
+    }
+
+    fn set_progress(&mut self, progress: Arc<StepProgress>) {
+        self.progress = Some(progress);
     }
 }

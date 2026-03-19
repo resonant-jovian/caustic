@@ -4,12 +4,14 @@
 //! before/after each sub-step (drift, kick, Poisson). This lets us attribute
 //! rank growth to specific algorithmic phases.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use super::super::{
     advecator::Advector,
     integrator::{StepTimings, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
+    progress::{StepPhase, StepProgress},
     solver::PoissonSolver,
 };
 
@@ -49,6 +51,7 @@ pub struct InstrumentedStrangSplitting {
     /// The diagnostics from the most recent `advance()` call.
     pub last_diagnostics: StepRankDiagnostics,
     last_timings: StepTimings,
+    progress: Option<Arc<StepProgress>>,
 }
 
 impl InstrumentedStrangSplitting {
@@ -57,6 +60,7 @@ impl InstrumentedStrangSplitting {
             inner: super::strang::StrangSplitting::new(g),
             last_diagnostics: StepRankDiagnostics::default(),
             last_timings: StepTimings::default(),
+            progress: None,
         }
     }
 }
@@ -72,6 +76,12 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
         let _span = tracing::info_span!("instrumented_strang_advance").entered();
         let mut timings = StepTimings::default();
 
+        if let Some(ref p) = self.progress {
+            p.start_step();
+            p.set_phase(StepPhase::DriftHalf1);
+            p.set_sub_step(0, 5);
+        }
+
         let mut diag = StepRankDiagnostics {
             pre_drift_ranks: extract_ranks(&*repr),
             ..Default::default()
@@ -84,17 +94,29 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
         diag.post_drift_ranks = extract_ranks(&*repr);
 
         // Poisson solve + kick
+        if let Some(ref p) = self.progress {
+            p.set_phase(StepPhase::PoissonSolve);
+            p.set_sub_step(1, 5);
+        }
         let t0 = Instant::now();
         let density = repr.compute_density();
         let potential = solver.solve(&density, self.inner.g);
         let accel = solver.compute_acceleration(&potential);
         timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        if let Some(ref p) = self.progress {
+            p.set_phase(StepPhase::Kick);
+            p.set_sub_step(2, 5);
+        }
         let t0 = Instant::now();
         advector.kick(repr, &accel, dt);
         timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
         diag.post_kick_ranks = extract_ranks(&*repr);
 
         // Drift half-step
+        if let Some(ref p) = self.progress {
+            p.set_phase(StepPhase::DriftHalf2);
+            p.set_sub_step(3, 5);
+        }
         let t0 = Instant::now();
         advector.drift(repr, dt / 2.0);
         timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
@@ -114,6 +136,11 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
             diag.poisson_rank_amplification = Some(r_kick / r_drift);
         }
 
+        if let Some(ref p) = self.progress {
+            p.set_phase(StepPhase::StepComplete);
+            p.set_sub_step(4, 5);
+        }
+
         self.last_diagnostics = diag;
         self.last_timings = timings;
     }
@@ -124,6 +151,10 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
 
     fn last_step_timings(&self) -> Option<&StepTimings> {
         Some(&self.last_timings)
+    }
+
+    fn set_progress(&mut self, progress: Arc<StepProgress>) {
+        self.progress = Some(progress);
     }
 }
 

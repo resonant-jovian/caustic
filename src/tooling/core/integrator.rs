@@ -1,8 +1,11 @@
 //! The `TimeIntegrator` trait. Orchestrates the full timestep: compute density → solve
 //! Poisson → compute force → advect. Different splitting orders implement this differently.
 
+use std::sync::Arc;
+
 use super::advecator::Advector;
 use super::phasespace::PhaseSpaceRepr;
+use super::progress::StepProgress;
 use super::solver::PoissonSolver;
 
 /// Complete simulation state at one instant.
@@ -69,4 +72,8 @@ pub trait TimeIntegrator {
     fn last_step_timings(&self) -> Option<&StepTimings> {
         None
     }
+
+    /// Attach shared progress state for intra-step TUI visibility.
+    /// Default is a no-op; integrators that support progress override this.
+    fn set_progress(&mut self, _progress: Arc<StepProgress>) {}
 }

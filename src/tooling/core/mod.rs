@@ -10,6 +10,7 @@ pub(crate) mod io;
 pub(crate) mod mpi;
 pub(crate) mod output;
 pub(crate) mod phasespace;
+pub mod progress;
 pub(crate) mod poisson;
 pub(crate) mod solver;
 pub(crate) mod time;

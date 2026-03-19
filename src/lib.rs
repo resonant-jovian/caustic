@@ -64,6 +64,9 @@ pub use tooling::core::time::strang::StrangSplitting;
 pub use tooling::core::time::unsplit::UnsplitIntegrator;
 pub use tooling::core::time::yoshida::YoshidaSplitting;
 
+// Progress tracking (shared atomics for TUI intra-step visibility)
+pub use tooling::core::progress::{ProgressSnapshot, StepPhase, StepProgress};
+
 // Phase-space representations
 pub use tooling::core::algos::amr::AmrGrid;
 pub use tooling::core::algos::hybrid::HybridRepr;
