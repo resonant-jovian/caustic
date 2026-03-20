@@ -3,6 +3,7 @@
 //! dispersion relation γ = √(4πGρ₀ − k²σ²).
 
 #[test]
+#[allow(deprecated)]
 fn jeans_instability_isolated() {
     use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::algos::uniform::UniformGrid6D;

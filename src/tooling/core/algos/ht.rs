@@ -1478,6 +1478,19 @@ impl HtTensor {
         }
     }
 
+    /// Weighted addition: computes `alpha * self + beta * other`, then SVD-truncates.
+    ///
+    /// Uses rank-concatenation addition followed by truncation to keep ranks bounded.
+    pub fn scaled_add(&self, alpha: f64, other: &HtTensor, beta: f64, tolerance: f64) -> HtTensor {
+        let mut a = self.clone();
+        a.scale(alpha);
+        let mut b = other.clone();
+        b.scale(beta);
+        let mut result = a.add(&b);
+        result.truncate(tolerance);
+        result
+    }
+
     /// Inner product ⟨self, other⟩ via Gram matrices. O(dk⁴).
     pub fn inner_product(&self, other: &HtTensor) -> f64 {
         assert_eq!(self.shape, other.shape);

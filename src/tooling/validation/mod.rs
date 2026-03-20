@@ -1,5 +1,6 @@
 pub(crate) mod bgk;
 pub(crate) mod bump_on_tail;
+pub(crate) mod casimir_higher;
 pub(crate) mod cold_collapse;
 pub(crate) mod conservation;
 pub(crate) mod convergence;
@@ -17,6 +18,10 @@ pub(crate) mod plummer;
 pub(crate) mod sheet_1d;
 pub(crate) mod spherical;
 pub(crate) mod stability;
+pub(crate) mod strong_landau;
+pub(crate) mod triaxial_collapse;
 pub(crate) mod two_stream;
 pub(crate) mod uniform;
+pub(crate) mod violent_relaxation;
+pub(crate) mod waterbag;
 pub(crate) mod zeldovich;

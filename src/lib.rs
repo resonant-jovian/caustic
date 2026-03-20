@@ -52,6 +52,7 @@ pub use tooling::core::init::stability::DiskStabilityIC;
 pub use tooling::core::init::tidal::TidalIC;
 pub use tooling::core::output::exit::standard::ExitEvaluator;
 pub use tooling::core::output::phasespace::{PhaseSpaceDiagnostics, field_energy_spectrum};
+#[allow(deprecated)]
 pub use tooling::core::poisson::fft::{FftIsolated, FftPoisson};
 pub use tooling::core::poisson::ht_poisson::HtPoisson;
 pub use tooling::core::poisson::multigrid::Multigrid;
@@ -64,7 +65,10 @@ pub use tooling::core::poisson::vgf::VgfPoisson;
 pub use tooling::core::time::adaptive::AdaptiveStrangSplitting;
 pub use tooling::core::time::blanes_moan::BlanesMoanSplitting;
 pub use tooling::core::time::bug::{BugConfig, BugIntegrator};
+pub use tooling::core::time::parallel_bug::{ParallelBugConfig, ParallelBugIntegrator};
+pub use tooling::core::time::rk_bug::{RkBugConfig, RkBugIntegrator};
 pub use tooling::core::time::cosmological::CosmologicalStrangSplitting;
+pub use tooling::core::time::lawson::LawsonRkIntegrator;
 pub use tooling::core::time::lie::LieSplitting;
 pub use tooling::core::time::rank_monitor::{InstrumentedStrangSplitting, StepRankDiagnostics};
 pub use tooling::core::time::rkei::RkeiIntegrator;

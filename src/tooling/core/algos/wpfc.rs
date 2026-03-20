@@ -8,9 +8,9 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AdvectionScheme {
     /// Catmull-Rom cubic semi-Lagrangian (4-point stencil, 3rd-order).
-    #[default]
     CatmullRom,
     /// Weighted Positive Flux Conservative (6-point stencil, 5th-order).
+    #[default]
     Wpfc,
     /// Monotonicity-Preserving 7th-order (8-point stencil, 7th-order).
     Mp7,

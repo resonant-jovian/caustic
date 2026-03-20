@@ -399,6 +399,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn tensor_poisson_vs_fft_isolated() {
         // Cross-validate against FftIsolated on a simple density
         use crate::tooling::core::init::domain::{

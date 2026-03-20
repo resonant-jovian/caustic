@@ -458,6 +458,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn tree_vs_fft_isolated() {
         use crate::tooling::core::poisson::fft::FftIsolated;
         let domain = test_domain(8);

@@ -402,6 +402,10 @@ impl PoissonSolver for FftPoisson {
 /// Pads density into (2N)³ box, convolves with precomputed Green's function, extracts N³ solution.
 ///
 /// FFT plans are precomputed for the (2N)³ grid at construction time.
+///
+/// **Deprecated:** Prefer [`VgfPoisson`](super::vgf::VgfPoisson) which provides
+/// spectral-accuracy isolated boundary conditions with lower memory overhead.
+#[deprecated(since = "0.0.12", note = "use VgfPoisson for isolated BC; FftIsolated will be removed in a future release")]
 pub struct FftIsolated {
     pub shape: [usize; 3],
     pub dx: [f64; 3],
@@ -416,6 +420,7 @@ pub struct FftIsolated {
     progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
+#[allow(deprecated)]
 impl FftIsolated {
     pub fn new(domain: &Domain) -> Self {
         use std::f64::consts::PI;
@@ -494,6 +499,7 @@ impl FftIsolated {
     }
 }
 
+#[allow(deprecated)]
 impl PoissonSolver for FftIsolated {
     fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
         self.progress = Some(p);
