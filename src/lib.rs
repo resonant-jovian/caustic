@@ -45,6 +45,7 @@ pub use tooling::core::init::cosmological::{ZeldovichIC, ZeldovichSingleMode};
 pub use tooling::core::init::domain::{SpatialBoundType, VelocityBoundType};
 pub use tooling::core::init::isolated::{
     HernquistIC, IsolatedEquilibrium, KingIC, NfwIC, PlummerIC, sample_on_grid,
+    sample_on_grid_with_progress,
 };
 pub use tooling::core::init::mergers::MergerIC;
 pub use tooling::core::init::stability::DiskStabilityIC;

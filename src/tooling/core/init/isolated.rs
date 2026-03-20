@@ -588,6 +588,18 @@ pub fn sample_on_grid(
     ic: &(dyn IsolatedEquilibrium + Sync),
     domain: &Domain,
 ) -> PhaseSpaceSnapshot {
+    sample_on_grid_with_progress(ic, domain, None)
+}
+
+/// Like `sample_on_grid`, but reports intra-phase progress via the optional
+/// `StepProgress` handle so the TUI can show a cell-level progress bar.
+pub fn sample_on_grid_with_progress(
+    ic: &(dyn IsolatedEquilibrium + Sync),
+    domain: &Domain,
+    progress: Option<&crate::tooling::core::progress::StepProgress>,
+) -> PhaseSpaceSnapshot {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     let nx1 = domain.spatial_res.x1 as usize;
     let nx2 = domain.spatial_res.x2 as usize;
     let nx3 = domain.spatial_res.x3 as usize;
@@ -610,6 +622,9 @@ pub fn sample_on_grid(
 
     let total = nx1 * nx2 * nx3 * nv1 * nv2 * nv3;
     let mut data = vec![0.0f64; total];
+
+    let counter = AtomicU64::new(0);
+    let report_interval = (nx1 / 100).max(1) as u64;
 
     // Each ix1 slab is independent — parallelize over ix1
     data.par_chunks_mut(s_x1)
@@ -637,6 +652,13 @@ pub fn sample_on_grid(
                             }
                         }
                     }
+                }
+            }
+
+            if let Some(p) = progress {
+                let c = counter.fetch_add(1, Ordering::Relaxed);
+                if c % report_interval == 0 {
+                    p.set_intra_progress(c, nx1 as u64);
                 }
             }
         });

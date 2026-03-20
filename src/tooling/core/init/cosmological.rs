@@ -361,7 +361,11 @@ impl ZeldovichIC {
     ///
     /// f(x,v) = ρ̄ / ((2π)^{3/2} σ_v³) · exp(-|v - v₀(x)|² / (2σ_v²))
     /// where σ_v = 0.3 · max(Δv) keeps the distribution cold but resolved.
-    pub fn sample_on_grid(&self, domain: &Domain) -> PhaseSpaceSnapshot {
+    pub fn sample_on_grid(
+        &self,
+        domain: &Domain,
+        progress: Option<&crate::tooling::core::progress::StepProgress>,
+    ) -> PhaseSpaceSnapshot {
         use std::f64::consts::PI;
 
         let [vx0, vy0, vz0] = self.velocity_field(domain);
@@ -393,6 +397,9 @@ impl ZeldovichIC {
 
         let inv_2sig2 = 1.0 / (2.0 * sigma * sigma);
 
+        let counter = std::sync::atomic::AtomicU64::new(0);
+        let report_interval = (nx1 / 100).max(1) as u64;
+
         // Parallelize over ix1 slabs — each slab is independent
         data.par_chunks_mut(s_x1)
             .enumerate()
@@ -421,6 +428,13 @@ impl ZeldovichIC {
                                 }
                             }
                         }
+                    }
+                }
+
+                if let Some(p) = progress {
+                    let c = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if c % report_interval == 0 {
+                        p.set_intra_progress(c, nx1 as u64);
                     }
                 }
             });
@@ -500,7 +514,11 @@ pub struct ZeldovichSingleMode {
 impl ZeldovichSingleMode {
     /// Sample f(x,v) = ρ̄/(√(2π)σ_v)³ · exp(-(v - v₀(x))²/(2σ_v²))
     /// where v₀(x) = (-A·sin(k·x₁), 0, 0)
-    pub fn sample_on_grid(&self, domain: &Domain) -> PhaseSpaceSnapshot {
+    pub fn sample_on_grid(
+        &self,
+        domain: &Domain,
+        progress: Option<&crate::tooling::core::progress::StepProgress>,
+    ) -> PhaseSpaceSnapshot {
         use std::f64::consts::PI;
 
         let nx1 = domain.spatial_res.x1 as usize;
@@ -528,6 +546,9 @@ impl ZeldovichSingleMode {
         let sigma = self.sigma_v;
         let norm = self.mean_density / ((2.0 * PI).sqrt() * sigma).powi(3);
 
+        let counter = std::sync::atomic::AtomicU64::new(0);
+        let report_interval = (nx1 / 100).max(1) as u64;
+
         for ix1 in 0..nx1 {
             let x1 = -lx[0] + (ix1 as f64 + 0.5) * dx[0];
             let v0x = -self.amplitude * (self.wavenumber * x1).sin();
@@ -551,6 +572,13 @@ impl ZeldovichSingleMode {
                             }
                         }
                     }
+                }
+            }
+
+            if let Some(p) = progress {
+                let c = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if c % report_interval == 0 {
+                    p.set_intra_progress(c, nx1 as u64);
                 }
             }
         }
@@ -644,7 +672,7 @@ mod tests {
             .unwrap();
         let cosmo = CosmologyParams::new(1.0, 0.3, 0.7, 1.0);
         let ic = ZeldovichIC::new(1.0, cosmo, 42);
-        let snap = ic.sample_on_grid(&domain);
+        let snap = ic.sample_on_grid(&domain, None);
         assert_eq!(snap.shape, [8, 8, 8, 8, 8, 8]);
         assert!(snap.data.iter().all(|v| v.is_finite() && *v >= 0.0));
         let mass: f64 = snap.data.iter().sum::<f64>();

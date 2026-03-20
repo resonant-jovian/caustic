@@ -9,6 +9,7 @@ use rayon::prelude::*;
 use realfft::RealFftPlanner;
 use rustfft::{FftPlanner, num_complex::Complex};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Three-component complex slab (gx, gy, gz) for spectral differentiation.
 type ComplexSlab = (Vec<Complex<f64>>, Vec<Complex<f64>>, Vec<Complex<f64>>);
@@ -45,6 +46,8 @@ pub struct FftPoisson {
     /// Cached scratch buffer for FFT transposes. Avoids per-call allocation.
     /// Protected by Mutex for interior mutability (PoissonSolver::solve takes &self).
     scratch_cache: std::sync::Mutex<Vec<Complex<f64>>>,
+    /// Shared progress state for intra-phase reporting.
+    progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
 impl FftPoisson {
@@ -81,6 +84,7 @@ impl FftPoisson {
             fwd,
             inv,
             scratch_cache: std::sync::Mutex::new(Vec::new()),
+            progress: None,
         }
     }
 
@@ -261,6 +265,10 @@ impl FftPoisson {
 }
 
 impl PoissonSolver for FftPoisson {
+    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
+        self.progress = Some(p);
+    }
+
     fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
         let _span = tracing::info_span!("fft_poisson_solve").entered();
         use std::f64::consts::PI;
@@ -274,6 +282,9 @@ impl PoissonSolver for FftPoisson {
         {
             let _s = tracing::info_span!("green_multiply").entered();
             let dx = self.dx;
+            let total = (nx * ny) as u64;
+            let counter = AtomicU64::new(0);
+            let report_interval = (total / 100).max(1);
             rho_hat
                 .par_chunks_mut(nz_c)
                 .enumerate()
@@ -289,6 +300,12 @@ impl PoissonSolver for FftPoisson {
                             *c = Complex::new(0.0, 0.0);
                         } else {
                             *c *= -4.0 * PI * g / k2;
+                        }
+                    }
+                    if let Some(ref p) = self.progress {
+                        let c = counter.fetch_add(1, Ordering::Relaxed);
+                        if c % report_interval == 0 {
+                            p.set_intra_progress(c, total);
                         }
                     }
                 });
@@ -327,6 +344,9 @@ impl PoissonSolver for FftPoisson {
         let dx = self.dx;
         let slab_size = ny * nz;
 
+        let total = nx as u64;
+        let counter = AtomicU64::new(0);
+        let report_interval = (total / 100).max(1);
         let slabs: Vec<ComplexSlab> = (0..nx)
             .into_par_iter()
             .map(|ix| {
@@ -344,6 +364,12 @@ impl PoissonSolver for FftPoisson {
                         gx.push(-i_unit * kx * p);
                         gy.push(-i_unit * ky * p);
                         gz.push(-i_unit * kz * p);
+                    }
+                }
+                if let Some(ref p) = self.progress {
+                    let c = counter.fetch_add(1, Ordering::Relaxed);
+                    if c % report_interval == 0 {
+                        p.set_intra_progress(c, total);
                     }
                 }
                 (gx, gy, gz)
@@ -391,6 +417,8 @@ pub struct FftIsolated {
     inv: [Arc<dyn rustfft::Fft<f64>>; 3],
     /// Cached scratch buffer for (2N)³ FFT transposes.
     scratch_cache: std::sync::Mutex<Vec<Complex<f64>>>,
+    /// Shared progress state for intra-phase reporting.
+    progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
 impl FftIsolated {
@@ -466,11 +494,16 @@ impl FftIsolated {
             fwd,
             inv,
             scratch_cache: std::sync::Mutex::new(Vec::new()),
+            progress: None,
         }
     }
 }
 
 impl PoissonSolver for FftIsolated {
+    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
+        self.progress = Some(p);
+    }
+
     fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
         let _span = tracing::info_span!("fft_isolated_solve").entered();
         use std::f64::consts::PI;
@@ -508,11 +541,20 @@ impl PoissonSolver for FftIsolated {
         // 3. Pointwise multiply: Φ̂ = 4πG · Ĝ · ρ̂ (parallel)
         let dx3 = self.dx[0] * self.dx[1] * self.dx[2];
         let factor = 4.0 * PI * g * dx3;
+        let total = n2_total as u64;
+        let counter = AtomicU64::new(0);
+        let report_interval = (total / 100).max(1);
         rho_pad
             .par_iter_mut()
             .zip(self.green_hat.par_iter())
             .for_each(|(rho, green)| {
                 *rho = factor * green * *rho;
+                if let Some(ref p) = self.progress {
+                    let c = counter.fetch_add(1, Ordering::Relaxed);
+                    if c % report_interval == 0 {
+                        p.set_intra_progress(c, total);
+                    }
+                }
             });
 
         // 4. Inverse FFT

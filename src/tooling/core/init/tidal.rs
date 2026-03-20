@@ -33,7 +33,11 @@ impl TidalIC {
     /// At each (x, v) grid point: compute position and velocity relative to the
     /// progenitor centre, evaluate energy in progenitor's rest frame, then use the
     /// progenitor's distribution function.
-    pub fn sample_on_grid(&self, domain: &Domain) -> PhaseSpaceSnapshot {
+    pub fn sample_on_grid(
+        &self,
+        domain: &Domain,
+        progress: Option<&crate::tooling::core::progress::StepProgress>,
+    ) -> PhaseSpaceSnapshot {
         let nx1 = domain.spatial_res.x1 as usize;
         let nx2 = domain.spatial_res.x2 as usize;
         let nx3 = domain.spatial_res.x3 as usize;
@@ -58,6 +62,9 @@ impl TidalIC {
 
         let total = nx1 * nx2 * nx3 * nv1 * nv2 * nv3;
         let mut data = vec![0.0f64; total];
+
+        let counter = std::sync::atomic::AtomicU64::new(0);
+        let report_interval = (nx1 / 100).max(1) as u64;
 
         for ix1 in 0..nx1 {
             let x1 = -lx[0] + (ix1 as f64 + 0.5) * dx[0];
@@ -91,6 +98,13 @@ impl TidalIC {
                             }
                         }
                     }
+                }
+            }
+
+            if let Some(p) = progress {
+                let c = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if c % report_interval == 0 {
+                    p.set_intra_progress(c, nx1 as u64);
                 }
             }
         }

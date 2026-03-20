@@ -9,6 +9,8 @@ use super::super::{
 use super::lagrangian::{sl_shift_1d, sl_shift_1d_into};
 use rayon::prelude::*;
 use std::any::Any;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Stores f on a uniform (Nx1×Nx2×Nx3×Nv1×Nv2×Nv3) grid as a flat `Vec<f64>`.
 /// Index order: x1 fastest-changing outer, v3 fastest-changing inner (row-major).
@@ -21,6 +23,7 @@ pub struct UniformGrid6D {
     cached_lv: [f64; 3],
     cached_dx: [f64; 3],
     cached_dv: [f64; 3],
+    progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
 struct CachedGrid {
@@ -63,6 +66,7 @@ impl UniformGrid6D {
             cached_lv: c.lv,
             cached_dx: c.dx,
             cached_dv: c.dv,
+            progress: None,
         }
     }
 
@@ -83,6 +87,7 @@ impl UniformGrid6D {
             cached_lv: c.lv,
             cached_dx: c.dx,
             cached_dv: c.dv,
+            progress: None,
         }
     }
 
@@ -116,6 +121,10 @@ impl UniformGrid6D {
 }
 
 impl PhaseSpaceRepr for UniformGrid6D {
+    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
+        self.progress = Some(p);
+    }
+
     fn compute_density(&self) -> DensityField {
         let _span = tracing::info_span!("compute_density").entered();
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
@@ -124,11 +133,20 @@ impl PhaseSpaceRepr for UniformGrid6D {
 
         let n_spatial = nx1 * nx2 * nx3;
         let n_vel = nv1 * nv2 * nv3;
+        let counter = AtomicU64::new(0);
+        let report_interval = (n_spatial / 100).max(1) as u64;
         let data: Vec<f64> = (0..n_spatial)
             .into_par_iter()
             .map(|si| {
                 let base = si * n_vel;
-                self.data[base..base + n_vel].iter().sum::<f64>() * dv3
+                let result = self.data[base..base + n_vel].iter().sum::<f64>() * dv3;
+                if let Some(ref p) = self.progress {
+                    let c = counter.fetch_add(1, Ordering::Relaxed);
+                    if c % report_interval == 0 {
+                        p.set_intra_progress(c, n_spatial as u64);
+                    }
+                }
+                result
             })
             .collect();
 
@@ -140,6 +158,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
 
     fn advect_x(&mut self, _displacement: &DisplacementField, dt: f64) {
         let _span = tracing::info_span!("advect_x").entered();
+        let progress = self.progress.clone();
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
         let dx = self.cached_dx;
         let dv = self.cached_dv;
@@ -157,6 +176,8 @@ impl PhaseSpaceRepr for UniformGrid6D {
         // Each velocity cell writes to its own n_sp-sized chunk, eliminating
         // the per-task `local` Vec allocation.
         let mut intermediates = vec![0.0f64; n_total];
+        let counter = AtomicU64::new(0);
+        let report_interval = (n_vel / 100).max(1) as u64;
 
         intermediates
             .par_chunks_mut(n_sp)
@@ -241,6 +262,13 @@ impl PhaseSpaceRepr for UniformGrid6D {
                         }
                     }
                 }
+
+                if let Some(ref p) = progress {
+                    let c = counter.fetch_add(1, Ordering::Relaxed);
+                    if c % report_interval == 0 {
+                        p.set_intra_progress(c, n_vel as u64);
+                    }
+                }
             });
 
         // Parallel transpose: intermediates[vi * n_sp + si] → new_data[si * n_vel + vi]
@@ -258,6 +286,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
 
     fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
         let _span = tracing::info_span!("advect_v").entered();
+        let progress = self.progress.clone();
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
         let dv = self.cached_dv;
         let lv = self.cached_lv;
@@ -266,11 +295,14 @@ impl PhaseSpaceRepr for UniformGrid6D {
         let n_vel = nv1 * nv2 * nv3;
         let max_nv = nv1.max(nv2).max(nv3);
         let src = std::mem::take(&mut self.data);
+        let n_sp = nx1 * nx2 * nx3;
 
         // Result has same layout as self.data: [si * n_vel + vi].
         // Each spatial cell writes directly to its n_vel-sized chunk,
         // eliminating the per-task `local` allocation and the serial scatter.
         let mut result = vec![0.0f64; src.len()];
+        let counter = AtomicU64::new(0);
+        let report_interval = (n_sp / 100).max(1) as u64;
 
         result
             .par_chunks_mut(n_vel)
@@ -348,6 +380,13 @@ impl PhaseSpaceRepr for UniformGrid6D {
                         for iv3 in 0..nv3 {
                             local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3] = shifted[iv3];
                         }
+                    }
+                }
+
+                if let Some(ref p) = progress {
+                    let c = counter.fetch_add(1, Ordering::Relaxed);
+                    if c % report_interval == 0 {
+                        p.set_intra_progress(c, n_sp as u64);
                     }
                 }
             });

@@ -17,6 +17,7 @@
 
 use rayon::prelude::*;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::super::solver::PoissonSolver;
 use super::super::types::*;
@@ -49,6 +50,8 @@ pub struct TensorPoisson {
     fft_fwd: [Arc<dyn rustfft::Fft<f64>>; 3],
     /// Cached C2C inverse plans for padded grid [axis0, axis1, axis2].
     fft_inv: [Arc<dyn rustfft::Fft<f64>>; 3],
+    /// Shared progress state for intra-phase reporting.
+    progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
 impl TensorPoisson {
@@ -138,6 +141,7 @@ impl TensorPoisson {
             near_field_integral_2,
             fft_fwd,
             fft_inv,
+            progress: None,
         }
     }
 
@@ -159,6 +163,10 @@ impl TensorPoisson {
 }
 
 impl PoissonSolver for TensorPoisson {
+    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
+        self.progress = Some(p);
+    }
+
     fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
         let [nx, ny, nz] = self.shape;
         let [px, py, pz] = self.padded_shape;
@@ -184,10 +192,22 @@ impl PoissonSolver for TensorPoisson {
         let rho_fft = fft_3d_forward(&rho_padded, self.padded_shape, &self.fft_fwd);
 
         // Step 3: element-wise multiply (convolution in Fourier space) — parallel
+        let total = rho_fft.len() as u64;
+        let counter = AtomicU64::new(0);
+        let report_interval = (total / 100).max(1);
         let phi_fft: Vec<Complex64> = rho_fft
             .par_iter()
             .zip(self.green_fft.par_iter())
-            .map(|(r, g)| r * g)
+            .map(|(r, g)| {
+                let result = r * g;
+                if let Some(ref p) = self.progress {
+                    let c = counter.fetch_add(1, Ordering::Relaxed);
+                    if c % report_interval == 0 {
+                        p.set_intra_progress(c, total);
+                    }
+                }
+                result
+            })
             .collect();
 
         // Step 4: 3D IFFT

@@ -161,6 +161,9 @@ impl Simulation {
                         self.domain.clone(),
                     ),
                 );
+                if let Some(ref p) = self.progress {
+                    self.repr.set_progress(p.clone());
+                }
             } else {
                 // Dense path (UniformGrid6D, etc.)
                 let snapshot = self.repr.to_snapshot(self.time);
@@ -176,6 +179,9 @@ impl Simulation {
                         self.domain.clone(),
                     ),
                 );
+                if let Some(ref p) = self.progress {
+                    self.repr.set_progress(p.clone());
+                }
             }
             timings.other_ms += t0.elapsed().as_secs_f64() * 1000.0;
         }
@@ -237,6 +243,8 @@ impl Simulation {
     /// Propagates to the integrator so sub-step phases are reported.
     pub fn set_progress(&mut self, p: Arc<StepProgress>) {
         self.integrator.set_progress(p.clone());
+        self.repr.set_progress(p.clone());
+        self.poisson.set_progress(p.clone());
         self.progress = Some(p);
     }
 

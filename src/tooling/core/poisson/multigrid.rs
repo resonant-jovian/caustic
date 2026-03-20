@@ -2,6 +2,8 @@
 //! O(N³) per V-cycle, O(N³ log ε) total.
 
 use rayon::prelude::*;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::super::{
     init::domain::{Domain, SpatialBoundType},
@@ -20,6 +22,8 @@ pub struct Multigrid {
     pub bc: SpatialBoundType,
     pub n_smooth: usize,
     pub tolerance: f64,
+    /// Shared progress state for intra-phase reporting.
+    progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
 impl Multigrid {
@@ -62,6 +66,7 @@ impl Multigrid {
             bc,
             n_smooth: smoothing_steps,
             tolerance: 1e-10,
+            progress: None,
         }
     }
 }
@@ -461,6 +466,10 @@ fn l2_norm(v: &[f64]) -> f64 {
 }
 
 impl PoissonSolver for Multigrid {
+    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
+        self.progress = Some(p);
+    }
+
     /// Solve ∇²Φ = 4πGρ using multigrid V-cycles.
     ///
     /// Iterates V-cycles until the relative residual drops below `tolerance`
@@ -481,8 +490,11 @@ impl PoissonSolver for Multigrid {
         // Initialize phi to zero
         let mut phi = vec![0.0; n_total];
 
-        let max_iter = 100;
+        let max_iter = 100u64;
         for _iter in 0..max_iter {
+            if let Some(ref p) = self.progress {
+                p.set_intra_progress(_iter as u64, max_iter);
+            }
             v_cycle(
                 &mut phi,
                 &rhs,

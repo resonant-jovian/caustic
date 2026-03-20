@@ -78,4 +78,8 @@ pub trait PhaseSpaceRepr: Send + Sync {
     fn memory_bytes(&self) -> usize {
         0
     }
+
+    /// Attach shared progress state for intra-phase cell-level reporting.
+    /// Implementations can use this to report progress via `StepProgress::set_intra_progress`.
+    fn set_progress(&mut self, _progress: std::sync::Arc<super::progress::StepProgress>) {}
 }
