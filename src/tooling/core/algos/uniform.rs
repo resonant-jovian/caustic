@@ -7,6 +7,7 @@ use super::super::{
     types::*,
 };
 use super::lagrangian::{sl_shift_1d, sl_shift_1d_into};
+use super::mp7::mp7_shift_1d_into;
 use super::wpfc::{AdvectionScheme, wpfc_shift_1d_into, zhang_shu_limiter};
 use rayon::prelude::*;
 use std::any::Any;
@@ -34,6 +35,7 @@ fn shift_1d_dispatch(
     match scheme {
         AdvectionScheme::CatmullRom => sl_shift_1d_into(data, disp, cell_size, n, l, periodic, out),
         AdvectionScheme::Wpfc => wpfc_shift_1d_into(data, disp, cell_size, n, l, periodic, out),
+        AdvectionScheme::Mp7 => mp7_shift_1d_into(data, disp, cell_size, n, l, periodic, out),
     }
 }
 

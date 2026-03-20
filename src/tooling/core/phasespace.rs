@@ -73,6 +73,11 @@ pub trait PhaseSpaceRepr: Send + Sync {
     /// Downcast to concrete type for implementation-specific queries (e.g. HT rank data).
     fn as_any(&self) -> &dyn Any;
 
+    /// Mutable downcast for in-place modification (e.g. BUG integrator leaf updates).
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        panic!("as_any_mut not supported by this PhaseSpaceRepr implementation")
+    }
+
     /// Approximate memory usage of this representation in bytes.
     /// Default returns 0; implementations should override for accurate tracking.
     fn memory_bytes(&self) -> usize {

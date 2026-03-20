@@ -10,3 +10,4 @@ pub(crate) mod spherical_1d;
 pub(crate) mod tensor_poisson;
 pub(crate) mod tree;
 pub(crate) mod utils;
+pub(crate) mod vgf;

@@ -333,6 +333,48 @@ impl HtTensor {
         Self::from_full(&data, shape, domain, tolerance)
     }
 
+    // ─── Public accessors for BUG integrator ─────────────────────────────
+
+    /// Get immutable reference to a leaf node's basis frame.
+    pub fn leaf_frame(&self, dim: usize) -> &Mat<f64> {
+        assert!(dim < NUM_LEAVES, "dim {dim} is not a leaf");
+        match &self.nodes[dim] {
+            HtNode::Leaf { frame, .. } => frame,
+            _ => unreachable!(),
+        }
+    }
+
+    /// Get mutable reference to a leaf node's basis frame.
+    pub fn leaf_frame_mut(&mut self, dim: usize) -> &mut Mat<f64> {
+        assert!(dim < NUM_LEAVES, "dim {dim} is not a leaf");
+        match &mut self.nodes[dim] {
+            HtNode::Leaf { frame, .. } => frame,
+            _ => unreachable!(),
+        }
+    }
+
+    /// Get transfer tensor data and shape `[k_parent, k_left, k_right]` for an interior node.
+    pub fn transfer_tensor(&self, node: usize) -> (&[f64], [usize; 3]) {
+        assert!(node >= NUM_LEAVES && node < NUM_NODES, "node {node} is not interior");
+        match &self.nodes[node] {
+            HtNode::Interior { transfer, ranks, .. } => (transfer.as_slice(), *ranks),
+            _ => unreachable!(),
+        }
+    }
+
+    /// Replace the transfer tensor data and ranks for an interior node.
+    pub fn set_transfer_tensor(&mut self, node: usize, data: Vec<f64>, ranks: [usize; 3]) {
+        assert!(node >= NUM_LEAVES && node < NUM_NODES, "node {node} is not interior");
+        assert_eq!(data.len(), ranks[0] * ranks[1] * ranks[2]);
+        match &mut self.nodes[node] {
+            HtNode::Interior { transfer, ranks: r, .. } => {
+                *transfer = data;
+                *r = ranks;
+            }
+            _ => unreachable!(),
+        }
+    }
+
     /// Black-box construction via HTACA (Ballani & Grasedyck 2013).
     ///
     /// Builds the HT tensor by sampling O(dNk) fibers of `f` instead of all N⁶ entries.
@@ -2284,6 +2326,10 @@ impl PhaseSpaceRepr for HtTensor {
     }
 
     fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 

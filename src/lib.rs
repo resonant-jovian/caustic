@@ -60,6 +60,7 @@ pub use tooling::core::poisson::spherical::SphericalHarmonicsPoisson;
 pub use tooling::core::poisson::spherical_1d::Spherical1DPoisson;
 pub use tooling::core::poisson::tensor_poisson::TensorPoisson;
 pub use tooling::core::poisson::tree::TreePoisson;
+pub use tooling::core::poisson::vgf::VgfPoisson;
 pub use tooling::core::time::adaptive::AdaptiveStrangSplitting;
 pub use tooling::core::time::blanes_moan::BlanesMoanSplitting;
 pub use tooling::core::time::bug::{BugConfig, BugIntegrator};

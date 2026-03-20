@@ -9,5 +9,6 @@ pub(crate) mod sheet;
 pub(crate) mod spectral;
 pub(crate) mod spherical_repr;
 pub(crate) mod tensor;
+pub mod mp7;
 pub mod uniform;
 pub mod wpfc;

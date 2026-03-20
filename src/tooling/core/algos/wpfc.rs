@@ -12,6 +12,8 @@ pub enum AdvectionScheme {
     CatmullRom,
     /// Weighted Positive Flux Conservative (6-point stencil, 5th-order).
     Wpfc,
+    /// Monotonicity-Preserving 7th-order (8-point stencil, 7th-order).
+    Mp7,
 }
 
 /// WPFC 1D shift: shift `data` by `disp` on a grid with `cell_size` spacing.
