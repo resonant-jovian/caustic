@@ -20,9 +20,12 @@
 //! Reference: Guo & Qiu, "A local macroscopic conservative (LoMaC) low rank
 //! tensor method for the Vlasov dynamics", arXiv:2207.00518
 
+use std::sync::Arc;
+
 use super::conservative_svd::{conservative_truncation, extract_moments};
 use super::kfvs::KfvsSolver;
 use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
+use crate::tooling::core::progress::StepProgress;
 
 /// LoMaC conservation manager.
 ///
@@ -54,6 +57,8 @@ pub struct LoMaC {
     /// Relative norm threshold for f_ref refresh:
     /// refresh when ||delta_f|| / ||f_ref|| exceeds this value.
     pub delta_f_refresh_threshold: f64,
+    /// Optional shared progress state for intra-step TUI visibility.
+    progress: Option<Arc<StepProgress>>,
 }
 
 impl LoMaC {
@@ -77,7 +82,13 @@ impl LoMaC {
             delta_f_step_count: 0,
             delta_f_refresh_interval: 0,
             delta_f_refresh_threshold: 0.5,
+            progress: None,
         }
+    }
+
+    /// Attach shared progress state for intra-step TUI visibility.
+    pub fn set_progress(&mut self, p: Arc<StepProgress>) {
+        self.progress = Some(p);
     }
 
     /// Initialize from a kinetic distribution function.
@@ -85,6 +96,10 @@ impl LoMaC {
     /// Extracts macroscopic moments from f and initializes the KFVS solver.
     /// If delta-f truncation is enabled, stores f as the reference distribution.
     pub fn initialize_from_kinetic(&mut self, f: &[f64]) {
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, 3);
+        }
+
         let moments = extract_moments(
             f,
             self.spatial_shape,
@@ -92,6 +107,10 @@ impl LoMaC {
             self.dv,
             self.v_min,
         );
+
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(1, 3);
+        }
 
         let density: Vec<f64> = moments.iter().map(|m| m.density).collect();
         let mom_x: Vec<f64> = moments.iter().map(|m| m.momentum[0]).collect();
@@ -101,6 +120,10 @@ impl LoMaC {
 
         self.kfvs
             .initialize_from_moments(&density, &mom_x, &mom_y, &mom_z, &energy);
+
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(2, 3);
+        }
 
         // Store initial distribution as reference for delta-f mode
         if self.delta_f_truncation {
@@ -126,14 +149,21 @@ impl LoMaC {
         if !self.active {
             return f_truncated.to_vec();
         }
-        conservative_truncation(
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, 2);
+        }
+        let result = conservative_truncation(
             f_truncated,
             self.spatial_shape,
             self.velocity_shape,
             &self.kfvs.state,
             self.dv,
             self.v_min,
-        )
+        );
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(1, 2);
+        }
+        result
     }
 
     /// Combined step: advance macroscopic, then project kinetic solution.
@@ -142,7 +172,13 @@ impl LoMaC {
     /// 1. Advance KFVS: (ρ,J,e)^n → (ρ,J,e)^{n+1}
     /// 2. Project: f̃^{n+1} → f^{n+1} matching (ρ,J,e)^{n+1}
     pub fn apply(&mut self, dt: f64, acceleration: &[[f64; 3]], f_truncated: &[f64]) -> Vec<f64> {
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, 2);
+        }
         self.advance_macroscopic(dt, acceleration);
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(1, 2);
+        }
         self.project(f_truncated)
     }
 

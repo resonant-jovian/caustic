@@ -19,6 +19,8 @@ use super::lagrangian::sl_shift_1d;
 use faer::Mat;
 use rayon::prelude::*;
 use std::any::Any;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // ─── TT Core ─────────────────────────────────────────────────────────────────
 
@@ -135,6 +137,8 @@ pub struct TensorTrain {
     pub tolerance: f64,
     /// Maximum allowed TT rank.
     pub max_rank: usize,
+    /// Optional shared progress state for intra-phase reporting.
+    progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
 impl TensorTrain {
@@ -161,6 +165,7 @@ impl TensorTrain {
             domain,
             tolerance: 1e-10,
             max_rank,
+            progress: None,
         }
     }
 
@@ -272,6 +277,7 @@ impl TensorTrain {
             domain: domain.clone(),
             tolerance,
             max_rank,
+            progress: None,
         }
     }
 
@@ -305,6 +311,9 @@ impl TensorTrain {
         let [n0, n1, n2, n3, n4, n5] = self.shape;
         let stride_0 = n1 * n2 * n3 * n4 * n5;
 
+        let counter = AtomicU64::new(0);
+        let report_interval = (n0 as u64 / 100).max(1);
+
         // Parallelize over i0 — each slab is independent
         (0..n0)
             .into_par_iter()
@@ -319,6 +328,13 @@ impl TensorTrain {
                                 }
                             }
                         }
+                    }
+                }
+
+                if let Some(ref p) = self.progress {
+                    let c = counter.fetch_add(1, Ordering::Relaxed);
+                    if c % report_interval == 0 {
+                        p.set_intra_progress(c, n0 as u64);
                     }
                 }
                 slab
@@ -494,6 +510,7 @@ impl TensorTrain {
             domain: self.domain.clone(),
             tolerance: self.tolerance.min(other.tolerance),
             max_rank: self.max_rank.max(other.max_rank),
+            progress: None,
         };
         result.recompress(result.tolerance);
         result
@@ -627,6 +644,10 @@ impl TensorTrain {
 // ─── PhaseSpaceRepr implementation ───────────────────────────────────────────
 
 impl PhaseSpaceRepr for TensorTrain {
+    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
+        self.progress = Some(p);
+    }
+
     fn compute_density(&self) -> DensityField {
         let [n0, n1, n2, _n3, _n4, _n5] = self.shape;
         let n_spatial = n0 * n1 * n2;
@@ -639,6 +660,9 @@ impl PhaseSpaceRepr for TensorTrain {
         let c0 = &self.cores[0];
         let c1 = &self.cores[1];
         let c2 = &self.cores[2];
+
+        let counter = AtomicU64::new(0);
+        let report_interval = (n0 as u64 / 100).max(1);
 
         let data: Vec<f64> = (0..n0)
             .into_par_iter()
@@ -676,6 +700,13 @@ impl PhaseSpaceRepr for TensorTrain {
                         slab.push(rho);
                     }
                 }
+
+                if let Some(ref p) = self.progress {
+                    let c = counter.fetch_add(1, Ordering::Relaxed);
+                    if c % report_interval == 0 {
+                        p.set_intra_progress(c, n0 as u64);
+                    }
+                }
                 slab
             })
             .collect();
@@ -704,6 +735,9 @@ impl PhaseSpaceRepr for TensorTrain {
         // For each velocity cell (i3,i4,i5), shift the spatial block
         let nv_total = n3 * n4 * n5;
         let ns_total = n0 * n1 * n2;
+
+        let counter = AtomicU64::new(0);
+        let report_interval = (nv_total as u64 / 100).max(1);
 
         for vi in 0..nv_total {
             let i5 = vi % n5;
@@ -786,6 +820,13 @@ impl PhaseSpaceRepr for TensorTrain {
                     }
                 }
             }
+
+            if let Some(ref p) = self.progress {
+                let c = counter.fetch_add(1, Ordering::Relaxed);
+                if c % report_interval == 0 {
+                    p.set_intra_progress(c, nv_total as u64);
+                }
+            }
         }
 
         // Rebuild TT from the shifted full array
@@ -809,6 +850,9 @@ impl PhaseSpaceRepr for TensorTrain {
         let mut data = self.to_full();
         let ns_total = n0 * n1 * n2;
         let nv_total = n3 * n4 * n5;
+
+        let counter = AtomicU64::new(0);
+        let report_interval = (ns_total as u64 / 100).max(1);
 
         for si in 0..ns_total {
             let ix2 = si % n2;
@@ -890,6 +934,13 @@ impl PhaseSpaceRepr for TensorTrain {
                             + iv5;
                         data[flat] = local[vi];
                     }
+                }
+            }
+
+            if let Some(ref p) = self.progress {
+                let c = counter.fetch_add(1, Ordering::Relaxed);
+                if c % report_interval == 0 {
+                    p.set_intra_progress(c, ns_total as u64);
                 }
             }
         }
@@ -1141,6 +1192,8 @@ impl PhaseSpaceRepr for TensorTrain {
         // For simplicity with correct results, expand and compute directly for small grids.
         let data = self.to_full();
         let mut t = 0.0f64;
+        let counter = AtomicU64::new(0);
+        let report_interval = (n0 as u64 / 100).max(1);
         for i0 in 0..n0 {
             for i1 in 0..n1 {
                 for i2 in 0..n2 {
@@ -1161,6 +1214,12 @@ impl PhaseSpaceRepr for TensorTrain {
                             }
                         }
                     }
+                }
+            }
+            if let Some(ref p) = self.progress {
+                let c = counter.fetch_add(1, Ordering::Relaxed);
+                if c % report_interval == 0 {
+                    p.set_intra_progress(c, n0 as u64);
                 }
             }
         }

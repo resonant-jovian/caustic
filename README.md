@@ -22,7 +22,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-caustic = "0.0.9"
+caustic = "0.0.11"
 ```
 
 ### Minimal example: Plummer sphere equilibrium
@@ -86,9 +86,9 @@ Each solver component is a Rust trait; implementations are swapped independently
 | Trait | Role | Implementations |
 |---|---|---|
 | `PhaseSpaceRepr` | Store and query f(x,v) | `UniformGrid6D`, `HtTensor`, `TensorTrain`, `SheetTracker`, `SpectralV`, `AmrGrid`, `HybridRepr` |
-| `PoissonSolver` | Solve ∇²Φ = 4πGρ | `FftPoisson`, `FftIsolated`, `TensorPoisson`, `Multigrid`, `SphericalHarmonicsPoisson`, `TreePoisson` |
+| `PoissonSolver` | Solve ∇²Φ = 4πGρ | `FftPoisson`, `FftIsolated`, `TensorPoisson`, `HtPoisson`, `Multigrid`, `SphericalHarmonicsPoisson`, `TreePoisson` |
 | `Advector` | Advance f by Δt | `SemiLagrangian` (Catmull-Rom + sparse polynomial) |
-| `TimeIntegrator` | Orchestrate timestep | `StrangSplitting` (2nd), `YoshidaSplitting` (4th), `LieSplitting` (1st), `UnsplitIntegrator` (RK2/3/4) |
+| `TimeIntegrator` | Orchestrate timestep | `StrangSplitting` (2nd), `YoshidaSplitting` (4th), `LieSplitting` (1st), `UnsplitIntegrator` (RK2/3/4), `RkeiIntegrator` (3rd), `InstrumentedStrangSplitting` (2nd) |
 
 ### Phase-space representations
 
@@ -241,7 +241,7 @@ Termination is configurable via the builder API:
 
 ## Validation suite
 
-**163+ tests** — run with `cargo test --release -- --test-threads=1`:
+**170 tests** — run with `cargo test --release -- --test-threads=1`:
 
 ### Physics validation
 
@@ -310,7 +310,7 @@ Plus integration tests, HT tensor/ACA tests (17), conservation framework tests (
 
 ```toml
 [dependencies]
-caustic = { version = "0.0.6", features = ["hdf5"] }
+caustic = { version = "0.0.11", features = ["hdf5"] }
 ```
 
 | Flag | Description |

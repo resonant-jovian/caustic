@@ -16,6 +16,8 @@ use super::lagrangian::sl_shift_1d;
 use rayon::prelude::*;
 use std::any::Any;
 use std::f64::consts::PI;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Spectral-in-velocity representation using orthonormal Hermite function basis.
 ///
@@ -44,6 +46,8 @@ pub struct SpectralV {
     pub velocity_scale: f64,
     /// Domain specification.
     pub domain: Domain,
+    /// Optional progress reporter for intra-step TUI updates.
+    progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
 impl SpectralV {
@@ -66,6 +70,7 @@ impl SpectralV {
             n_modes,
             velocity_scale: sigma,
             domain,
+            progress: None,
         }
     }
 
@@ -189,6 +194,7 @@ impl SpectralV {
             n_modes,
             velocity_scale: sigma,
             domain: domain.clone(),
+            progress: None,
         }
     }
 
@@ -279,6 +285,10 @@ impl SpectralV {
 }
 
 impl PhaseSpaceRepr for SpectralV {
+    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
+        self.progress = Some(p);
+    }
+
     /// Compute density rho(x) = integral f(x,v) dv^3.
     ///
     /// In the Hermite representation:
@@ -293,11 +303,21 @@ impl PhaseSpaceRepr for SpectralV {
         let n_modes3 = self.n_modes * self.n_modes * self.n_modes;
         let norm = self.density_normalization();
 
+        let counter = AtomicU64::new(0);
+        let report_interval = (n_spatial as u64 / 100).max(1);
+
         let data: Vec<f64> = (0..n_spatial)
             .into_par_iter()
             .map(|si| {
                 // The (0,0,0) mode is at index 0 within each spatial cell's coefficient block
-                self.coefficients[si * n_modes3] * norm
+                let result = self.coefficients[si * n_modes3] * norm;
+                if let Some(ref p) = self.progress {
+                    let c = counter.fetch_add(1, Ordering::Relaxed);
+                    if c % report_interval == 0 {
+                        p.set_intra_progress(c, n_spatial as u64);
+                    }
+                }
+                result
             })
             .collect();
 
@@ -421,6 +441,9 @@ impl PhaseSpaceRepr for SpectralV {
 
             // Compute spatial gradient via centered differences — parallel over spatial cells
             let spatial_shape = self.spatial_shape;
+            let n_spatial = nx * ny * nz;
+            let advect_x_counter = AtomicU64::new(0);
+            let advect_x_report = (n_spatial as u64 / 100).max(1);
             new_coeffs
                 .par_chunks_mut(n_modes3)
                 .enumerate()
@@ -491,6 +514,13 @@ impl PhaseSpaceRepr for SpectralV {
                             }
                         }
                     }
+
+                    if let Some(ref p) = self.progress {
+                        let c = advect_x_counter.fetch_add(1, Ordering::Relaxed);
+                        if c % advect_x_report == 0 {
+                            p.set_intra_progress(c, n_spatial as u64);
+                        }
+                    }
                 });
 
             // Move results for next dimension pass (avoids clone)
@@ -516,6 +546,9 @@ impl PhaseSpaceRepr for SpectralV {
         let old = self.coefficients.clone();
 
         // Parallelize over spatial cells — each cell's coupling is independent
+        let n_spatial = nx * ny * nz;
+        let advect_v_counter = AtomicU64::new(0);
+        let advect_v_report = (n_spatial as u64 / 100).max(1);
         self.coefficients
             .par_chunks_mut(n_modes3)
             .enumerate()
@@ -567,6 +600,13 @@ impl PhaseSpaceRepr for SpectralV {
                                 coeff_chunk[mi] += dt * g_over_sigma * (lower - upper);
                             }
                         }
+                    }
+                }
+
+                if let Some(ref p) = self.progress {
+                    let c = advect_v_counter.fetch_add(1, Ordering::Relaxed);
+                    if c % advect_v_report == 0 {
+                        p.set_intra_progress(c, n_spatial as u64);
                     }
                 }
             });
@@ -739,7 +779,10 @@ impl PhaseSpaceRepr for SpectralV {
         let dv3 = dv_q[0] * dv_q[1] * dv_q[2];
 
         let mut entropy = 0.0;
-        for si in 0..self.n_spatial() {
+        let n_spatial = self.n_spatial();
+        let entropy_report = (n_spatial as u64 / 100).max(1);
+        let mut entropy_counter: u64 = 0;
+        for si in 0..n_spatial {
             for iv1 in 0..nv {
                 for iv2 in 0..nv {
                     for iv3 in 0..nv {
@@ -755,6 +798,12 @@ impl PhaseSpaceRepr for SpectralV {
                     }
                 }
             }
+            if let Some(ref p) = self.progress {
+                if entropy_counter % entropy_report == 0 {
+                    p.set_intra_progress(entropy_counter, n_spatial as u64);
+                }
+            }
+            entropy_counter += 1;
         }
         entropy * dx3 * dv3
     }
@@ -773,6 +822,8 @@ impl PhaseSpaceRepr for SpectralV {
         let dv3 = 2.0 * lv[2] / nv_margin as f64;
 
         let mut counts = vec![0u32; n_spatial];
+        let sc_report = (n_spatial as u64 / 100).max(1);
+        let mut sc_counter: u64 = 0;
 
         for (si, count) in counts.iter_mut().enumerate().take(n_spatial) {
             // Build marginal f(v_x) = integral f(v_x, v_y, v_z) dv_y dv_z
@@ -802,6 +853,13 @@ impl PhaseSpaceRepr for SpectralV {
                 }
             }
             *count = peaks;
+
+            if let Some(ref p) = self.progress {
+                if sc_counter % sc_report == 0 {
+                    p.set_intra_progress(sc_counter, n_spatial as u64);
+                }
+            }
+            sc_counter += 1;
         }
 
         StreamCountField {
@@ -860,7 +918,10 @@ impl PhaseSpaceRepr for SpectralV {
         let dv3 = dv_q[0] * dv_q[1] * dv_q[2];
 
         let mut ke = 0.0;
-        for si in 0..self.n_spatial() {
+        let n_spatial = self.n_spatial();
+        let ke_report = (n_spatial as u64 / 100).max(1);
+        let mut ke_counter: u64 = 0;
+        for si in 0..n_spatial {
             for iv1 in 0..nv {
                 for iv2 in 0..nv {
                     for iv3 in 0..nv {
@@ -875,6 +936,12 @@ impl PhaseSpaceRepr for SpectralV {
                     }
                 }
             }
+            if let Some(ref p) = self.progress {
+                if ke_counter % ke_report == 0 {
+                    p.set_intra_progress(ke_counter, n_spatial as u64);
+                }
+            }
+            ke_counter += 1;
         }
         0.5 * ke * dx3 * dv3
     }
@@ -891,7 +958,10 @@ impl PhaseSpaceRepr for SpectralV {
         let n_total = self.n_spatial() * n_vel;
 
         let mut data = vec![0.0; n_total];
-        for si in 0..self.n_spatial() {
+        let snap_n_spatial = self.n_spatial();
+        let snap_report = (snap_n_spatial as u64 / 100).max(1);
+        let mut snap_counter: u64 = 0;
+        for si in 0..snap_n_spatial {
             for iv1 in 0..nv1 {
                 for iv2 in 0..nv2 {
                     for iv3 in 0..nv3 {
@@ -905,6 +975,12 @@ impl PhaseSpaceRepr for SpectralV {
                     }
                 }
             }
+            if let Some(ref p) = self.progress {
+                if snap_counter % snap_report == 0 {
+                    p.set_intra_progress(snap_counter, snap_n_spatial as u64);
+                }
+            }
+            snap_counter += 1;
         }
 
         PhaseSpaceSnapshot {

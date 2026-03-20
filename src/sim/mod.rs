@@ -245,6 +245,9 @@ impl Simulation {
         self.integrator.set_progress(p.clone());
         self.repr.set_progress(p.clone());
         self.poisson.set_progress(p.clone());
+        if let Some(ref mut lomac) = self.lomac {
+            lomac.set_progress(p.clone());
+        }
         self.progress = Some(p);
     }
 
