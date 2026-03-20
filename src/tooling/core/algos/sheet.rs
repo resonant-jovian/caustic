@@ -173,6 +173,10 @@ impl SheetTracker {
         let n_particles = self.particles.len() as u64;
         let report_interval = (n_particles / 100).max(1);
 
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, n_particles);
+        }
+
         for (pi, p) in self.particles.iter().enumerate() {
             if let Some(ref prog) = self.progress {
                 if pi as u64 % report_interval == 0 {
@@ -225,6 +229,10 @@ impl SheetTracker {
 
         let n_particles = self.particles.len() as u64;
         let report_interval = (n_particles / 100).max(1);
+
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, n_particles);
+        }
 
         for (pi, p) in self.particles.iter().enumerate() {
             if let Some(ref prog) = self.progress {
@@ -418,6 +426,10 @@ impl PhaseSpaceRepr for SheetTracker {
         let counter = AtomicU64::new(0);
         let report_interval = (n_particles / 100).max(1);
 
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, n_particles);
+        }
+
         self.particles.par_iter_mut().for_each(|p| {
             for (k, &l) in lx.iter().enumerate() {
                 p.x[k] += p.v[k] * dt;
@@ -443,6 +455,10 @@ impl PhaseSpaceRepr for SheetTracker {
         let n_particles = self.particles.len() as u64;
         let counter = AtomicU64::new(0);
         let report_interval = (n_particles / 100).max(1);
+
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, n_particles);
+        }
 
         self.particles.par_iter_mut().for_each(|p| {
             let a = Self::interpolate_vec_field(
@@ -628,6 +644,10 @@ impl PhaseSpaceRepr for SheetTracker {
 
         let n_particles = self.particles.len() as u64;
         let report_interval = (n_particles / 100).max(1);
+
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, n_particles);
+        }
 
         for (pi, p) in self.particles.iter().enumerate() {
             if let Some(ref prog) = self.progress {

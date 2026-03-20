@@ -400,6 +400,11 @@ impl ZeldovichIC {
         let counter = std::sync::atomic::AtomicU64::new(0);
         let report_interval = (nx1 / 100).max(1) as u64;
 
+        // Establish 0% baseline so the TUI doesn't jump to a non-zero first value
+        if let Some(p) = progress {
+            p.set_intra_progress(0, nx1 as u64);
+        }
+
         // Parallelize over ix1 slabs — each slab is independent
         data.par_chunks_mut(s_x1)
             .enumerate()
@@ -548,6 +553,11 @@ impl ZeldovichSingleMode {
 
         let counter = std::sync::atomic::AtomicU64::new(0);
         let report_interval = (nx1 / 100).max(1) as u64;
+
+        // Establish 0% baseline so the TUI doesn't jump to a non-zero first value
+        if let Some(p) = progress {
+            p.set_intra_progress(0, nx1 as u64);
+        }
 
         for ix1 in 0..nx1 {
             let x1 = -lx[0] + (ix1 as f64 + 0.5) * dx[0];

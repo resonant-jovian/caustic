@@ -1510,6 +1510,9 @@ impl HtTensor {
         let [n0, n1, n2, n3, n4, n5] = self.shape;
         let total_u64 = total as u64;
         let report_interval = (total_u64 / 100).max(1);
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, total_u64);
+        }
         let mut count = 0u64;
         for i0 in 0..n0 {
             for i1 in 0..n1 {
@@ -1799,6 +1802,10 @@ impl PhaseSpaceRepr for HtTensor {
         let counter = AtomicU64::new(0);
         let total = nx1 as u64;
         let report_interval = (total / 100).max(1);
+
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, total);
+        }
 
         let density: Vec<f64> = (0..nx1)
             .into_par_iter()
@@ -2138,6 +2145,9 @@ impl PhaseSpaceRepr for HtTensor {
         let data = self.to_full();
         let total = data.len() as u64;
         let report_interval = (total / 100).max(1);
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, total);
+        }
         let mut sum = 0.0f64;
         for (idx, &f) in data.iter().enumerate() {
             if f > 0.0 {
@@ -2160,6 +2170,10 @@ impl PhaseSpaceRepr for HtTensor {
         let counter = AtomicU64::new(0);
         let total = (nx1 * nx2 * nx3) as u64;
         let report_interval = (total / 100).max(1);
+
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, total);
+        }
 
         let out: Vec<u32> = (0..nx1 * nx2 * nx3)
             .into_par_iter()
@@ -2239,6 +2253,9 @@ impl PhaseSpaceRepr for HtTensor {
         let n_vel = nv1 * nv2 * nv3;
         let total = data.len() as u64;
         let report_interval = (total / 100).max(1);
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, total);
+        }
         let mut t = 0.0f64;
         for (idx, &f) in data.iter().enumerate() {
             let vi = idx % n_vel;

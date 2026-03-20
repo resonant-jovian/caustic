@@ -626,6 +626,11 @@ pub fn sample_on_grid_with_progress(
     let counter = AtomicU64::new(0);
     let report_interval = (nx1 / 100).max(1) as u64;
 
+    // Establish 0% baseline so the TUI doesn't jump to a non-zero first value
+    if let Some(p) = progress {
+        p.set_intra_progress(0, nx1 as u64);
+    }
+
     // Each ix1 slab is independent — parallelize over ix1
     data.par_chunks_mut(s_x1)
         .enumerate()

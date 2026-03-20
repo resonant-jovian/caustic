@@ -314,6 +314,10 @@ impl TensorTrain {
         let counter = AtomicU64::new(0);
         let report_interval = (n0 as u64 / 100).max(1);
 
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, n0 as u64);
+        }
+
         // Parallelize over i0 — each slab is independent
         (0..n0)
             .into_par_iter()
@@ -664,6 +668,10 @@ impl PhaseSpaceRepr for TensorTrain {
         let counter = AtomicU64::new(0);
         let report_interval = (n0 as u64 / 100).max(1);
 
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, n0 as u64);
+        }
+
         let data: Vec<f64> = (0..n0)
             .into_par_iter()
             .flat_map(|i0| {
@@ -738,6 +746,10 @@ impl PhaseSpaceRepr for TensorTrain {
 
         let counter = AtomicU64::new(0);
         let report_interval = (nv_total as u64 / 100).max(1);
+
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, nv_total as u64);
+        }
 
         for vi in 0..nv_total {
             let i5 = vi % n5;
@@ -853,6 +865,10 @@ impl PhaseSpaceRepr for TensorTrain {
 
         let counter = AtomicU64::new(0);
         let report_interval = (ns_total as u64 / 100).max(1);
+
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, ns_total as u64);
+        }
 
         for si in 0..ns_total {
             let ix2 = si % n2;
@@ -1194,6 +1210,9 @@ impl PhaseSpaceRepr for TensorTrain {
         let mut t = 0.0f64;
         let counter = AtomicU64::new(0);
         let report_interval = (n0 as u64 / 100).max(1);
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, n0 as u64);
+        }
         for i0 in 0..n0 {
             for i1 in 0..n1 {
                 for i2 in 0..n2 {

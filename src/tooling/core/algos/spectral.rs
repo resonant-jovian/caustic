@@ -306,6 +306,10 @@ impl PhaseSpaceRepr for SpectralV {
         let counter = AtomicU64::new(0);
         let report_interval = (n_spatial as u64 / 100).max(1);
 
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, n_spatial as u64);
+        }
+
         let data: Vec<f64> = (0..n_spatial)
             .into_par_iter()
             .map(|si| {
@@ -444,6 +448,9 @@ impl PhaseSpaceRepr for SpectralV {
             let n_spatial = nx * ny * nz;
             let advect_x_counter = AtomicU64::new(0);
             let advect_x_report = (n_spatial as u64 / 100).max(1);
+            if let Some(ref p) = self.progress {
+                p.set_intra_progress(0, n_spatial as u64);
+            }
             new_coeffs
                 .par_chunks_mut(n_modes3)
                 .enumerate()
@@ -549,6 +556,9 @@ impl PhaseSpaceRepr for SpectralV {
         let n_spatial = nx * ny * nz;
         let advect_v_counter = AtomicU64::new(0);
         let advect_v_report = (n_spatial as u64 / 100).max(1);
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, n_spatial as u64);
+        }
         self.coefficients
             .par_chunks_mut(n_modes3)
             .enumerate()
@@ -782,6 +792,9 @@ impl PhaseSpaceRepr for SpectralV {
         let n_spatial = self.n_spatial();
         let entropy_report = (n_spatial as u64 / 100).max(1);
         let mut entropy_counter: u64 = 0;
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, n_spatial as u64);
+        }
         for si in 0..n_spatial {
             for iv1 in 0..nv {
                 for iv2 in 0..nv {
@@ -824,6 +837,10 @@ impl PhaseSpaceRepr for SpectralV {
         let mut counts = vec![0u32; n_spatial];
         let sc_report = (n_spatial as u64 / 100).max(1);
         let mut sc_counter: u64 = 0;
+
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, n_spatial as u64);
+        }
 
         for (si, count) in counts.iter_mut().enumerate().take(n_spatial) {
             // Build marginal f(v_x) = integral f(v_x, v_y, v_z) dv_y dv_z
@@ -921,6 +938,9 @@ impl PhaseSpaceRepr for SpectralV {
         let n_spatial = self.n_spatial();
         let ke_report = (n_spatial as u64 / 100).max(1);
         let mut ke_counter: u64 = 0;
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, n_spatial as u64);
+        }
         for si in 0..n_spatial {
             for iv1 in 0..nv {
                 for iv2 in 0..nv {
@@ -961,6 +981,9 @@ impl PhaseSpaceRepr for SpectralV {
         let snap_n_spatial = self.n_spatial();
         let snap_report = (snap_n_spatial as u64 / 100).max(1);
         let mut snap_counter: u64 = 0;
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, snap_n_spatial as u64);
+        }
         for si in 0..snap_n_spatial {
             for iv1 in 0..nv1 {
                 for iv2 in 0..nv2 {
