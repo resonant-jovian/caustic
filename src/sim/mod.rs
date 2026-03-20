@@ -91,6 +91,11 @@ impl Simulation {
             self.integrator.max_dt(&*self.repr, cfl_factor)
         };
 
+        // Use adaptive integrator's suggestion if available (CFL as hard upper bound)
+        if let Some(adaptive_dt) = self.integrator.suggested_dt() {
+            dt = dt.min(adaptive_dt);
+        }
+
         // Clamp dt to not overshoot t_final by more than necessary
         let t_final = {
             use rust_decimal::prelude::ToPrimitive;

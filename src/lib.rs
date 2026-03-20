@@ -57,10 +57,17 @@ pub use tooling::core::poisson::ht_poisson::HtPoisson;
 pub use tooling::core::poisson::multigrid::Multigrid;
 pub use tooling::core::poisson::spherical::SphericalHarmonicsPoisson;
 pub use tooling::core::poisson::tensor_poisson::TensorPoisson;
+pub use tooling::core::poisson::multipole::MultipoleExpansion;
+pub use tooling::core::poisson::spherical_1d::Spherical1DPoisson;
 pub use tooling::core::poisson::tree::TreePoisson;
+pub use tooling::core::time::adaptive::AdaptiveStrangSplitting;
+pub use tooling::core::time::blanes_moan::BlanesMoanSplitting;
+pub use tooling::core::time::bug::{BugConfig, BugIntegrator};
+pub use tooling::core::time::cosmological::CosmologicalStrangSplitting;
 pub use tooling::core::time::lie::LieSplitting;
 pub use tooling::core::time::rank_monitor::{InstrumentedStrangSplitting, StepRankDiagnostics};
 pub use tooling::core::time::rkei::RkeiIntegrator;
+pub use tooling::core::time::rkn6::Rkn6Splitting;
 pub use tooling::core::time::strang::StrangSplitting;
 pub use tooling::core::time::unsplit::UnsplitIntegrator;
 pub use tooling::core::time::yoshida::YoshidaSplitting;
@@ -74,7 +81,9 @@ pub use tooling::core::algos::hybrid::HybridRepr;
 pub use tooling::core::algos::sheet::SheetTracker;
 pub use tooling::core::algos::spectral::SpectralV;
 pub use tooling::core::algos::tensor::TensorTrain;
+pub use tooling::core::algos::spherical_repr::SphericalRepr;
 pub use tooling::core::algos::uniform::UniformGrid6D;
+pub use tooling::core::algos::wpfc;
 
 // Conservation framework (Phase 4: LoMaC)
 pub use tooling::core::conservation::conservative_svd;

@@ -1,3 +1,5 @@
+pub(crate) mod bgk;
+pub(crate) mod bump_on_tail;
 pub(crate) mod cold_collapse;
 pub(crate) mod conservation;
 pub(crate) mod convergence;
@@ -6,8 +8,11 @@ pub(crate) mod instability;
 pub(crate) mod jeans_isolated;
 pub(crate) mod king;
 pub(crate) mod landau;
+pub(crate) mod long_conservation;
+pub(crate) mod mms;
 pub(crate) mod nfw_equilibrium;
 pub(crate) mod nonlinear_landau;
+pub(crate) mod plasma_echo;
 pub(crate) mod plummer;
 pub(crate) mod sheet_1d;
 pub(crate) mod spherical;

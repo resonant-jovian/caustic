@@ -344,26 +344,33 @@ impl PoissonSolver for FftPoisson {
         let dx = self.dx;
         let slab_size = ny * nz;
 
+        // Pre-allocate contiguous output arrays and write directly via par_chunks_mut,
+        // eliminating per-slab Vec allocations and the serial flatten step.
+        let mut gx_hat = vec![Complex::new(0.0, 0.0); n_total];
+        let mut gy_hat = vec![Complex::new(0.0, 0.0); n_total];
+        let mut gz_hat = vec![Complex::new(0.0, 0.0); n_total];
         let total = nx as u64;
         let counter = AtomicU64::new(0);
         let report_interval = (total / 100).max(1);
-        let slabs: Vec<ComplexSlab> = (0..nx)
-            .into_par_iter()
-            .map(|ix| {
+
+        gx_hat
+            .par_chunks_mut(slab_size)
+            .zip(gy_hat.par_chunks_mut(slab_size))
+            .zip(gz_hat.par_chunks_mut(slab_size))
+            .enumerate()
+            .for_each(|(ix, ((gx_slab, gy_slab), gz_slab))| {
                 let kx = Self::wavenumber(ix, nx, dx[0]);
-                let mut gx = Vec::with_capacity(slab_size);
-                let mut gy = Vec::with_capacity(slab_size);
-                let mut gz = Vec::with_capacity(slab_size);
                 let base = ix * slab_size;
                 for iy in 0..ny {
                     let ky = Self::wavenumber(iy, ny, dx[1]);
                     for iz in 0..nz {
                         let kz = Self::wavenumber(iz, nz, dx[2]);
                         let p = phi_hat[base + iy * nz + iz];
+                        let local = iy * nz + iz;
                         // g = −∇Φ → ĝ_x = −ikx Φ̂
-                        gx.push(-i_unit * kx * p);
-                        gy.push(-i_unit * ky * p);
-                        gz.push(-i_unit * kz * p);
+                        gx_slab[local] = -i_unit * kx * p;
+                        gy_slab[local] = -i_unit * ky * p;
+                        gz_slab[local] = -i_unit * kz * p;
                     }
                 }
                 if let Some(ref p) = self.progress {
@@ -372,19 +379,7 @@ impl PoissonSolver for FftPoisson {
                         p.set_intra_progress(c, total);
                     }
                 }
-                (gx, gy, gz)
-            })
-            .collect();
-
-        // Flatten slabs into contiguous arrays
-        let mut gx_hat = Vec::with_capacity(n_total);
-        let mut gy_hat = Vec::with_capacity(n_total);
-        let mut gz_hat = Vec::with_capacity(n_total);
-        for (gx, gy, gz) in slabs {
-            gx_hat.extend_from_slice(&gx);
-            gy_hat.extend_from_slice(&gy);
-            gz_hat.extend_from_slice(&gz);
-        }
+            });
 
         super::fft_utils::fft_3d_c2c_scratch(&mut gx_hat, &mut scratch, self.shape, &self.inv);
         super::fft_utils::fft_3d_c2c_scratch(&mut gy_hat, &mut scratch, self.shape, &self.inv);

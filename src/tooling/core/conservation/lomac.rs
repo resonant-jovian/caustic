@@ -59,6 +59,9 @@ pub struct LoMaC {
     pub delta_f_refresh_threshold: f64,
     /// Optional shared progress state for intra-step TUI visibility.
     progress: Option<Arc<StepProgress>>,
+    /// History of Casimir C₂ drift: (pre_lomac, post_lomac) pairs per step.
+    /// Tracks how much the LoMaC projection alters the Casimir invariant.
+    pub casimir_drift_history: Vec<(f64, f64)>,
 }
 
 impl LoMaC {
@@ -83,6 +86,7 @@ impl LoMaC {
             delta_f_refresh_interval: 0,
             delta_f_refresh_threshold: 0.5,
             progress: None,
+            casimir_drift_history: Vec::new(),
         }
     }
 
@@ -145,13 +149,18 @@ impl LoMaC {
     ///
     /// Call this AFTER advancing and truncating the kinetic equation.
     /// Returns the corrected distribution function with exact conservation.
-    pub fn project(&self, f_truncated: &[f64]) -> Vec<f64> {
+    pub fn project(&mut self, f_truncated: &[f64]) -> Vec<f64> {
         if !self.active {
             return f_truncated.to_vec();
         }
         if let Some(ref p) = self.progress {
             p.set_intra_progress(0, 2);
         }
+
+        // Track Casimir C₂ before projection
+        let dv3 = self.dv[0] * self.dv[1] * self.dv[2];
+        let c2_pre: f64 = f_truncated.iter().map(|&f| f * f).sum::<f64>() * dv3;
+
         let result = conservative_truncation(
             f_truncated,
             self.spatial_shape,
@@ -160,6 +169,11 @@ impl LoMaC {
             self.dv,
             self.v_min,
         );
+
+        // Track Casimir C₂ after projection
+        let c2_post: f64 = result.iter().map(|&f| f * f).sum::<f64>() * dv3;
+        self.casimir_drift_history.push((c2_pre, c2_post));
+
         if let Some(ref p) = self.progress {
             p.set_intra_progress(1, 2);
         }
@@ -257,7 +271,7 @@ impl LoMaC {
         self.advance_macroscopic(dt, acceleration);
         self.delta_f_step_count += 1;
 
-        let f_ref = match self.f_ref.as_ref() {
+        let f_ref = match self.f_ref.clone() {
             Some(r) => r,
             None => return self.project(f),
         };
@@ -301,7 +315,9 @@ impl LoMaC {
 
         // Periodically refresh f_ref when delta_f grows too large
         if self.delta_f_refresh_interval > 0
-            && self.delta_f_step_count.is_multiple_of(self.delta_f_refresh_interval)
+            && self
+                .delta_f_step_count
+                .is_multiple_of(self.delta_f_refresh_interval)
         {
             self.update_f_ref(&result);
         } else if self.delta_f_refresh_threshold > 0.0 {

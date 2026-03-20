@@ -7,5 +7,7 @@ pub(crate) mod hybrid;
 pub mod lagrangian;
 pub(crate) mod sheet;
 pub(crate) mod spectral;
+pub(crate) mod spherical_repr;
 pub(crate) mod tensor;
 pub mod uniform;
+pub mod wpfc;

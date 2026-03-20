@@ -175,10 +175,81 @@ fn sl_shift_1d_into_fast(
     }
 }
 
+/// Fast sliding-window 1D semi-Lagrangian shift for open (clamped) boundaries.
+///
+/// Same sliding-window optimization as the periodic variant: weights are constant
+/// for uniform displacement, so only 1 new data load per output point. Boundary
+/// lookups use clamping instead of wrapping.
+#[inline]
+fn sl_shift_1d_into_fast_open(
+    data: &[f64],
+    disp: f64,
+    cell_size: f64,
+    n: usize,
+    l: f64,
+    out: &mut [f64],
+) {
+    if n == 0 {
+        return;
+    }
+    // departure_idx for output point 0
+    let center0 = -l + 0.5 * cell_size;
+    let dep0_phys = center0 - disp;
+    let dep0 = (dep0_phys + l) / cell_size - 0.5;
+
+    // Check if the entire shift is out of bounds
+    let dep_last = dep0 + (n - 1) as f64;
+    if dep_last < -0.5 || dep0 >= n as f64 - 0.5 {
+        for val in out.iter_mut().take(n) {
+            *val = 0.0;
+        }
+        return;
+    }
+
+    let t = dep0 - dep0.floor();
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let w0 = -0.5 * t + t2 - 0.5 * t3;
+    let w1 = 1.0 - 2.5 * t2 + 1.5 * t3;
+    let w2 = 0.5 * t + 2.0 * t2 - 1.5 * t3;
+    let w3 = -0.5 * t2 + 0.5 * t3;
+
+    let n_isize = n as isize;
+    let i0 = dep0.floor() as isize;
+    let clamp = |j: isize| j.clamp(0, n_isize - 1) as usize;
+
+    // Initialize sliding window
+    let mut p0 = data[clamp(i0 - 1)];
+    let mut p1 = data[clamp(i0)];
+    let mut p2 = data[clamp(i0 + 1)];
+    let mut p3 = data[clamp(i0 + 2)];
+
+    // First point: check if in bounds
+    if dep0 < -0.5 || dep0 >= n as f64 - 0.5 {
+        out[0] = 0.0;
+    } else {
+        out[0] = w0 * p0 + w1 * p1 + w2 * p2 + w3 * p3;
+    }
+
+    // Slide: 1 new load per output point
+    for i in 1..n {
+        p0 = p1;
+        p1 = p2;
+        p2 = p3;
+        p3 = data[clamp(i0 + i as isize + 2)];
+        let dep_i = dep0 + i as f64;
+        if dep_i < -0.5 || dep_i >= n as f64 - 0.5 {
+            out[i] = 0.0;
+        } else {
+            out[i] = w0 * p0 + w1 * p1 + w2 * p2 + w3 * p3;
+        }
+    }
+}
+
 /// Like [`sl_shift_1d`], but writes results into a pre-allocated output buffer,
 /// avoiding allocation. `out` must have length >= `n`.
 ///
-/// Dispatches to the fast sliding-window path for periodic boundaries.
+/// Dispatches to fast sliding-window paths for both periodic and open boundaries.
 pub fn sl_shift_1d_into(
     data: &[f64],
     disp: f64,
@@ -191,8 +262,6 @@ pub fn sl_shift_1d_into(
     if periodic {
         sl_shift_1d_into_fast(data, disp, cell_size, n, l, out);
     } else {
-        for (i, val) in out.iter_mut().enumerate().take(n) {
-            *val = sl_shift_1d_at(data, disp, cell_size, n, l, false, i);
-        }
+        sl_shift_1d_into_fast_open(data, disp, cell_size, n, l, out);
     }
 }

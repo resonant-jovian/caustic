@@ -172,6 +172,14 @@ impl PhaseSpaceRepr for UniformGrid6D {
         let n_sp = nx1 * nx2 * nx3;
         let max_n = nx1.max(nx2).max(nx3);
 
+        // Pre-allocate thread-local scratch buffers (one pair per rayon thread)
+        // to eliminate per-chunk Vec allocations in the hot loop.
+        // Each thread only locks its own slot, so contention is zero.
+        let n_threads = rayon::current_num_threads();
+        let scratch_pool: Vec<std::sync::Mutex<(Vec<f64>, Vec<f64>)>> = (0..n_threads)
+            .map(|_| std::sync::Mutex::new((vec![0.0f64; max_n], vec![0.0f64; max_n])))
+            .collect();
+
         // Pre-allocate intermediates: velocity-major layout [vi][si].
         // Each velocity cell writes to its own n_sp-sized chunk, eliminating
         // the per-task `local` Vec allocation.
@@ -191,8 +199,10 @@ impl PhaseSpaceRepr for UniformGrid6D {
                 let vz = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
                 let disp = [vx * dt, vy * dt, vz * dt];
 
-                let mut line = vec![0.0f64; max_n];
-                let mut shifted = vec![0.0f64; max_n];
+                // Borrow pre-allocated scratch from thread-local slot (uncontended lock).
+                let tid = rayon::current_thread_index().unwrap_or(0) % n_threads;
+                let mut guard = scratch_pool[tid].lock().unwrap();
+                let (ref mut line, ref mut shifted) = *guard;
 
                 // Extract spatial slice for this velocity cell
                 let iv_offset = iv1 * (nv2 * nv3) + iv2 * nv3 + iv3;
@@ -213,7 +223,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
                             nx1,
                             lx[0],
                             periodic,
-                            &mut shifted,
+                            shifted,
                         );
                         for ix1 in 0..nx1 {
                             local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3] = shifted[ix1];
@@ -234,7 +244,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
                             nx2,
                             lx[1],
                             periodic,
-                            &mut shifted,
+                            shifted,
                         );
                         for ix2 in 0..nx2 {
                             local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3] = shifted[ix2];
@@ -255,7 +265,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
                             nx3,
                             lx[2],
                             periodic,
-                            &mut shifted,
+                            shifted,
                         );
                         for ix3 in 0..nx3 {
                             local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3] = shifted[ix3];
@@ -297,6 +307,12 @@ impl PhaseSpaceRepr for UniformGrid6D {
         let src = std::mem::take(&mut self.data);
         let n_sp = nx1 * nx2 * nx3;
 
+        // Pre-allocate thread-local scratch buffers for velocity shifts.
+        let n_threads = rayon::current_num_threads();
+        let scratch_pool_v: Vec<std::sync::Mutex<(Vec<f64>, Vec<f64>)>> = (0..n_threads)
+            .map(|_| std::sync::Mutex::new((vec![0.0f64; max_nv], vec![0.0f64; max_nv])))
+            .collect();
+
         // Result has same layout as self.data: [si * n_vel + vi].
         // Each spatial cell writes directly to its n_vel-sized chunk,
         // eliminating the per-task `local` allocation and the serial scatter.
@@ -313,8 +329,9 @@ impl PhaseSpaceRepr for UniformGrid6D {
                 let az = acceleration.gz[si];
                 let disp = [ax * dt, ay * dt, az * dt];
 
-                let mut line = vec![0.0f64; max_nv];
-                let mut shifted = vec![0.0f64; max_nv];
+                let tid = rayon::current_thread_index().unwrap_or(0) % n_threads;
+                let mut guard = scratch_pool_v[tid].lock().unwrap();
+                let (ref mut line, ref mut shifted) = *guard;
 
                 // Copy velocity slice (contiguous in memory)
                 let base = si * n_vel;
@@ -333,7 +350,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
                             nv1,
                             lv[0],
                             periodic_v,
-                            &mut shifted,
+                            shifted,
                         );
                         for iv1 in 0..nv1 {
                             local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3] = shifted[iv1];
@@ -354,7 +371,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
                             nv2,
                             lv[1],
                             periodic_v,
-                            &mut shifted,
+                            shifted,
                         );
                         for iv2 in 0..nv2 {
                             local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3] = shifted[iv2];
@@ -375,7 +392,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
                             nv3,
                             lv[2],
                             periodic_v,
-                            &mut shifted,
+                            shifted,
                         );
                         for iv3 in 0..nv3 {
                             local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3] = shifted[iv3];

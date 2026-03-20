@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Enumeration of all possible progress phases.
 ///
-/// Build phases (1–6) are set by phasma before caustic starts stepping.
+/// Build phases (1–8) are set by phasma before caustic starts stepping.
 /// Step phases (10+) are set by integrators and `Simulation::step()`.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +54,29 @@ pub enum StepPhase {
     UnsplitStage2 = 41,
     UnsplitStage3 = 42,
     UnsplitStage4 = 43,
+    // Adaptive error estimation
+    AdaptiveLie = 44,
+    AdaptiveLieKick = 45,
+    AdaptiveError = 46,
+    // BM4 (6-stage, 11 sub-steps)
+    Bm4Sub0 = 50,
+    Bm4Sub1 = 51,
+    Bm4Sub2 = 52,
+    Bm4Sub3 = 53,
+    Bm4Sub4 = 54,
+    Bm4Sub5 = 55,
+    Bm4Sub6 = 56,
+    Bm4Sub7 = 57,
+    Bm4Sub8 = 58,
+    Bm4Sub9 = 59,
+    // RKN6 (triple-jump composition)
+    Rkn6Phase1 = 60,
+    Rkn6Phase2 = 61,
+    Rkn6Phase3 = 62,
+    // BUG integrator
+    BugKStep = 80,
+    BugLStep = 81,
+    BugSStep = 82,
 }
 
 impl StepPhase {
@@ -93,6 +116,25 @@ impl StepPhase {
             41 => Self::UnsplitStage2,
             42 => Self::UnsplitStage3,
             43 => Self::UnsplitStage4,
+            44 => Self::AdaptiveLie,
+            45 => Self::AdaptiveLieKick,
+            46 => Self::AdaptiveError,
+            50 => Self::Bm4Sub0,
+            51 => Self::Bm4Sub1,
+            52 => Self::Bm4Sub2,
+            53 => Self::Bm4Sub3,
+            54 => Self::Bm4Sub4,
+            55 => Self::Bm4Sub5,
+            56 => Self::Bm4Sub6,
+            57 => Self::Bm4Sub7,
+            58 => Self::Bm4Sub8,
+            59 => Self::Bm4Sub9,
+            60 => Self::Rkn6Phase1,
+            61 => Self::Rkn6Phase2,
+            62 => Self::Rkn6Phase3,
+            80 => Self::BugKStep,
+            81 => Self::BugLStep,
+            82 => Self::BugSStep,
             _ => Self::Idle,
         }
     }
@@ -133,12 +175,41 @@ impl StepPhase {
             Self::UnsplitStage2 => "Stage 2",
             Self::UnsplitStage3 => "Stage 3",
             Self::UnsplitStage4 => "Stage 4",
+            Self::AdaptiveLie => "Lie estimate",
+            Self::AdaptiveLieKick => "Lie kick",
+            Self::AdaptiveError => "Error estimate",
+            Self::Bm4Sub0 => "BM4 drift 1",
+            Self::Bm4Sub1 => "BM4 kick 1",
+            Self::Bm4Sub2 => "BM4 drift 2",
+            Self::Bm4Sub3 => "BM4 kick 2",
+            Self::Bm4Sub4 => "BM4 drift 3",
+            Self::Bm4Sub5 => "BM4 kick 3",
+            Self::Bm4Sub6 => "BM4 drift 4",
+            Self::Bm4Sub7 => "BM4 kick 4",
+            Self::Bm4Sub8 => "BM4 drift 5",
+            Self::Bm4Sub9 => "BM4 kick 5",
+            Self::Rkn6Phase1 => "RKN6 phase 1",
+            Self::Rkn6Phase2 => "RKN6 phase 2",
+            Self::Rkn6Phase3 => "RKN6 phase 3",
+            Self::BugKStep => "BUG K-step",
+            Self::BugLStep => "BUG L-step",
+            Self::BugSStep => "BUG S-step",
         }
     }
 
-    /// Whether this is a build phase (< 10).
+    /// Whether this is a build phase (set by phasma before caustic starts stepping).
     pub fn is_build(self) -> bool {
-        (self as u8) >= 1 && (self as u8) <= 6
+        matches!(
+            self,
+            Self::BuildDomain
+                | Self::BuildIC
+                | Self::BuildICSampling
+                | Self::BuildICCompression
+                | Self::BuildPoisson
+                | Self::BuildIntegrator
+                | Self::BuildExitConditions
+                | Self::BuildAssembly
+        )
     }
 }
 

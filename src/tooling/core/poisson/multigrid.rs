@@ -99,32 +99,30 @@ fn smooth_red_black(
 
     let is_periodic = matches!(bc, SpatialBoundType::Periodic);
 
-    // Pre-compute flat indices for each parity
-    let mut red_indices = Vec::new();
-    let mut black_indices = Vec::new();
+    // Pre-compute (flat, ix, iy, iz) tuples for each parity to avoid
+    // repeated integer division (ix = flat / (ny*nz), ~13 cycles) inside
+    // the parallel closure.
+    let mut red_indices: Vec<(usize, usize, usize, usize)> = Vec::new();
+    let mut black_indices: Vec<(usize, usize, usize, usize)> = Vec::new();
     for flat in 0..n_total {
         let ix = flat / (ny * nz);
         let iy = (flat / nz) % ny;
         let iz = flat % nz;
         if (ix + iy + iz) % 2 == 0 {
-            red_indices.push(flat);
+            red_indices.push((flat, ix, iy, iz));
         } else {
-            black_indices.push(flat);
+            black_indices.push((flat, ix, iy, iz));
         }
     }
     let parity_sets = [&red_indices, &black_indices];
 
     for _sweep in 0..n_sweeps {
         for indices in &parity_sets {
-            // Collect-then-write: compute new values in parallel, then write back sequentially.
-            // This avoids unsafe while maintaining the red-black correctness guarantee.
+            // Compute new values in parallel, then write back sequentially.
+            // Red-black GS guarantees no write conflicts within a parity pass.
             let new_values: Vec<(usize, f64)> = indices
                 .par_iter()
-                .map(|&flat| {
-                    let ix = flat / (ny * nz);
-                    let iy = (flat / nz) % ny;
-                    let iz = flat % nz;
-
+                .map(|&(flat, ix, iy, iz)| {
                     let (phi_xm, phi_xp, phi_ym, phi_yp, phi_zm, phi_zp);
 
                     if is_periodic {
