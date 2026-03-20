@@ -12,6 +12,8 @@ caustic is a modular, general-purpose library for solving the Vlasov–Poisson e
 
 The library provides a pluggable architecture where the phase-space representation, Poisson solver, time integrator, and initial condition generator can be swapped independently.
 
+> **Note:** This library has not yet reached version 0.1.0. The API is unstable, features may be incomplete or change without notice, and it is not yet intended for general use. Even after 0.1.0, until version 1.0.0 it should not be relied upon for production workloads or serious research.
+
 ## Why not N-body?
 
 N-body simulations sample the distribution function with discrete particles. This introduces noise and artificial two-body relaxation that destroys exactly the structures a collisionless solver should preserve: caustic surfaces, thin phase-space streams, and the true velocity distribution at any point. caustic solves the governing equation directly — no particles, no sampling noise, no artificial collisionality.
