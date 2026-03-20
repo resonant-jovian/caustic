@@ -66,12 +66,12 @@ impl Default for BugConfig {
 
 /// Parent node index and whether the leaf is the left child.
 pub(crate) const LEAF_PARENT: [(usize, bool); 6] = [
-    (8, true),   // leaf 0 → node 8, left
-    (6, true),   // leaf 1 → node 6, left
-    (6, false),  // leaf 2 → node 6, right
-    (9, true),   // leaf 3 → node 9, left
-    (7, true),   // leaf 4 → node 7, left
-    (7, false),  // leaf 5 → node 7, right
+    (8, true),  // leaf 0 → node 8, left
+    (6, true),  // leaf 1 → node 6, left
+    (6, false), // leaf 2 → node 6, right
+    (9, true),  // leaf 3 → node 9, left
+    (7, true),  // leaf 4 → node 7, left
+    (7, false), // leaf 5 → node 7, right
 ];
 
 // ─── Shared BUG helpers (used by BugIntegrator, ParallelBugIntegrator, RkBugIntegrator) ──
@@ -123,7 +123,13 @@ pub(crate) fn k_step_leaf(
             col_buf[i] = frame[(i, j)];
         }
         sl_shift_1d_into(
-            &col_buf, displacement, cell_size, n, half_extent, periodic, &mut out_buf,
+            &col_buf,
+            displacement,
+            cell_size,
+            n,
+            half_extent,
+            periodic,
+            &mut out_buf,
         );
         for i in 0..n {
             shifted[(i, j)] = out_buf[i];
@@ -151,7 +157,13 @@ pub(crate) fn k_step_leaf(
                 col_buf[i] = frame[(i, j)];
             }
             sl_shift_1d_into(
-                &col_buf, disp, cell_size, n, half_extent, periodic, &mut out_buf,
+                &col_buf,
+                disp,
+                cell_size,
+                n,
+                half_extent,
+                periodic,
+                &mut out_buf,
             );
             for i in 0..n {
                 augmented[(i, k + s * k + j)] = out_buf[i];
@@ -169,13 +181,13 @@ pub(crate) fn k_step_leaf(
 
     // Truncated basis: Q_trunc = Q_aug @ U[:, :rank]
     let u_trunc = u.subcols(0, rank);
-    let q_trunc = &q_aug * &u_trunc;
+    let q_trunc = &q_aug * u_trunc;
 
     // Coefficient matrix: how the shifted primary columns decompose in the new basis
     // shifted = Q_aug @ R_aug[:, :k], and Q_trunc = Q_aug @ U[:,:rank]
     // So R_trunc = U[:,:rank]^T @ R_aug[:, :k]  (k_new × k_old)
     let r_aug_left = r_aug.subcols(0, k);
-    let r_trunc = u_trunc.transpose() * &r_aug_left;
+    let r_trunc = u_trunc.transpose() * r_aug_left;
 
     (q_trunc.to_owned(), r_trunc.to_owned())
 }
@@ -353,7 +365,12 @@ pub(crate) fn bug_drift_substep(ht: &mut HtTensor, dt: f64, config: &BugConfig) 
 }
 
 /// BUG kick substep: K-step for velocity leaves 3, 4, 5.
-pub(crate) fn bug_kick_substep(ht: &mut HtTensor, accel: &AccelerationField, dt: f64, config: &BugConfig) {
+pub(crate) fn bug_kick_substep(
+    ht: &mut HtTensor,
+    accel: &AccelerationField,
+    dt: f64,
+    config: &BugConfig,
+) {
     for d in 3..6 {
         let reps = representative_accelerations(ht, d - 3, accel);
         let primary = if reps.is_empty() {
@@ -374,9 +391,7 @@ pub(crate) fn conservative_correction(ht: &mut HtTensor, density_before: &Densit
     let density_after = ht.compute_density();
     let mass_before: f64 = density_before.data.iter().sum();
     let mass_after: f64 = density_after.data.iter().sum();
-    if mass_before.abs() < 1e-30
-        || (mass_after - mass_before).abs() < 1e-14 * mass_before.abs()
-    {
+    if mass_before.abs() < 1e-30 || (mass_after - mass_before).abs() < 1e-14 * mass_before.abs() {
         return;
     }
     let scale = mass_before / mass_after;
@@ -635,10 +650,7 @@ impl TimeIntegrator for BugIntegrator {
             p.start_step();
         }
 
-        let is_ht = repr
-            .as_any()
-            .downcast_ref::<HtTensor>()
-            .is_some();
+        let is_ht = repr.as_any().downcast_ref::<HtTensor>().is_some();
 
         if is_ht {
             if self.config.midpoint {

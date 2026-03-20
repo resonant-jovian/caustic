@@ -23,9 +23,9 @@ use super::super::{
 };
 
 use super::bug::{
-    self, BugConfig, LEAF_PARENT,
-    conservative_correction, k_step_leaf, representative_accelerations,
-    representative_velocities, sample_aug_displacements, update_transfer,
+    self, BugConfig, LEAF_PARENT, conservative_correction, k_step_leaf,
+    representative_accelerations, representative_velocities, sample_aug_displacements,
+    update_transfer,
 };
 
 /// Configuration for the Parallel BUG integrator.

@@ -130,5 +130,8 @@ fn casimir_higher_order() {
         .iter()
         .map(|d| (d.casimir_c2 - builtin_c2_0).abs() / builtin_c2_0.abs().max(1e-30))
         .fold(0.0_f64, f64::max);
-    println!("  Built-in C₂ drift from diagnostics: {:.2e}", builtin_c2_drift);
+    println!(
+        "  Built-in C₂ drift from diagnostics: {:.2e}",
+        builtin_c2_drift
+    );
 }

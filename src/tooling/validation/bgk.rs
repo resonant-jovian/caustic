@@ -87,8 +87,7 @@ mod tests {
                                 let ke = 0.5 * (v1 * v1 + v2 * v2 + v3 * v3);
                                 let energy = ke + phi_x;
                                 let f_val = (-energy / sigma2).exp();
-                                let idx =
-                                    si * n_vel + iv1 * nv_u * nv_u + iv2 * nv_u + iv3;
+                                let idx = si * n_vel + iv1 * nv_u * nv_u + iv2 * nv_u + iv3;
                                 data[idx] = f_val;
                             }
                         }
@@ -98,15 +97,14 @@ mod tests {
         }
 
         // Record initial density profile for shape comparison
-        let initial_grid =
-            UniformGrid6D::from_snapshot(
-                PhaseSpaceSnapshot {
-                    data: data.clone(),
-                    shape: [nx, nx, nx, nv_u, nv_u, nv_u],
-                    time: 0.0,
-                },
-                domain.clone(),
-            );
+        let initial_grid = UniformGrid6D::from_snapshot(
+            PhaseSpaceSnapshot {
+                data: data.clone(),
+                shape: [nx, nx, nx, nv_u, nv_u, nv_u],
+                time: 0.0,
+            },
+            domain.clone(),
+        );
         let initial_density = initial_grid.compute_density();
         let rho_init_l2: f64 = initial_density
             .data
@@ -221,13 +219,7 @@ mod tests {
 
         // Energy drift: Strang splitting conserves a shadow Hamiltonian,
         // so energy should not blow up. Allow generous bound for coarse grid.
-        assert!(
-            !e0.is_nan(),
-            "Initial energy must not be NaN"
-        );
-        assert!(
-            !max_e_drift.is_nan(),
-            "Energy drift must not be NaN"
-        );
+        assert!(!e0.is_nan(), "Initial energy must not be NaN");
+        assert!(!max_e_drift.is_nan(), "Energy drift must not be NaN");
     }
 }

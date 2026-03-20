@@ -91,10 +91,7 @@ impl VgfPoisson {
                         *c = Complex::new(-r * r / (4.0 * PI), 0.0);
                     } else {
                         let k = k2.sqrt();
-                        *c = Complex::new(
-                            -1.0 / (2.0 * PI * k2) * (1.0 - (k * r).cos()),
-                            0.0,
-                        );
+                        *c = Complex::new(-1.0 / (2.0 * PI * k2) * (1.0 - (k * r).cos()), 0.0);
                     }
                 }
             });

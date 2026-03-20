@@ -74,8 +74,7 @@ mod tests {
                 for iv3 in 0..nv3 {
                     let v3 = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
                     let v2_sq = v1 * v1 + v2 * v2 + v3 * v3;
-                    vel_norm +=
-                        (-v2_sq / (2.0 * v_th * v_th)).exp() * dv[0] * dv[1] * dv[2];
+                    vel_norm += (-v2_sq / (2.0 * v_th * v_th)).exp() * dv[0] * dv[1] * dv[2];
                 }
             }
         }
@@ -93,12 +92,8 @@ mod tests {
                             for iv3 in 0..nv3 {
                                 let v3 = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
                                 let v2_sq = v1 * v1 + v2 * v2 + v3 * v3;
-                                let f_maxwell =
-                                    c * (-v2_sq / (2.0 * v_th * v_th)).exp();
-                                let idx = grid.index(
-                                    [ix1, ix2, ix3],
-                                    [iv1, iv2, iv3],
-                                );
+                                let f_maxwell = c * (-v2_sq / (2.0 * v_th * v_th)).exp();
+                                let idx = grid.index([ix1, ix2, ix3], [iv1, iv2, iv3]);
                                 grid.data[idx] = f_maxwell * pert;
                             }
                         }

@@ -405,7 +405,10 @@ impl PoissonSolver for FftPoisson {
 ///
 /// **Deprecated:** Prefer [`VgfPoisson`](super::vgf::VgfPoisson) which provides
 /// spectral-accuracy isolated boundary conditions with lower memory overhead.
-#[deprecated(since = "0.0.12", note = "use VgfPoisson for isolated BC; FftIsolated will be removed in a future release")]
+#[deprecated(
+    since = "0.0.12",
+    note = "use VgfPoisson for isolated BC; FftIsolated will be removed in a future release"
+)]
 pub struct FftIsolated {
     pub shape: [usize; 3],
     pub dx: [f64; 3],

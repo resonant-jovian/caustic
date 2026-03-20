@@ -355,19 +355,29 @@ impl HtTensor {
 
     /// Get transfer tensor data and shape `[k_parent, k_left, k_right]` for an interior node.
     pub fn transfer_tensor(&self, node: usize) -> (&[f64], [usize; 3]) {
-        assert!(node >= NUM_LEAVES && node < NUM_NODES, "node {node} is not interior");
+        assert!(
+            (NUM_LEAVES..NUM_NODES).contains(&node),
+            "node {node} is not interior"
+        );
         match &self.nodes[node] {
-            HtNode::Interior { transfer, ranks, .. } => (transfer.as_slice(), *ranks),
+            HtNode::Interior {
+                transfer, ranks, ..
+            } => (transfer.as_slice(), *ranks),
             _ => unreachable!(),
         }
     }
 
     /// Replace the transfer tensor data and ranks for an interior node.
     pub fn set_transfer_tensor(&mut self, node: usize, data: Vec<f64>, ranks: [usize; 3]) {
-        assert!(node >= NUM_LEAVES && node < NUM_NODES, "node {node} is not interior");
+        assert!(
+            (NUM_LEAVES..NUM_NODES).contains(&node),
+            "node {node} is not interior"
+        );
         assert_eq!(data.len(), ranks[0] * ranks[1] * ranks[2]);
         match &mut self.nodes[node] {
-            HtNode::Interior { transfer, ranks: r, .. } => {
+            HtNode::Interior {
+                transfer, ranks: r, ..
+            } => {
                 *transfer = data;
                 *r = ranks;
             }

@@ -20,9 +20,7 @@ use super::super::{
     types::*,
 };
 
-use super::bug::{
-    BugConfig, bug_drift_substep, bug_kick_substep, conservative_correction,
-};
+use super::bug::{BugConfig, bug_drift_substep, bug_kick_substep, conservative_correction};
 
 /// Configuration for the RK-BUG integrator.
 pub struct RkBugConfig {
