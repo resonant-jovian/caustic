@@ -4,6 +4,16 @@
 //! smoothness indicators to achieve 5th-order accuracy for smooth solutions
 //! while preserving positivity. Reference: Minoshima et al. (2025).
 
+/// Advection scheme selector for `UniformGrid6D`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AdvectionScheme {
+    /// Catmull-Rom cubic semi-Lagrangian (4-point stencil, 3rd-order).
+    #[default]
+    CatmullRom,
+    /// Weighted Positive Flux Conservative (6-point stencil, 5th-order).
+    Wpfc,
+}
+
 /// WPFC 1D shift: shift `data` by `disp` on a grid with `cell_size` spacing.
 ///
 /// Uses a 6-point stencil (vs Catmull-Rom's 4-point), computes left/right interface

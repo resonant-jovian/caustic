@@ -53,9 +53,59 @@ impl Rkn6Splitting {
         }
     }
 
+    /// Single drift sub-step with progress reporting and timing.
+    #[inline]
+    fn rkn6_drift(
+        repr: &mut dyn PhaseSpaceRepr,
+        advector: &dyn Advector,
+        coeff: f64,
+        timings: &mut StepTimings,
+        progress: &Option<Arc<StepProgress>>,
+        phase: StepPhase,
+        sub: u8,
+    ) {
+        if let Some(p) = progress {
+            p.set_phase(phase);
+            p.set_sub_step(sub, 19);
+        }
+        let _s = tracing::info_span!("rkn6_drift").entered();
+        let t0 = Instant::now();
+        advector.drift(repr, coeff);
+        timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+    }
+
+    /// Single kick sub-step (density → potential → acceleration → kick) with timing.
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn rkn6_kick(
+        g: f64,
+        repr: &mut dyn PhaseSpaceRepr,
+        solver: &dyn PoissonSolver,
+        advector: &dyn Advector,
+        coeff: f64,
+        timings: &mut StepTimings,
+        progress: &Option<Arc<StepProgress>>,
+        sub: u8,
+    ) {
+        if let Some(p) = progress {
+            p.set_phase(StepPhase::Kick);
+            p.set_sub_step(sub, 19);
+        }
+        let _s = tracing::info_span!("rkn6_kick").entered();
+        let t0 = Instant::now();
+        let density = repr.compute_density();
+        let potential = solver.solve(&density, g);
+        let accel = solver.compute_acceleration(&potential);
+        timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        let t0 = Instant::now();
+        advector.kick(repr, &accel, coeff);
+        timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+    }
+
     /// Execute one Yoshida 4th-order step with the given (scaled) time step.
     ///
     /// Pattern: D(w₁/2) K(w₁) D((w₁+w₀)/2) K(w₀) D((w₀+w₁)/2) K(w₁) D(w₁/2)
+    #[allow(clippy::too_many_arguments)]
     fn yoshida_step(
         &self,
         repr: &mut dyn PhaseSpaceRepr,
@@ -178,48 +228,65 @@ impl TimeIntegrator for Rkn6Splitting {
     ) {
         let _span = tracing::info_span!("rkn6_advance").entered();
         let mut timings = StepTimings::default();
-        // 3 Yoshida steps × 7 sub-steps = 21 total sub-steps
-        let n_sub: u8 = 21;
+        let g = self.g;
+        let progress = self.progress.clone();
 
-        if let Some(ref p) = self.progress {
+        if let Some(ref p) = progress {
             p.start_step();
         }
 
-        // Triple-jump: S4(s1·dt) ∘ S4(s2·dt) ∘ S4(s1·dt)
-        self.yoshida_step(
-            repr,
-            solver,
-            advector,
-            S1 * dt,
-            &mut timings,
-            &self.progress.clone(),
-            0,
-            n_sub,
-        );
+        // Inlined 19-sub-step sequence: three Yoshida S₄ steps composed via
+        // Suzuki triple-jump, with adjacent boundary drifts merged at the two
+        // composition seams (saves 2 drift operations vs the naive 21-step form).
+        //
+        // S₆(Δt) = S₄(s₁·Δt) ∘ S₄(s₂·Δt) ∘ S₄(s₁·Δt)
 
-        self.yoshida_step(
-            repr,
-            solver,
-            advector,
-            S2 * dt,
-            &mut timings,
-            &self.progress.clone(),
-            7,
-            n_sub,
-        );
+        let s1dt = S1 * dt;
+        let s2dt = S2 * dt;
 
-        self.yoshida_step(
-            repr,
-            solver,
-            advector,
-            S1 * dt,
-            &mut timings,
-            &self.progress.clone(),
-            14,
-            n_sub,
-        );
+        // Drift coefficients
+        let d_half_w1_s1 = YOSHIDA_W1 * s1dt / 2.0;
+        let d_half_w01_s1 = (YOSHIDA_W1 + YOSHIDA_W0) * s1dt / 2.0;
+        let d_half_w01_s2 = (YOSHIDA_W1 + YOSHIDA_W0) * s2dt / 2.0;
+        // Merged boundary drift at composition seams: w₁·(s₁+s₂)·dt/2
+        let d_seam = YOSHIDA_W1 * (S1 + S2) * dt / 2.0;
 
-        if let Some(ref p) = self.progress {
+        // Kick coefficients
+        let k_w1_s1 = YOSHIDA_W1 * s1dt;
+        let k_w0_s1 = YOSHIDA_W0 * s1dt;
+        let k_w1_s2 = YOSHIDA_W1 * s2dt;
+        let k_w0_s2 = YOSHIDA_W0 * s2dt;
+
+        // ── S₄(s₁·Δt) ─────────────────────────────────────────────────────
+        Self::rkn6_drift(repr, advector, d_half_w1_s1, &mut timings, &progress, StepPhase::DriftHalf1, 0);
+        Self::rkn6_kick(g, repr, solver, advector, k_w1_s1, &mut timings, &progress, 1);
+        Self::rkn6_drift(repr, advector, d_half_w01_s1, &mut timings, &progress, StepPhase::DriftHalf2, 2);
+        Self::rkn6_kick(g, repr, solver, advector, k_w0_s1, &mut timings, &progress, 3);
+        Self::rkn6_drift(repr, advector, d_half_w01_s1, &mut timings, &progress, StepPhase::DriftHalf1, 4);
+        Self::rkn6_kick(g, repr, solver, advector, k_w1_s1, &mut timings, &progress, 5);
+
+        // Merged: last drift of S₄(s₁) + first drift of S₄(s₂)
+        Self::rkn6_drift(repr, advector, d_seam, &mut timings, &progress, StepPhase::DriftHalf2, 6);
+
+        // ── S₄(s₂·Δt) interior ─────────────────────────────────────────────
+        Self::rkn6_kick(g, repr, solver, advector, k_w1_s2, &mut timings, &progress, 7);
+        Self::rkn6_drift(repr, advector, d_half_w01_s2, &mut timings, &progress, StepPhase::DriftHalf1, 8);
+        Self::rkn6_kick(g, repr, solver, advector, k_w0_s2, &mut timings, &progress, 9);
+        Self::rkn6_drift(repr, advector, d_half_w01_s2, &mut timings, &progress, StepPhase::DriftHalf2, 10);
+        Self::rkn6_kick(g, repr, solver, advector, k_w1_s2, &mut timings, &progress, 11);
+
+        // Merged: last drift of S₄(s₂) + first drift of S₄(s₁)
+        Self::rkn6_drift(repr, advector, d_seam, &mut timings, &progress, StepPhase::DriftHalf1, 12);
+
+        // ── S₄(s₁·Δt) ─────────────────────────────────────────────────────
+        Self::rkn6_kick(g, repr, solver, advector, k_w1_s1, &mut timings, &progress, 13);
+        Self::rkn6_drift(repr, advector, d_half_w01_s1, &mut timings, &progress, StepPhase::DriftHalf2, 14);
+        Self::rkn6_kick(g, repr, solver, advector, k_w0_s1, &mut timings, &progress, 15);
+        Self::rkn6_drift(repr, advector, d_half_w01_s1, &mut timings, &progress, StepPhase::DriftHalf1, 16);
+        Self::rkn6_kick(g, repr, solver, advector, k_w1_s1, &mut timings, &progress, 17);
+        Self::rkn6_drift(repr, advector, d_half_w1_s1, &mut timings, &progress, StepPhase::DriftHalf2, 18);
+
+        if let Some(ref p) = progress {
             p.set_phase(StepPhase::StepComplete);
         }
 

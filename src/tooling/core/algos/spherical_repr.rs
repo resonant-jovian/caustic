@@ -92,7 +92,7 @@ impl PhaseSpaceRepr for SphericalRepr {
         let [nr, nv, nl] = self.shape;
         // Map to a 3D density field with shape [nr, 1, 1] for compatibility
         let mut rho = vec![0.0f64; nr];
-        for ir in 0..nr {
+        for (ir, rho_val) in rho.iter_mut().enumerate() {
             let r = self.r_at(ir);
             let r2 = r * r;
             let mut sum = 0.0;
@@ -101,7 +101,7 @@ impl PhaseSpaceRepr for SphericalRepr {
                     sum += self.data[self.index(ir, iv, il)];
                 }
             }
-            rho[ir] = sum * self.dv * self.dl * 4.0 * std::f64::consts::PI * r2;
+            *rho_val = sum * self.dv * self.dl * 4.0 * std::f64::consts::PI * r2;
         }
 
         DensityField {
@@ -125,17 +125,17 @@ impl PhaseSpaceRepr for SphericalRepr {
 
                 let mut shifted = vec![0.0f64; nr];
                 // Simple linear interpolation for radial shift
-                for ir in 0..nr {
+                for (ir, shifted_val) in shifted.iter_mut().enumerate() {
                     let dep = ir as f64 - shift;
                     let i0 = dep.floor() as isize;
                     let t = dep - dep.floor();
                     let clamp = |j: isize| j.clamp(0, nr as isize - 1) as usize;
-                    shifted[ir] = (1.0 - t) * line[clamp(i0)] + t * line[clamp(i0 + 1)];
+                    *shifted_val = (1.0 - t) * line[clamp(i0)] + t * line[clamp(i0 + 1)];
                 }
 
-                for ir in 0..nr {
+                for (ir, &shifted_val) in shifted.iter().enumerate() {
                     let idx = ir * nv * nl + iv * nl + il;
-                    self.data[idx] = shifted[ir];
+                    self.data[idx] = shifted_val;
                 }
             }
         }

@@ -84,6 +84,7 @@ pub use tooling::core::algos::spherical_repr::SphericalRepr;
 pub use tooling::core::algos::tensor::TensorTrain;
 pub use tooling::core::algos::uniform::UniformGrid6D;
 pub use tooling::core::algos::wpfc;
+pub use tooling::core::algos::wpfc::AdvectionScheme;
 
 // Conservation framework (Phase 4: LoMaC)
 pub use tooling::core::conservation::conservative_svd;

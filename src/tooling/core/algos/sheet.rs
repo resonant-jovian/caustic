@@ -179,9 +179,10 @@ impl SheetTracker {
 
         for (pi, p) in self.particles.iter().enumerate() {
             if let Some(ref prog) = self.progress
-                && (pi as u64).is_multiple_of(report_interval) {
-                    prog.set_intra_progress(pi as u64, n_particles);
-                }
+                && (pi as u64).is_multiple_of(report_interval)
+            {
+                prog.set_intra_progress(pi as u64, n_particles);
+            }
             let mut skip = false;
             let mut ci = [0usize; 3];
             for k in 0..3 {
@@ -235,9 +236,10 @@ impl SheetTracker {
 
         for (pi, p) in self.particles.iter().enumerate() {
             if let Some(ref prog) = self.progress
-                && (pi as u64).is_multiple_of(report_interval) {
-                    prog.set_intra_progress(pi as u64, n_particles);
-                }
+                && (pi as u64).is_multiple_of(report_interval)
+            {
+                prog.set_intra_progress(pi as u64, n_particles);
+            }
             // Find the cell index and fractional position for CIC.
             // The grid node at index i is at x = -L + (i + 0.5) * dx.
             // For CIC, we find the nearest lower grid node:
@@ -649,9 +651,10 @@ impl PhaseSpaceRepr for SheetTracker {
 
         for (pi, p) in self.particles.iter().enumerate() {
             if let Some(ref prog) = self.progress
-                && (pi as u64).is_multiple_of(report_interval) {
-                    prog.set_intra_progress(pi as u64, n_particles);
-                }
+                && (pi as u64).is_multiple_of(report_interval)
+            {
+                prog.set_intra_progress(pi as u64, n_particles);
+            }
 
             // Spatial CIC indices
             let mut x_ci = [0isize; 3];

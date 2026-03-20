@@ -1523,9 +1523,10 @@ impl HtTensor {
                                 let idx = flat_index(&self.shape, [i0, i1, i2, i3, i4, i5]);
                                 data[idx] = self.evaluate([i0, i1, i2, i3, i4, i5]);
                                 if let Some(ref p) = self.progress
-                                    && count.is_multiple_of(report_interval) {
-                                        p.set_intra_progress(count, total_u64);
-                                    }
+                                    && count.is_multiple_of(report_interval)
+                                {
+                                    p.set_intra_progress(count, total_u64);
+                                }
                                 count += 1;
                             }
                         }
@@ -2153,9 +2154,10 @@ impl PhaseSpaceRepr for HtTensor {
                 sum += -f * f.ln();
             }
             if let Some(ref p) = self.progress
-                && (idx as u64).is_multiple_of(report_interval) {
-                    p.set_intra_progress(idx as u64, total);
-                }
+                && (idx as u64).is_multiple_of(report_interval)
+            {
+                p.set_intra_progress(idx as u64, total);
+            }
         }
         sum * vol
     }
@@ -2265,9 +2267,10 @@ impl PhaseSpaceRepr for HtTensor {
             let vz = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
             t += f * (vx * vx + vy * vy + vz * vz);
             if let Some(ref p) = self.progress
-                && (idx as u64).is_multiple_of(report_interval) {
-                    p.set_intra_progress(idx as u64, total);
-                }
+                && (idx as u64).is_multiple_of(report_interval)
+            {
+                p.set_intra_progress(idx as u64, total);
+            }
         }
         0.5 * t * vol
     }

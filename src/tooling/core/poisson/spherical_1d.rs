@@ -37,9 +37,9 @@ impl PoissonSolver for Spherical1DPoisson {
 
         let dr2 = self.dr * self.dr;
         let mut rhs = vec![0.0f64; nr];
-        for i in 0..nr {
+        for (i, rhs_val) in rhs.iter_mut().enumerate() {
             let r = self.r_at(i);
-            rhs[i] = four_pi_g * r * density.data[i] * dr2;
+            *rhs_val = four_pi_g * r * density.data[i] * dr2;
         }
 
         // Tridiagonal solve: a[i]*u[i-1] + b[i]*u[i] + c[i]*u[i+1] = rhs[i]
@@ -86,8 +86,8 @@ impl PoissonSolver for Spherical1DPoisson {
         let nr = potential.data.len();
         let mut gr = vec![0.0f64; nr];
 
-        for i in 1..nr - 1 {
-            gr[i] = -(potential.data[i + 1] - potential.data[i - 1]) / (2.0 * self.dr);
+        for (gr_val, window) in gr[1..nr - 1].iter_mut().zip(potential.data.windows(3)) {
+            *gr_val = -(window[2] - window[0]) / (2.0 * self.dr);
         }
         if nr > 1 {
             gr[0] = -(potential.data[1] - potential.data[0]) / self.dr;

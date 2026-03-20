@@ -7,10 +7,35 @@ use super::super::{
     types::*,
 };
 use super::lagrangian::{sl_shift_1d, sl_shift_1d_into};
+use super::wpfc::{AdvectionScheme, wpfc_shift_1d_into, zhang_shu_limiter};
 use rayon::prelude::*;
 use std::any::Any;
+use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+thread_local! {
+    static SHIFT_SCRATCH: RefCell<(Vec<f64>, Vec<f64>)> = const { RefCell::new((Vec::new(), Vec::new())) };
+}
+
+/// Dispatch 1D shift to the selected advection scheme.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn shift_1d_dispatch(
+    scheme: AdvectionScheme,
+    data: &[f64],
+    disp: f64,
+    cell_size: f64,
+    n: usize,
+    l: f64,
+    periodic: bool,
+    out: &mut [f64],
+) {
+    match scheme {
+        AdvectionScheme::CatmullRom => sl_shift_1d_into(data, disp, cell_size, n, l, periodic, out),
+        AdvectionScheme::Wpfc => wpfc_shift_1d_into(data, disp, cell_size, n, l, periodic, out),
+    }
+}
 
 /// Stores f on a uniform (Nx1×Nx2×Nx3×Nv1×Nv2×Nv3) grid as a flat `Vec<f64>`.
 /// Index order: x1 fastest-changing outer, v3 fastest-changing inner (row-major).
@@ -23,6 +48,11 @@ pub struct UniformGrid6D {
     cached_lv: [f64; 3],
     cached_dx: [f64; 3],
     cached_dv: [f64; 3],
+    /// Persistent scratch buffer (same size as `data`), reused across steps to
+    /// eliminate per-step heap allocations in advect_x / advect_v.
+    scratch: Vec<f64>,
+    advection_scheme: AdvectionScheme,
+    positivity_limiter: bool,
     progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
@@ -66,6 +96,9 @@ impl UniformGrid6D {
             cached_lv: c.lv,
             cached_dx: c.dx,
             cached_dv: c.dv,
+            scratch: vec![0.0; n],
+            advection_scheme: AdvectionScheme::default(),
+            positivity_limiter: false,
             progress: None,
         }
     }
@@ -78,6 +111,7 @@ impl UniformGrid6D {
             snap.data.len(),
             domain.total_cells()
         );
+        let n = snap.data.len();
         let c = CachedGrid::from_domain(&domain);
         Self {
             data: snap.data,
@@ -87,8 +121,23 @@ impl UniformGrid6D {
             cached_lv: c.lv,
             cached_dx: c.dx,
             cached_dv: c.dv,
+            scratch: vec![0.0; n],
+            advection_scheme: AdvectionScheme::default(),
+            positivity_limiter: false,
             progress: None,
         }
+    }
+
+    /// Select the 1D interpolation scheme used in advect_x / advect_v.
+    pub fn with_advection_scheme(mut self, scheme: AdvectionScheme) -> Self {
+        self.advection_scheme = scheme;
+        self
+    }
+
+    /// Enable the Zhang-Shu positivity-preserving limiter after each advection step.
+    pub fn with_positivity_limiter(mut self, enabled: bool) -> Self {
+        self.positivity_limiter = enabled;
+        self
     }
 
     /// Linear index into flat Vec from (ix1, ix2, ix3, iv1, iv2, iv3) — row-major 6D.
@@ -165,25 +214,20 @@ impl PhaseSpaceRepr for UniformGrid6D {
         let lx = self.cached_lx;
         let lv = self.cached_lv;
         let periodic = matches!(self.domain.spatial_bc, SpatialBoundType::Periodic);
+        let scheme = self.advection_scheme;
+        let positivity = self.positivity_limiter;
 
         let n_vel = nv1 * nv2 * nv3;
-        let src = std::mem::take(&mut self.data);
-        let n_total = src.len();
         let n_sp = nx1 * nx2 * nx3;
         let max_n = nx1.max(nx2).max(nx3);
 
-        // Pre-allocate thread-local scratch buffers (one pair per rayon thread)
-        // to eliminate per-chunk Vec allocations in the hot loop.
-        // Each thread only locks its own slot, so contention is zero.
-        let n_threads = rayon::current_num_threads();
-        let scratch_pool: Vec<std::sync::Mutex<(Vec<f64>, Vec<f64>)>> = (0..n_threads)
-            .map(|_| std::sync::Mutex::new((vec![0.0f64; max_n], vec![0.0f64; max_n])))
-            .collect();
+        // Reuse persistent buffers: swap data ↔ scratch to eliminate per-step
+        // heap allocations. After the swap, scratch holds source data and data
+        // holds a pre-allocated workspace for intermediates.
+        std::mem::swap(&mut self.data, &mut self.scratch);
+        let src = std::mem::take(&mut self.scratch);
+        let mut intermediates = std::mem::take(&mut self.data);
 
-        // Pre-allocate intermediates: velocity-major layout [vi][si].
-        // Each velocity cell writes to its own n_sp-sized chunk, eliminating
-        // the per-task `local` Vec allocation.
-        let mut intermediates = vec![0.0f64; n_total];
         let counter = AtomicU64::new(0);
         let report_interval = (n_vel / 100).max(1) as u64;
 
@@ -199,78 +243,90 @@ impl PhaseSpaceRepr for UniformGrid6D {
                 let vz = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
                 let disp = [vx * dt, vy * dt, vz * dt];
 
-                // Borrow pre-allocated scratch from thread-local slot (uncontended lock).
-                let tid = rayon::current_thread_index().unwrap_or(0) % n_threads;
-                let mut guard = scratch_pool[tid].lock().unwrap();
-                let (ref mut line, ref mut shifted) = *guard;
-
                 // Extract spatial slice for this velocity cell
                 let iv_offset = iv1 * (nv2 * nv3) + iv2 * nv3 + iv3;
                 for si in 0..n_sp {
                     local[si] = src[si * n_vel + iv_offset];
                 }
 
-                // Shift along x1
-                for ix2 in 0..nx2 {
-                    for ix3 in 0..nx3 {
-                        for ix1 in 0..nx1 {
-                            line[ix1] = local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3];
-                        }
-                        sl_shift_1d_into(
-                            &line[..nx1],
-                            disp[0],
-                            dx[0],
-                            nx1,
-                            lx[0],
-                            periodic,
-                            shifted,
-                        );
-                        for ix1 in 0..nx1 {
-                            local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3] = shifted[ix1];
-                        }
+                // Thread-local scratch for 1D shifts (zero contention, no atomics).
+                SHIFT_SCRATCH.with(|cell| {
+                    let mut guard = cell.borrow_mut();
+                    let (ref mut line, ref mut shifted) = *guard;
+                    if line.len() < max_n {
+                        line.resize(max_n, 0.0);
+                        shifted.resize(max_n, 0.0);
                     }
-                }
 
-                // Shift along x2
-                for ix1 in 0..nx1 {
-                    for ix3 in 0..nx3 {
-                        for ix2 in 0..nx2 {
-                            line[ix2] = local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3];
-                        }
-                        sl_shift_1d_into(
-                            &line[..nx2],
-                            disp[1],
-                            dx[1],
-                            nx2,
-                            lx[1],
-                            periodic,
-                            shifted,
-                        );
-                        for ix2 in 0..nx2 {
-                            local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3] = shifted[ix2];
-                        }
-                    }
-                }
-
-                // Shift along x3
-                for ix1 in 0..nx1 {
+                    // Shift along x1
                     for ix2 in 0..nx2 {
                         for ix3 in 0..nx3 {
-                            line[ix3] = local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3];
-                        }
-                        sl_shift_1d_into(
-                            &line[..nx3],
-                            disp[2],
-                            dx[2],
-                            nx3,
-                            lx[2],
-                            periodic,
-                            shifted,
-                        );
-                        for ix3 in 0..nx3 {
-                            local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3] = shifted[ix3];
+                            for ix1 in 0..nx1 {
+                                line[ix1] = local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3];
+                            }
+                            shift_1d_dispatch(
+                                scheme,
+                                &line[..nx1],
+                                disp[0],
+                                dx[0],
+                                nx1,
+                                lx[0],
+                                periodic,
+                                shifted,
+                            );
+                            for ix1 in 0..nx1 {
+                                local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3] = shifted[ix1];
+                            }
                         }
                     }
+
+                    // Shift along x2
+                    for ix1 in 0..nx1 {
+                        for ix3 in 0..nx3 {
+                            for ix2 in 0..nx2 {
+                                line[ix2] = local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3];
+                            }
+                            shift_1d_dispatch(
+                                scheme,
+                                &line[..nx2],
+                                disp[1],
+                                dx[1],
+                                nx2,
+                                lx[1],
+                                periodic,
+                                shifted,
+                            );
+                            for ix2 in 0..nx2 {
+                                local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3] = shifted[ix2];
+                            }
+                        }
+                    }
+
+                    // Shift along x3
+                    for ix1 in 0..nx1 {
+                        for ix2 in 0..nx2 {
+                            for ix3 in 0..nx3 {
+                                line[ix3] = local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3];
+                            }
+                            shift_1d_dispatch(
+                                scheme,
+                                &line[..nx3],
+                                disp[2],
+                                dx[2],
+                                nx3,
+                                lx[2],
+                                periodic,
+                                shifted,
+                            );
+                            for ix3 in 0..nx3 {
+                                local[ix1 * nx2 * nx3 + ix2 * nx3 + ix3] = shifted[ix3];
+                            }
+                        }
+                    }
+                });
+
+                if positivity {
+                    zhang_shu_limiter(local, 0.0);
                 }
 
                 if let Some(ref p) = progress {
@@ -282,7 +338,8 @@ impl PhaseSpaceRepr for UniformGrid6D {
             });
 
         // Parallel transpose: intermediates[vi * n_sp + si] → new_data[si * n_vel + vi]
-        let mut new_data = vec![0.0f64; n_total];
+        // Reuse the src allocation (reading is done) as the output buffer.
+        let mut new_data = src;
         new_data
             .par_chunks_mut(n_vel)
             .enumerate()
@@ -292,6 +349,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
                 }
             });
         self.data = new_data;
+        self.scratch = intermediates;
     }
 
     fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
@@ -301,22 +359,18 @@ impl PhaseSpaceRepr for UniformGrid6D {
         let dv = self.cached_dv;
         let lv = self.cached_lv;
         let periodic_v = matches!(self.domain.velocity_bc, VelocityBoundType::Truncated);
+        let scheme = self.advection_scheme;
+        let positivity = self.positivity_limiter;
 
         let n_vel = nv1 * nv2 * nv3;
         let max_nv = nv1.max(nv2).max(nv3);
-        let src = std::mem::take(&mut self.data);
         let n_sp = nx1 * nx2 * nx3;
 
-        // Pre-allocate thread-local scratch buffers for velocity shifts.
-        let n_threads = rayon::current_num_threads();
-        let scratch_pool_v: Vec<std::sync::Mutex<(Vec<f64>, Vec<f64>)>> = (0..n_threads)
-            .map(|_| std::sync::Mutex::new((vec![0.0f64; max_nv], vec![0.0f64; max_nv])))
-            .collect();
+        // Reuse persistent buffers: swap data ↔ scratch to eliminate allocations.
+        std::mem::swap(&mut self.data, &mut self.scratch);
+        let src = std::mem::take(&mut self.scratch);
+        let mut result = std::mem::take(&mut self.data);
 
-        // Result has same layout as self.data: [si * n_vel + vi].
-        // Each spatial cell writes directly to its n_vel-sized chunk,
-        // eliminating the per-task `local` allocation and the serial scatter.
-        let mut result = vec![0.0f64; src.len()];
         let counter = AtomicU64::new(0);
         let report_interval = (n_sp / 100).max(1) as u64;
 
@@ -329,75 +383,88 @@ impl PhaseSpaceRepr for UniformGrid6D {
                 let az = acceleration.gz[si];
                 let disp = [ax * dt, ay * dt, az * dt];
 
-                let tid = rayon::current_thread_index().unwrap_or(0) % n_threads;
-                let mut guard = scratch_pool_v[tid].lock().unwrap();
-                let (ref mut line, ref mut shifted) = *guard;
-
                 // Copy velocity slice (contiguous in memory)
                 let base = si * n_vel;
                 local.copy_from_slice(&src[base..base + n_vel]);
 
-                // Shift along v1
-                for iv2 in 0..nv2 {
-                    for iv3 in 0..nv3 {
-                        for iv1 in 0..nv1 {
-                            line[iv1] = local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3];
-                        }
-                        sl_shift_1d_into(
-                            &line[..nv1],
-                            disp[0],
-                            dv[0],
-                            nv1,
-                            lv[0],
-                            periodic_v,
-                            shifted,
-                        );
-                        for iv1 in 0..nv1 {
-                            local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3] = shifted[iv1];
-                        }
+                // Thread-local scratch for 1D shifts (zero contention, no atomics).
+                SHIFT_SCRATCH.with(|cell| {
+                    let mut guard = cell.borrow_mut();
+                    let (ref mut line, ref mut shifted) = *guard;
+                    if line.len() < max_nv {
+                        line.resize(max_nv, 0.0);
+                        shifted.resize(max_nv, 0.0);
                     }
-                }
 
-                // Shift along v2
-                for iv1 in 0..nv1 {
-                    for iv3 in 0..nv3 {
-                        for iv2 in 0..nv2 {
-                            line[iv2] = local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3];
-                        }
-                        sl_shift_1d_into(
-                            &line[..nv2],
-                            disp[1],
-                            dv[1],
-                            nv2,
-                            lv[1],
-                            periodic_v,
-                            shifted,
-                        );
-                        for iv2 in 0..nv2 {
-                            local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3] = shifted[iv2];
-                        }
-                    }
-                }
-
-                // Shift along v3
-                for iv1 in 0..nv1 {
+                    // Shift along v1
                     for iv2 in 0..nv2 {
                         for iv3 in 0..nv3 {
-                            line[iv3] = local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3];
-                        }
-                        sl_shift_1d_into(
-                            &line[..nv3],
-                            disp[2],
-                            dv[2],
-                            nv3,
-                            lv[2],
-                            periodic_v,
-                            shifted,
-                        );
-                        for iv3 in 0..nv3 {
-                            local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3] = shifted[iv3];
+                            for iv1 in 0..nv1 {
+                                line[iv1] = local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3];
+                            }
+                            shift_1d_dispatch(
+                                scheme,
+                                &line[..nv1],
+                                disp[0],
+                                dv[0],
+                                nv1,
+                                lv[0],
+                                periodic_v,
+                                shifted,
+                            );
+                            for iv1 in 0..nv1 {
+                                local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3] = shifted[iv1];
+                            }
                         }
                     }
+
+                    // Shift along v2
+                    for iv1 in 0..nv1 {
+                        for iv3 in 0..nv3 {
+                            for iv2 in 0..nv2 {
+                                line[iv2] = local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3];
+                            }
+                            shift_1d_dispatch(
+                                scheme,
+                                &line[..nv2],
+                                disp[1],
+                                dv[1],
+                                nv2,
+                                lv[1],
+                                periodic_v,
+                                shifted,
+                            );
+                            for iv2 in 0..nv2 {
+                                local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3] = shifted[iv2];
+                            }
+                        }
+                    }
+
+                    // Shift along v3
+                    for iv1 in 0..nv1 {
+                        for iv2 in 0..nv2 {
+                            for iv3 in 0..nv3 {
+                                line[iv3] = local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3];
+                            }
+                            shift_1d_dispatch(
+                                scheme,
+                                &line[..nv3],
+                                disp[2],
+                                dv[2],
+                                nv3,
+                                lv[2],
+                                periodic_v,
+                                shifted,
+                            );
+                            for iv3 in 0..nv3 {
+                                local[iv1 * nv2 * nv3 + iv2 * nv3 + iv3] = shifted[iv3];
+                            }
+                        }
+                    }
+                });
+
+                if positivity {
+                    zhang_shu_limiter(local, 0.0);
                 }
 
                 if let Some(ref p) = progress {
@@ -409,6 +476,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
             });
 
         self.data = result;
+        self.scratch = src;
     }
 
     fn moment(&self, position: &[f64; 3], order: usize) -> Tensor {

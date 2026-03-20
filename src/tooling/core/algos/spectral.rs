@@ -915,11 +915,10 @@ impl PhaseSpaceRepr for SpectralV {
         let mut entropy = 0.0;
         let n_spatial = self.n_spatial();
         let entropy_report = (n_spatial as u64 / 100).max(1);
-        let mut entropy_counter: u64 = 0;
         if let Some(ref p) = self.progress {
             p.set_intra_progress(0, n_spatial as u64);
         }
-        for si in 0..n_spatial {
+        for (entropy_counter, si) in (0_u64..).zip(0..n_spatial) {
             for iv1 in 0..nv {
                 for iv2 in 0..nv {
                     for iv3 in 0..nv {
@@ -936,10 +935,10 @@ impl PhaseSpaceRepr for SpectralV {
                 }
             }
             if let Some(ref p) = self.progress
-                && entropy_counter.is_multiple_of(entropy_report) {
-                    p.set_intra_progress(entropy_counter, n_spatial as u64);
-                }
-            entropy_counter += 1;
+                && entropy_counter.is_multiple_of(entropy_report)
+            {
+                p.set_intra_progress(entropy_counter, n_spatial as u64);
+            }
         }
         entropy * dx3 * dv3
     }
@@ -959,13 +958,13 @@ impl PhaseSpaceRepr for SpectralV {
 
         let mut counts = vec![0u32; n_spatial];
         let sc_report = (n_spatial as u64 / 100).max(1);
-        let mut sc_counter: u64 = 0;
-
         if let Some(ref p) = self.progress {
             p.set_intra_progress(0, n_spatial as u64);
         }
 
-        for (si, count) in counts.iter_mut().enumerate().take(n_spatial) {
+        for (sc_counter, (si, count)) in
+            (0_u64..).zip(counts.iter_mut().enumerate().take(n_spatial))
+        {
             // Build marginal f(v_x) = integral f(v_x, v_y, v_z) dv_y dv_z
             let marginal: Vec<f64> = (0..nv_sample)
                 .map(|iv1| {
@@ -995,10 +994,10 @@ impl PhaseSpaceRepr for SpectralV {
             *count = peaks;
 
             if let Some(ref p) = self.progress
-                && sc_counter.is_multiple_of(sc_report) {
-                    p.set_intra_progress(sc_counter, n_spatial as u64);
-                }
-            sc_counter += 1;
+                && sc_counter.is_multiple_of(sc_report)
+            {
+                p.set_intra_progress(sc_counter, n_spatial as u64);
+            }
         }
 
         StreamCountField {
@@ -1059,11 +1058,10 @@ impl PhaseSpaceRepr for SpectralV {
         let mut ke = 0.0;
         let n_spatial = self.n_spatial();
         let ke_report = (n_spatial as u64 / 100).max(1);
-        let mut ke_counter: u64 = 0;
         if let Some(ref p) = self.progress {
             p.set_intra_progress(0, n_spatial as u64);
         }
-        for si in 0..n_spatial {
+        for (ke_counter, si) in (0_u64..).zip(0..n_spatial) {
             for iv1 in 0..nv {
                 for iv2 in 0..nv {
                     for iv3 in 0..nv {
@@ -1079,10 +1077,10 @@ impl PhaseSpaceRepr for SpectralV {
                 }
             }
             if let Some(ref p) = self.progress
-                && ke_counter.is_multiple_of(ke_report) {
-                    p.set_intra_progress(ke_counter, n_spatial as u64);
-                }
-            ke_counter += 1;
+                && ke_counter.is_multiple_of(ke_report)
+            {
+                p.set_intra_progress(ke_counter, n_spatial as u64);
+            }
         }
         0.5 * ke * dx3 * dv3
     }
@@ -1101,11 +1099,10 @@ impl PhaseSpaceRepr for SpectralV {
         let mut data = vec![0.0; n_total];
         let snap_n_spatial = self.n_spatial();
         let snap_report = (snap_n_spatial as u64 / 100).max(1);
-        let mut snap_counter: u64 = 0;
         if let Some(ref p) = self.progress {
             p.set_intra_progress(0, snap_n_spatial as u64);
         }
-        for si in 0..snap_n_spatial {
+        for (snap_counter, si) in (0_u64..).zip(0..snap_n_spatial) {
             for iv1 in 0..nv1 {
                 for iv2 in 0..nv2 {
                     for iv3 in 0..nv3 {
@@ -1120,10 +1117,10 @@ impl PhaseSpaceRepr for SpectralV {
                 }
             }
             if let Some(ref p) = self.progress
-                && snap_counter.is_multiple_of(snap_report) {
-                    p.set_intra_progress(snap_counter, snap_n_spatial as u64);
-                }
-            snap_counter += 1;
+                && snap_counter.is_multiple_of(snap_report)
+            {
+                p.set_intra_progress(snap_counter, snap_n_spatial as u64);
+            }
         }
 
         PhaseSpaceSnapshot {
