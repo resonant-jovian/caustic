@@ -40,8 +40,10 @@ mod tests {
                             let vy = -lv[1] + (iv2 as f64 + 0.5) * dv[1];
                             for iv3 in 0..nv3 {
                                 let vz = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
-                                let r2 = x*x + y*y + z*z + vx*vx + vy*vy + vz*vz;
-                                let idx = ((((ix * ny + iy) * nz + iz) * nv1 + iv1) * nv2 + iv2) * nv3 + iv3;
+                                let r2 = x * x + y * y + z * z + vx * vx + vy * vy + vz * vz;
+                                let idx = ((((ix * ny + iy) * nz + iz) * nv1 + iv1) * nv2 + iv2)
+                                    * nv3
+                                    + iv3;
                                 data[idx] = (-r2 / (2.0 * sigma * sigma)).exp();
                             }
                         }

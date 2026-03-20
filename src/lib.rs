@@ -55,10 +55,10 @@ pub use tooling::core::output::phasespace::{PhaseSpaceDiagnostics, field_energy_
 pub use tooling::core::poisson::fft::{FftIsolated, FftPoisson};
 pub use tooling::core::poisson::ht_poisson::HtPoisson;
 pub use tooling::core::poisson::multigrid::Multigrid;
-pub use tooling::core::poisson::spherical::SphericalHarmonicsPoisson;
-pub use tooling::core::poisson::tensor_poisson::TensorPoisson;
 pub use tooling::core::poisson::multipole::MultipoleExpansion;
+pub use tooling::core::poisson::spherical::SphericalHarmonicsPoisson;
 pub use tooling::core::poisson::spherical_1d::Spherical1DPoisson;
+pub use tooling::core::poisson::tensor_poisson::TensorPoisson;
 pub use tooling::core::poisson::tree::TreePoisson;
 pub use tooling::core::time::adaptive::AdaptiveStrangSplitting;
 pub use tooling::core::time::blanes_moan::BlanesMoanSplitting;
@@ -80,8 +80,8 @@ pub use tooling::core::algos::amr::AmrGrid;
 pub use tooling::core::algos::hybrid::HybridRepr;
 pub use tooling::core::algos::sheet::SheetTracker;
 pub use tooling::core::algos::spectral::SpectralV;
-pub use tooling::core::algos::tensor::TensorTrain;
 pub use tooling::core::algos::spherical_repr::SphericalRepr;
+pub use tooling::core::algos::tensor::TensorTrain;
 pub use tooling::core::algos::uniform::UniformGrid6D;
 pub use tooling::core::algos::wpfc;
 

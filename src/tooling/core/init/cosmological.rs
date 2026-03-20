@@ -438,7 +438,7 @@ impl ZeldovichIC {
 
                 if let Some(p) = progress {
                     let c = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    if c % report_interval == 0 {
+                    if c.is_multiple_of(report_interval) {
                         p.set_intra_progress(c, nx1 as u64);
                     }
                 }
@@ -587,7 +587,7 @@ impl ZeldovichSingleMode {
 
             if let Some(p) = progress {
                 let c = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                if c % report_interval == 0 {
+                if c.is_multiple_of(report_interval) {
                     p.set_intra_progress(c, nx1 as u64);
                 }
             }

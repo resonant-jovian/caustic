@@ -8,11 +8,7 @@
 //!
 //! The centrifugal pseudo-force L²/(r³·m²) is included in the velocity kick.
 
-use super::super::{
-    init::domain::Domain,
-    phasespace::PhaseSpaceRepr,
-    types::*,
-};
+use super::super::{init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
 use std::any::Any;
 
 /// Spherically symmetric phase-space representation on a (r, v_r, L) grid.
@@ -125,9 +121,7 @@ impl PhaseSpaceRepr for SphericalRepr {
 
             for il in 0..nl {
                 // Semi-Lagrangian shift along r for this (v_r, L) slice
-                let line: Vec<f64> = (0..nr)
-                    .map(|ir| src[self.index(ir, iv, il)])
-                    .collect();
+                let line: Vec<f64> = (0..nr).map(|ir| src[self.index(ir, iv, il)]).collect();
 
                 let mut shifted = vec![0.0f64; nr];
                 // Simple linear interpolation for radial shift
@@ -172,9 +166,7 @@ impl PhaseSpaceRepr for SphericalRepr {
                 let shift = total_accel * dt / self.dv;
 
                 // Semi-Lagrangian shift along v_r
-                let line: Vec<f64> = (0..nv)
-                    .map(|iv| src[self.index(ir, iv, il)])
-                    .collect();
+                let line: Vec<f64> = (0..nv).map(|iv| src[self.index(ir, iv, il)]).collect();
 
                 for iv in 0..nv {
                     let dep = iv as f64 - shift;
@@ -182,15 +174,18 @@ impl PhaseSpaceRepr for SphericalRepr {
                     let t = dep - dep.floor();
                     let clamp = |j: isize| j.clamp(0, nv as isize - 1) as usize;
                     let idx = ir * nv * nl + iv * nl + il;
-                    self.data[idx] =
-                        (1.0 - t) * line[clamp(i0)] + t * line[clamp(i0 + 1)];
+                    self.data[idx] = (1.0 - t) * line[clamp(i0)] + t * line[clamp(i0 + 1)];
                 }
             }
         }
     }
 
     fn moment(&self, _position: &[f64; 3], _order: usize) -> Tensor {
-        Tensor { data: vec![], rank: 0, shape: vec![] }
+        Tensor {
+            data: vec![],
+            rank: 0,
+            shape: vec![],
+        }
     }
 
     fn total_mass(&self) -> f64 {
@@ -201,8 +196,13 @@ impl PhaseSpaceRepr for SphericalRepr {
             for iv in 0..nv {
                 for il in 0..nl {
                     mass += self.data[self.index(ir, iv, il)]
-                        * 4.0 * std::f64::consts::PI * r * r
-                        * self.dr * self.dv * self.dl;
+                        * 4.0
+                        * std::f64::consts::PI
+                        * r
+                        * r
+                        * self.dr
+                        * self.dv
+                        * self.dl;
                 }
             }
         }
@@ -246,7 +246,10 @@ impl PhaseSpaceRepr for SphericalRepr {
     }
 
     fn stream_count(&self) -> StreamCountField {
-        StreamCountField { data: vec![0; self.shape[0]], shape: [self.shape[0], 1, 1] }
+        StreamCountField {
+            data: vec![0; self.shape[0]],
+            shape: [self.shape[0], 1, 1],
+        }
     }
 
     fn velocity_distribution(&self, _position: &[f64; 3]) -> Vec<f64> {
@@ -265,7 +268,12 @@ impl PhaseSpaceRepr for SphericalRepr {
                 for il in 0..nl {
                     let l_ang = self.l_at(il);
                     let f = self.data[self.index(ir, iv, il)];
-                    let v2 = vr * vr + if r > 1e-30 { l_ang * l_ang / (r * r) } else { 0.0 };
+                    let v2 = vr * vr
+                        + if r > 1e-30 {
+                            l_ang * l_ang / (r * r)
+                        } else {
+                            0.0
+                        };
                     t += 0.5 * f * v2 * 4.0 * std::f64::consts::PI * r2 * dphase;
                 }
             }

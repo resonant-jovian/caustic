@@ -304,7 +304,7 @@ impl PoissonSolver for FftPoisson {
                     }
                     if let Some(ref p) = self.progress {
                         let c = counter.fetch_add(1, Ordering::Relaxed);
-                        if c % report_interval == 0 {
+                        if c.is_multiple_of(report_interval) {
                             p.set_intra_progress(c, total);
                         }
                     }
@@ -375,7 +375,7 @@ impl PoissonSolver for FftPoisson {
                 }
                 if let Some(ref p) = self.progress {
                     let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c % report_interval == 0 {
+                    if c.is_multiple_of(report_interval) {
                         p.set_intra_progress(c, total);
                     }
                 }
@@ -546,7 +546,7 @@ impl PoissonSolver for FftIsolated {
                 *rho = factor * green * *rho;
                 if let Some(ref p) = self.progress {
                     let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c % report_interval == 0 {
+                    if c.is_multiple_of(report_interval) {
                         p.set_intra_progress(c, total);
                     }
                 }

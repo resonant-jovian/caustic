@@ -94,11 +94,7 @@ impl MultipoleExpansion {
     }
 
     /// Compute boundary values from multipole expansion.
-    pub fn compute_boundary_values(
-        &self,
-        density: &DensityField,
-        g: f64,
-    ) -> BoundaryValues {
+    pub fn compute_boundary_values(&self, density: &DensityField, g: f64) -> BoundaryValues {
         let [nx, ny, nz] = self.shape;
         let cx = nx as f64 / 2.0 * self.dx[0];
         let cy = ny as f64 / 2.0 * self.dx[1];
@@ -223,6 +219,9 @@ mod tests {
         let moments = me.compute_moments(&density, 1.0);
 
         // Monopole moment should be non-zero
-        assert!(moments[0].2.abs() > 0.0, "Monopole moment should be non-zero");
+        assert!(
+            moments[0].2.abs() > 0.0,
+            "Monopole moment should be non-zero"
+        );
     }
 }

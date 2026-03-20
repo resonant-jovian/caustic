@@ -2,10 +2,7 @@
 //!
 //! Solves d²(r·Φ)/dr² = 4πG·r·ρ(r) via tridiagonal matrix solve.
 
-use super::super::{
-    solver::PoissonSolver,
-    types::*,
-};
+use super::super::{solver::PoissonSolver, types::*};
 
 /// 1D Poisson solver for spherically symmetric density.
 pub struct Spherical1DPoisson {
@@ -72,7 +69,11 @@ impl PoissonSolver for Spherical1DPoisson {
         let mut phi = vec![0.0f64; nr];
         for i in 0..nr {
             let r = self.r_at(i);
-            phi[i] = if r > 1e-30 { u[i] / r } else { u[0] / self.r_at(0) };
+            phi[i] = if r > 1e-30 {
+                u[i] / r
+            } else {
+                u[0] / self.r_at(0)
+            };
         }
 
         PotentialField {

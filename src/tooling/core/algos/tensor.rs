@@ -337,7 +337,7 @@ impl TensorTrain {
 
                 if let Some(ref p) = self.progress {
                     let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c % report_interval == 0 {
+                    if c.is_multiple_of(report_interval) {
                         p.set_intra_progress(c, n0 as u64);
                     }
                 }
@@ -711,7 +711,7 @@ impl PhaseSpaceRepr for TensorTrain {
 
                 if let Some(ref p) = self.progress {
                     let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c % report_interval == 0 {
+                    if c.is_multiple_of(report_interval) {
                         p.set_intra_progress(c, n0 as u64);
                     }
                 }
@@ -835,7 +835,7 @@ impl PhaseSpaceRepr for TensorTrain {
 
             if let Some(ref p) = self.progress {
                 let c = counter.fetch_add(1, Ordering::Relaxed);
-                if c % report_interval == 0 {
+                if c.is_multiple_of(report_interval) {
                     p.set_intra_progress(c, nv_total as u64);
                 }
             }
@@ -955,7 +955,7 @@ impl PhaseSpaceRepr for TensorTrain {
 
             if let Some(ref p) = self.progress {
                 let c = counter.fetch_add(1, Ordering::Relaxed);
-                if c % report_interval == 0 {
+                if c.is_multiple_of(report_interval) {
                     p.set_intra_progress(c, ns_total as u64);
                 }
             }
@@ -1237,7 +1237,7 @@ impl PhaseSpaceRepr for TensorTrain {
             }
             if let Some(ref p) = self.progress {
                 let c = counter.fetch_add(1, Ordering::Relaxed);
-                if c % report_interval == 0 {
+                if c.is_multiple_of(report_interval) {
                     p.set_intra_progress(c, n0 as u64);
                 }
             }

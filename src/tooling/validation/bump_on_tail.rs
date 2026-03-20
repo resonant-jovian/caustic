@@ -49,10 +49,17 @@ mod tests {
                             for iv3 in 0..nv {
                                 let vy = -lv[1] + (iv2 as f64 + 0.5) * dv[1];
                                 let vz = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
-                                let v2_perp = vy*vy + vz*vz;
-                                let f_bulk = 0.9 * (-vx*vx/(2.0*sigma_bulk*sigma_bulk) - v2_perp/(2.0*sigma_bulk*sigma_bulk)).exp();
-                                let f_bump = 0.1 * (-(vx-v_bump).powi(2)/(2.0*sigma_bump*sigma_bump) - v2_perp/(2.0*sigma_bump*sigma_bump)).exp();
-                                let idx = ((((ix * nx + iy) * nx + iz) * nv + iv1) * nv + iv2) * nv + iv3;
+                                let v2_perp = vy * vy + vz * vz;
+                                let f_bulk = 0.9
+                                    * (-vx * vx / (2.0 * sigma_bulk * sigma_bulk)
+                                        - v2_perp / (2.0 * sigma_bulk * sigma_bulk))
+                                        .exp();
+                                let f_bump = 0.1
+                                    * (-(vx - v_bump).powi(2) / (2.0 * sigma_bump * sigma_bump)
+                                        - v2_perp / (2.0 * sigma_bump * sigma_bump))
+                                        .exp();
+                                let idx =
+                                    ((((ix * nx + iy) * nx + iz) * nv + iv1) * nv + iv2) * nv + iv3;
                                 data[idx] = (f_bulk + f_bump) * pert;
                             }
                         }

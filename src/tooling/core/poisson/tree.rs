@@ -328,7 +328,7 @@ impl PoissonSolver for TreePoisson {
                     *val = tree_potential(root, &point, self.opening_angle, g, self.softening);
                     if let Some(ref p) = self.progress {
                         let c = counter.fetch_add(1, Ordering::Relaxed);
-                        if c % report_interval == 0 {
+                        if c.is_multiple_of(report_interval) {
                             p.set_intra_progress(c, total);
                         }
                     }

@@ -491,7 +491,7 @@ impl PoissonSolver for Multigrid {
         let max_iter = 100u64;
         for _iter in 0..max_iter {
             if let Some(ref p) = self.progress {
-                p.set_intra_progress(_iter as u64, max_iter);
+                p.set_intra_progress(_iter, max_iter);
             }
             v_cycle(
                 &mut phi,

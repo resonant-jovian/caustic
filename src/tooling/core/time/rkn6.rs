@@ -26,7 +26,7 @@ use super::super::{
 /// Suzuki triple-jump coefficient s₁ = 1 / (2 − 2^{1/5}).
 const S1: f64 = 1.1746881100325735;
 /// Suzuki triple-jump coefficient s₂ = 1 − 2·s₁.
-const S2: f64 = -1.3493762200651470;
+const S2: f64 = -1.349_376_220_065_147;
 
 /// Yoshida coefficient w₁ = 1 / (2 − 2^{1/3}).
 const YOSHIDA_W1: f64 = 1.3512071919596578;
@@ -187,18 +187,36 @@ impl TimeIntegrator for Rkn6Splitting {
 
         // Triple-jump: S4(s1·dt) ∘ S4(s2·dt) ∘ S4(s1·dt)
         self.yoshida_step(
-            repr, solver, advector, S1 * dt,
-            &mut timings, &self.progress.clone(), 0, n_sub,
+            repr,
+            solver,
+            advector,
+            S1 * dt,
+            &mut timings,
+            &self.progress.clone(),
+            0,
+            n_sub,
         );
 
         self.yoshida_step(
-            repr, solver, advector, S2 * dt,
-            &mut timings, &self.progress.clone(), 7, n_sub,
+            repr,
+            solver,
+            advector,
+            S2 * dt,
+            &mut timings,
+            &self.progress.clone(),
+            7,
+            n_sub,
         );
 
         self.yoshida_step(
-            repr, solver, advector, S1 * dt,
-            &mut timings, &self.progress.clone(), 14, n_sub,
+            repr,
+            solver,
+            advector,
+            S1 * dt,
+            &mut timings,
+            &self.progress.clone(),
+            14,
+            n_sub,
         );
 
         if let Some(ref p) = self.progress {

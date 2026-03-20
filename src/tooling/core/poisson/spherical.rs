@@ -415,7 +415,7 @@ fn reconstruct_potential(
         *val = sum;
         if let Some(p) = progress {
             let c = counter.fetch_add(1, Ordering::Relaxed);
-            if c % report_interval == 0 {
+            if c.is_multiple_of(report_interval) {
                 p.set_intra_progress(c, total);
             }
         }

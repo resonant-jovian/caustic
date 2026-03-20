@@ -29,13 +29,7 @@ pub fn wpfc_shift_1d_into(
 }
 
 /// Periodic boundary WPFC shift using sliding window.
-fn wpfc_shift_1d_into_periodic(
-    data: &[f64],
-    disp: f64,
-    cell_size: f64,
-    n: usize,
-    out: &mut [f64],
-) {
+fn wpfc_shift_1d_into_periodic(data: &[f64], disp: f64, cell_size: f64, n: usize, out: &mut [f64]) {
     let dep0 = -(disp / cell_size);
     let i0 = dep0.floor() as isize;
     let t = dep0 - dep0.floor();
@@ -226,12 +220,18 @@ fn wpfc_interpolate(s: &[f64; 6], t: f64, w_l: &[f64; 4], w_c: &[f64; 4], w_r: &
     let omega2 = alpha2 / alpha_sum;
 
     // Each candidate stencil's interpolated value
-    let p0 = w_l[0] / d0.max(epsilon) * s[0] + w_l[1] / d0.max(epsilon) * s[1]
-           + w_l[2] / d0.max(epsilon) * s[2] + w_l[3] / d0.max(epsilon) * s[3];
-    let p1 = w_c[0] / d1.max(epsilon) * s[1] + w_c[1] / d1.max(epsilon) * s[2]
-           + w_c[2] / d1.max(epsilon) * s[3] + w_c[3] / d1.max(epsilon) * s[4];
-    let p2 = w_r[0] / d2.max(epsilon) * s[2] + w_r[1] / d2.max(epsilon) * s[3]
-           + w_r[2] / d2.max(epsilon) * s[4] + w_r[3] / d2.max(epsilon) * s[5];
+    let p0 = w_l[0] / d0.max(epsilon) * s[0]
+        + w_l[1] / d0.max(epsilon) * s[1]
+        + w_l[2] / d0.max(epsilon) * s[2]
+        + w_l[3] / d0.max(epsilon) * s[3];
+    let p1 = w_c[0] / d1.max(epsilon) * s[1]
+        + w_c[1] / d1.max(epsilon) * s[2]
+        + w_c[2] / d1.max(epsilon) * s[3]
+        + w_c[3] / d1.max(epsilon) * s[4];
+    let p2 = w_r[0] / d2.max(epsilon) * s[2]
+        + w_r[1] / d2.max(epsilon) * s[3]
+        + w_r[2] / d2.max(epsilon) * s[4]
+        + w_r[3] / d2.max(epsilon) * s[5];
 
     omega0 * p0 + omega1 * p1 + omega2 * p2
 }
@@ -250,9 +250,11 @@ fn smoothness_indicator(f0: f64, f1: f64, f2: f64, f3: f64) -> f64 {
     let ddd = dd2 - dd1;
 
     // Sum of squared scaled derivatives (1st, 2nd, 3rd order)
-    13.0 / 12.0 * dd1 * dd1 + 0.25 * (d2 + d1) * (d2 + d1)
-    + 13.0 / 12.0 * dd2 * dd2 + 0.25 * (d3 + d2) * (d3 + d2)
-    + ddd * ddd
+    13.0 / 12.0 * dd1 * dd1
+        + 0.25 * (d2 + d1) * (d2 + d1)
+        + 13.0 / 12.0 * dd2 * dd2
+        + 0.25 * (d3 + d2) * (d3 + d2)
+        + ddd * ddd
 }
 
 /// Zhang-Shu positivity-preserving limiter.
@@ -353,10 +355,7 @@ mod tests {
         // WPFC with WENO weights should not produce large negatives
         let min_val = out.iter().copied().fold(f64::INFINITY, f64::min);
         // Allow tiny negatives from floating point
-        assert!(
-            min_val > -1e-10,
-            "WPFC produced negative value: {min_val}"
-        );
+        assert!(min_val > -1e-10, "WPFC produced negative value: {min_val}");
     }
 
     #[test]

@@ -148,8 +148,8 @@ impl SpectralV {
 
             // Second moment contribution from mode (1,0,0), (0,1,0), (0,0,1)
             if n > 1 {
-                let a100 = self.coefficients[base + 1 * n * n];
-                let a010 = self.coefficients[base + 1 * n];
+                let a100 = self.coefficients[base + n * n];
+                let a010 = self.coefficients[base + n];
                 let a001 = self.coefficients[base + 1];
                 v2_sum += sigma * sigma * (a100 * a100 + a010 * a010 + a001 * a001);
             }
@@ -441,7 +441,7 @@ impl PhaseSpaceRepr for SpectralV {
                 let result = self.coefficients[si * n_modes3] * norm;
                 if let Some(ref p) = self.progress {
                     let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c % report_interval == 0 {
+                    if c.is_multiple_of(report_interval) {
                         p.set_intra_progress(c, n_spatial as u64);
                     }
                 }
@@ -648,7 +648,7 @@ impl PhaseSpaceRepr for SpectralV {
 
                     if let Some(ref p) = self.progress {
                         let c = advect_x_counter.fetch_add(1, Ordering::Relaxed);
-                        if c % advect_x_report == 0 {
+                        if c.is_multiple_of(advect_x_report) {
                             p.set_intra_progress(c, n_spatial as u64);
                         }
                     }
@@ -739,7 +739,7 @@ impl PhaseSpaceRepr for SpectralV {
 
                 if let Some(ref p) = self.progress {
                     let c = advect_v_counter.fetch_add(1, Ordering::Relaxed);
-                    if c % advect_v_report == 0 {
+                    if c.is_multiple_of(advect_v_report) {
                         p.set_intra_progress(c, n_spatial as u64);
                     }
                 }
@@ -935,11 +935,10 @@ impl PhaseSpaceRepr for SpectralV {
                     }
                 }
             }
-            if let Some(ref p) = self.progress {
-                if entropy_counter % entropy_report == 0 {
+            if let Some(ref p) = self.progress
+                && entropy_counter.is_multiple_of(entropy_report) {
                     p.set_intra_progress(entropy_counter, n_spatial as u64);
                 }
-            }
             entropy_counter += 1;
         }
         entropy * dx3 * dv3
@@ -995,11 +994,10 @@ impl PhaseSpaceRepr for SpectralV {
             }
             *count = peaks;
 
-            if let Some(ref p) = self.progress {
-                if sc_counter % sc_report == 0 {
+            if let Some(ref p) = self.progress
+                && sc_counter.is_multiple_of(sc_report) {
                     p.set_intra_progress(sc_counter, n_spatial as u64);
                 }
-            }
             sc_counter += 1;
         }
 
@@ -1080,11 +1078,10 @@ impl PhaseSpaceRepr for SpectralV {
                     }
                 }
             }
-            if let Some(ref p) = self.progress {
-                if ke_counter % ke_report == 0 {
+            if let Some(ref p) = self.progress
+                && ke_counter.is_multiple_of(ke_report) {
                     p.set_intra_progress(ke_counter, n_spatial as u64);
                 }
-            }
             ke_counter += 1;
         }
         0.5 * ke * dx3 * dv3
@@ -1122,11 +1119,10 @@ impl PhaseSpaceRepr for SpectralV {
                     }
                 }
             }
-            if let Some(ref p) = self.progress {
-                if snap_counter % snap_report == 0 {
+            if let Some(ref p) = self.progress
+                && snap_counter.is_multiple_of(snap_report) {
                     p.set_intra_progress(snap_counter, snap_n_spatial as u64);
                 }
-            }
             snap_counter += 1;
         }
 
