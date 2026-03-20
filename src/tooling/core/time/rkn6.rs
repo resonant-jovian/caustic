@@ -258,33 +258,194 @@ impl TimeIntegrator for Rkn6Splitting {
         let k_w0_s2 = YOSHIDA_W0 * s2dt;
 
         // ── S₄(s₁·Δt) ─────────────────────────────────────────────────────
-        Self::rkn6_drift(repr, advector, d_half_w1_s1, &mut timings, &progress, StepPhase::DriftHalf1, 0);
-        Self::rkn6_kick(g, repr, solver, advector, k_w1_s1, &mut timings, &progress, 1);
-        Self::rkn6_drift(repr, advector, d_half_w01_s1, &mut timings, &progress, StepPhase::DriftHalf2, 2);
-        Self::rkn6_kick(g, repr, solver, advector, k_w0_s1, &mut timings, &progress, 3);
-        Self::rkn6_drift(repr, advector, d_half_w01_s1, &mut timings, &progress, StepPhase::DriftHalf1, 4);
-        Self::rkn6_kick(g, repr, solver, advector, k_w1_s1, &mut timings, &progress, 5);
+        Self::rkn6_drift(
+            repr,
+            advector,
+            d_half_w1_s1,
+            &mut timings,
+            &progress,
+            StepPhase::DriftHalf1,
+            0,
+        );
+        Self::rkn6_kick(
+            g,
+            repr,
+            solver,
+            advector,
+            k_w1_s1,
+            &mut timings,
+            &progress,
+            1,
+        );
+        Self::rkn6_drift(
+            repr,
+            advector,
+            d_half_w01_s1,
+            &mut timings,
+            &progress,
+            StepPhase::DriftHalf2,
+            2,
+        );
+        Self::rkn6_kick(
+            g,
+            repr,
+            solver,
+            advector,
+            k_w0_s1,
+            &mut timings,
+            &progress,
+            3,
+        );
+        Self::rkn6_drift(
+            repr,
+            advector,
+            d_half_w01_s1,
+            &mut timings,
+            &progress,
+            StepPhase::DriftHalf1,
+            4,
+        );
+        Self::rkn6_kick(
+            g,
+            repr,
+            solver,
+            advector,
+            k_w1_s1,
+            &mut timings,
+            &progress,
+            5,
+        );
 
         // Merged: last drift of S₄(s₁) + first drift of S₄(s₂)
-        Self::rkn6_drift(repr, advector, d_seam, &mut timings, &progress, StepPhase::DriftHalf2, 6);
+        Self::rkn6_drift(
+            repr,
+            advector,
+            d_seam,
+            &mut timings,
+            &progress,
+            StepPhase::DriftHalf2,
+            6,
+        );
 
         // ── S₄(s₂·Δt) interior ─────────────────────────────────────────────
-        Self::rkn6_kick(g, repr, solver, advector, k_w1_s2, &mut timings, &progress, 7);
-        Self::rkn6_drift(repr, advector, d_half_w01_s2, &mut timings, &progress, StepPhase::DriftHalf1, 8);
-        Self::rkn6_kick(g, repr, solver, advector, k_w0_s2, &mut timings, &progress, 9);
-        Self::rkn6_drift(repr, advector, d_half_w01_s2, &mut timings, &progress, StepPhase::DriftHalf2, 10);
-        Self::rkn6_kick(g, repr, solver, advector, k_w1_s2, &mut timings, &progress, 11);
+        Self::rkn6_kick(
+            g,
+            repr,
+            solver,
+            advector,
+            k_w1_s2,
+            &mut timings,
+            &progress,
+            7,
+        );
+        Self::rkn6_drift(
+            repr,
+            advector,
+            d_half_w01_s2,
+            &mut timings,
+            &progress,
+            StepPhase::DriftHalf1,
+            8,
+        );
+        Self::rkn6_kick(
+            g,
+            repr,
+            solver,
+            advector,
+            k_w0_s2,
+            &mut timings,
+            &progress,
+            9,
+        );
+        Self::rkn6_drift(
+            repr,
+            advector,
+            d_half_w01_s2,
+            &mut timings,
+            &progress,
+            StepPhase::DriftHalf2,
+            10,
+        );
+        Self::rkn6_kick(
+            g,
+            repr,
+            solver,
+            advector,
+            k_w1_s2,
+            &mut timings,
+            &progress,
+            11,
+        );
 
         // Merged: last drift of S₄(s₂) + first drift of S₄(s₁)
-        Self::rkn6_drift(repr, advector, d_seam, &mut timings, &progress, StepPhase::DriftHalf1, 12);
+        Self::rkn6_drift(
+            repr,
+            advector,
+            d_seam,
+            &mut timings,
+            &progress,
+            StepPhase::DriftHalf1,
+            12,
+        );
 
         // ── S₄(s₁·Δt) ─────────────────────────────────────────────────────
-        Self::rkn6_kick(g, repr, solver, advector, k_w1_s1, &mut timings, &progress, 13);
-        Self::rkn6_drift(repr, advector, d_half_w01_s1, &mut timings, &progress, StepPhase::DriftHalf2, 14);
-        Self::rkn6_kick(g, repr, solver, advector, k_w0_s1, &mut timings, &progress, 15);
-        Self::rkn6_drift(repr, advector, d_half_w01_s1, &mut timings, &progress, StepPhase::DriftHalf1, 16);
-        Self::rkn6_kick(g, repr, solver, advector, k_w1_s1, &mut timings, &progress, 17);
-        Self::rkn6_drift(repr, advector, d_half_w1_s1, &mut timings, &progress, StepPhase::DriftHalf2, 18);
+        Self::rkn6_kick(
+            g,
+            repr,
+            solver,
+            advector,
+            k_w1_s1,
+            &mut timings,
+            &progress,
+            13,
+        );
+        Self::rkn6_drift(
+            repr,
+            advector,
+            d_half_w01_s1,
+            &mut timings,
+            &progress,
+            StepPhase::DriftHalf2,
+            14,
+        );
+        Self::rkn6_kick(
+            g,
+            repr,
+            solver,
+            advector,
+            k_w0_s1,
+            &mut timings,
+            &progress,
+            15,
+        );
+        Self::rkn6_drift(
+            repr,
+            advector,
+            d_half_w01_s1,
+            &mut timings,
+            &progress,
+            StepPhase::DriftHalf1,
+            16,
+        );
+        Self::rkn6_kick(
+            g,
+            repr,
+            solver,
+            advector,
+            k_w1_s1,
+            &mut timings,
+            &progress,
+            17,
+        );
+        Self::rkn6_drift(
+            repr,
+            advector,
+            d_half_w1_s1,
+            &mut timings,
+            &progress,
+            StepPhase::DriftHalf2,
+            18,
+        );
 
         if let Some(ref p) = progress {
             p.set_phase(StepPhase::StepComplete);
