@@ -3482,6 +3482,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // takes ~194s in release mode
     fn slar_free_streaming_ht() {
         // Free streaming: f_new(x,v) = f_old(x - v*dt, v)
         let n = 8usize;
@@ -3676,6 +3677,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // takes ~168s in release mode
     fn slar_separable_rank_ht() {
         // Separable IC: advection should not explode rank
         let n = 8usize;
