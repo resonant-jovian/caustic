@@ -246,7 +246,12 @@ fn invert_5x5(a: &[[f64; N_CONSERVED]; N_CONSERVED]) -> [[f64; N_CONSERVED]; N_C
         let (max_row, _) = aug[col..n]
             .iter()
             .enumerate()
-            .max_by(|(_, a), (_, b)| a[col].abs().partial_cmp(&b[col].abs()).unwrap_or(std::cmp::Ordering::Equal))
+            .max_by(|(_, a), (_, b)| {
+                a[col]
+                    .abs()
+                    .partial_cmp(&b[col].abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .map(|(i, row)| (i + col, row[col].abs()))
             .unwrap_or((col, 0.0));
         aug.swap(col, max_row);

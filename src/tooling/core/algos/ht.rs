@@ -2624,8 +2624,7 @@ fn parent_of(child: usize) -> usize {
 
 #[inline]
 fn leaf_data(node: &HtNode) -> (&Mat<f64>, usize) {
-    static EMPTY: std::sync::LazyLock<Mat<f64>> =
-        std::sync::LazyLock::new(|| Mat::zeros(0, 0));
+    static EMPTY: std::sync::LazyLock<Mat<f64>> = std::sync::LazyLock::new(|| Mat::zeros(0, 0));
     match node {
         HtNode::Leaf { dim, frame } => (frame, *dim),
         HtNode::Interior { .. } => {
