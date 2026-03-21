@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use rayon::prelude::*;
 use rust_decimal::Decimal;
 
 use crate::tooling::core::{
@@ -152,9 +153,9 @@ impl Simulation {
             // Build per-cell acceleration vectors for KFVS
             let acc: Vec<[f64; 3]> = accel
                 .gx
-                .iter()
-                .zip(accel.gy.iter())
-                .zip(accel.gz.iter())
+                .par_iter()
+                .zip(accel.gy.par_iter())
+                .zip(accel.gz.par_iter())
                 .map(|((&gx, &gy), &gz)| [gx, gy, gz])
                 .collect();
 
@@ -230,7 +231,7 @@ impl Simulation {
         let dx3 = dx[0] * dx[1] * dx[2];
 
         // Cache ρ_max for next step's dt computation (avoids redundant compute_density)
-        self.cached_rho_max = Some(density.data.iter().cloned().fold(0.0_f64, f64::max));
+        self.cached_rho_max = Some(density.data.par_iter().cloned().reduce(|| 0.0_f64, f64::max));
 
         if let Some(ref p) = self.progress {
             let sub = p.read().sub_step;

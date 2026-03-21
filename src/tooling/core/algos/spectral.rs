@@ -99,7 +99,6 @@ impl SpectralV {
 
         let ratio = old_alpha / new_alpha;
         let n = self.n_modes;
-        let n_spatial: usize = self.spatial_shape.iter().product();
         let n_modes3 = n * n * n;
 
         // For each spatial cell, transform 1D Hermite coefficients along each
@@ -110,19 +109,18 @@ impl SpectralV {
         //   a_n_new ≈ ratio^n * a_n_old * sqrt(ratio)
         // This is exact for n=0,1 and accurate when ratio ≈ 1.
         let sqrt_ratio = ratio.sqrt();
-        for si in 0..n_spatial {
-            let base = si * n_modes3;
+        self.coefficients.par_chunks_mut(n_modes3).for_each(|cell| {
             for m0 in 0..n {
                 for m1 in 0..n {
                     for m2 in 0..n {
-                        let idx = base + m0 * n * n + m1 * n + m2;
+                        let idx = m0 * n * n + m1 * n + m2;
                         let total_order = m0 + m1 + m2;
                         let scale = ratio.powi(total_order as i32) * sqrt_ratio.powi(3);
-                        self.coefficients[idx] *= scale;
+                        cell[idx] *= scale;
                     }
                 }
             }
-        }
+        });
 
         self.velocity_scale = new_alpha;
     }
@@ -131,29 +129,29 @@ impl SpectralV {
     ///
     /// alpha_opt = sqrt(2 * <v²> / (2*N_modes + 1))
     pub fn optimal_velocity_scale(&self) -> f64 {
-        let n_spatial: usize = self.spatial_shape.iter().product();
         let n = self.n_modes;
         let n_modes3 = n * n * n;
 
         // <v²> ≈ sum of a_{100}² + a_{010}² + a_{001}² contributions
         // For the zeroth-order approximation, use the diagonal modes
-        let mut v2_sum = 0.0f64;
-        let mut mass_sum = 0.0f64;
         let sigma = self.velocity_scale;
 
-        for si in 0..n_spatial {
-            let base = si * n_modes3;
-            let a000 = self.coefficients[base];
-            mass_sum += a000 * a000;
-
-            // Second moment contribution from mode (1,0,0), (0,1,0), (0,0,1)
-            if n > 1 {
-                let a100 = self.coefficients[base + n * n];
-                let a010 = self.coefficients[base + n];
-                let a001 = self.coefficients[base + 1];
-                v2_sum += sigma * sigma * (a100 * a100 + a010 * a010 + a001 * a001);
-            }
-        }
+        let (v2_sum, mass_sum) = self.coefficients.par_chunks(n_modes3)
+            .fold(
+                || (0.0f64, 0.0f64),
+                |(mut v2, mut mass), cell| {
+                    let a000 = cell[0];
+                    mass += a000 * a000;
+                    if n > 1 {
+                        let a100 = cell[n * n];
+                        let a010 = cell[n];
+                        let a001 = cell[1];
+                        v2 += sigma * sigma * (a100 * a100 + a010 * a010 + a001 * a001);
+                    }
+                    (v2, mass)
+                },
+            )
+            .reduce(|| (0.0, 0.0), |(v2a, ma), (v2b, mb)| (v2a + v2b, ma + mb));
 
         if mass_sum > 1e-30 {
             let v2_avg = v2_sum / mass_sum;
@@ -176,23 +174,26 @@ impl SpectralV {
         let nu = self.hypercollision_nu;
         let p = self.hypercollision_order;
         let n = self.n_modes;
-        let n_spatial: usize = self.spatial_shape.iter().product();
         let n_modes3 = n * n * n;
 
-        for si in 0..n_spatial {
-            let base = si * n_modes3;
-            for m0 in 0..n {
-                let d0 = (m0 as f64).powi(2 * p as i32);
-                for m1 in 0..n {
-                    let d01 = d0 + (m1 as f64).powi(2 * p as i32);
-                    for m2 in 0..n {
-                        let d012 = d01 + (m2 as f64).powi(2 * p as i32);
-                        let factor = (-nu * dt * d012).exp();
-                        self.coefficients[base + m0 * n * n + m1 * n + m2] *= factor;
-                    }
+        // Precompute exp factors once (n^3 entries) to avoid redundant exp() per spatial cell
+        let mut exp_table = vec![0.0f64; n_modes3];
+        for m0 in 0..n {
+            let d0 = (m0 as f64).powi(2 * p as i32);
+            for m1 in 0..n {
+                let d01 = d0 + (m1 as f64).powi(2 * p as i32);
+                for m2 in 0..n {
+                    let d012 = d01 + (m2 as f64).powi(2 * p as i32);
+                    exp_table[m0 * n * n + m1 * n + m2] = (-nu * dt * d012).exp();
                 }
             }
         }
+
+        self.coefficients.par_chunks_mut(n_modes3).for_each(|cell| {
+            for idx in 0..n_modes3 {
+                cell[idx] *= exp_table[idx];
+            }
+        });
     }
 
     /// Evaluate the raw (unnormalized) physicist's Hermite polynomial H_n(x).

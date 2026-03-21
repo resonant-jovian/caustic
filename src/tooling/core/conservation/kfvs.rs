@@ -114,13 +114,13 @@ impl KfvsSolver {
         assert_eq!(momentum_x.len(), n);
         assert_eq!(energy.len(), n);
 
-        for i in 0..n {
-            self.state[i] = MacroState {
+        self.state.par_iter_mut().enumerate().for_each(|(i, s)| {
+            *s = MacroState {
                 density: density[i],
                 momentum: [momentum_x[i], momentum_y[i], momentum_z[i]],
                 energy: energy[i],
             };
-        }
+        });
     }
 
     /// Flat index from 3D coordinates.

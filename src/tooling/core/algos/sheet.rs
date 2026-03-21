@@ -164,43 +164,50 @@ impl SheetTracker {
     pub fn detect_caustics(&self) -> StreamCountField {
         let [nx, ny, nz] = self.shape;
         let n_cells = nx * ny * nz;
-        let mut counts = vec![0u32; n_cells];
-
         let dx = self.cached_dx;
         let lx = self.cached_lx;
         let is_periodic = self.cached_is_periodic;
 
         let n_particles = self.particles.len() as u64;
-        let report_interval = (n_particles / 100).max(1);
 
         if let Some(ref p) = self.progress {
             p.set_intra_progress(0, n_particles);
         }
 
-        for (pi, p) in self.particles.iter().enumerate() {
-            if let Some(ref prog) = self.progress
-                && (pi as u64).is_multiple_of(report_interval)
-            {
-                prog.set_intra_progress(pi as u64, n_particles);
-            }
-            let mut skip = false;
-            let mut ci = [0usize; 3];
-            for k in 0..3 {
-                let idx = ((p.x[k] + lx[k]) / dx[k]).floor() as isize;
-                if is_periodic {
-                    ci[k] = idx.rem_euclid(self.shape[k] as isize) as usize;
-                } else if idx < 0 || idx >= self.shape[k] as isize {
-                    skip = true;
-                    break;
-                } else {
-                    ci[k] = idx as usize;
-                }
-            }
-            if !skip {
-                let flat = ci[0] * ny * nz + ci[1] * nz + ci[2];
-                counts[flat] += 1;
-            }
-        }
+        let shape = self.shape;
+        let counts = self.particles.par_iter()
+            .fold(
+                || vec![0u32; n_cells],
+                |mut local, p| {
+                    let mut skip = false;
+                    let mut ci = [0usize; 3];
+                    for k in 0..3 {
+                        let idx = ((p.x[k] + lx[k]) / dx[k]).floor() as isize;
+                        if is_periodic {
+                            ci[k] = idx.rem_euclid(shape[k] as isize) as usize;
+                        } else if idx < 0 || idx >= shape[k] as isize {
+                            skip = true;
+                            break;
+                        } else {
+                            ci[k] = idx as usize;
+                        }
+                    }
+                    if !skip {
+                        let flat = ci[0] * ny * nz + ci[1] * nz + ci[2];
+                        local[flat] += 1;
+                    }
+                    local
+                },
+            )
+            .reduce(
+                || vec![0u32; n_cells],
+                |mut a, b| {
+                    for i in 0..n_cells {
+                        a[i] += b[i];
+                    }
+                    a
+                },
+            );
 
         StreamCountField {
             data: counts,
@@ -225,73 +232,65 @@ impl SheetTracker {
             super::super::init::domain::SpatialBoundType::Periodic
         );
 
-        let mut density = vec![0.0f64; n_cells];
-
         let n_particles = self.particles.len() as u64;
-        let report_interval = (n_particles / 100).max(1);
 
         if let Some(ref p) = self.progress {
             p.set_intra_progress(0, n_particles);
         }
 
-        for (pi, p) in self.particles.iter().enumerate() {
-            if let Some(ref prog) = self.progress
-                && (pi as u64).is_multiple_of(report_interval)
-            {
-                prog.set_intra_progress(pi as u64, n_particles);
-            }
-            // Find the cell index and fractional position for CIC.
-            // The grid node at index i is at x = -L + (i + 0.5) * dx.
-            // For CIC, we find the nearest lower grid node:
-            //   cell_idx[k] = floor((x[k] + L[k]) / dx[k] - 0.5)
-            //   frac[k]     = (x[k] + L[k]) / dx[k] - 0.5 - cell_idx[k]
-            let mut ci = [0isize; 3];
-            let mut frac = [0.0f64; 3];
-
-            for k in 0..3 {
-                let s = (p.x[k] + lx[k]) / dx[k] - 0.5;
-                ci[k] = s.floor() as isize;
-                frac[k] = s - ci[k] as f64;
-            }
-
-            // Deposit to 2x2x2 neighboring cells with trilinear weights.
-            for di in 0..2isize {
-                let wx = if di == 0 { 1.0 - frac[0] } else { frac[0] };
-                for dj in 0..2isize {
-                    let wy = if dj == 0 { 1.0 - frac[1] } else { frac[1] };
-                    for dk in 0..2isize {
-                        let wz = if dk == 0 { 1.0 - frac[2] } else { frac[2] };
-                        let w = wx * wy * wz;
-
-                        let mut ii = ci[0] + di;
-                        let mut jj = ci[1] + dj;
-                        let mut kk = ci[2] + dk;
-
-                        if is_periodic {
-                            ii = ii.rem_euclid(nx as isize);
-                            jj = jj.rem_euclid(ny as isize);
-                            kk = kk.rem_euclid(nz as isize);
-                        } else {
-                            // Open / Isolated / Reflecting: skip deposits outside domain.
-                            if ii < 0
-                                || ii >= nx as isize
-                                || jj < 0
-                                || jj >= ny as isize
-                                || kk < 0
-                                || kk >= nz as isize
-                            {
-                                continue;
+        let shape = self.shape;
+        let particle_mass = self.particle_mass;
+        let density_data = self.particles.par_iter()
+            .fold(
+                || vec![0.0f64; n_cells],
+                |mut local, p| {
+                    let mut ci = [0isize; 3];
+                    let mut frac = [0.0f64; 3];
+                    for k in 0..3 {
+                        let s = (p.x[k] + lx[k]) / dx[k] - 0.5;
+                        ci[k] = s.floor() as isize;
+                        frac[k] = s - ci[k] as f64;
+                    }
+                    for di in 0..2isize {
+                        let wx = if di == 0 { 1.0 - frac[0] } else { frac[0] };
+                        for dj in 0..2isize {
+                            let wy = if dj == 0 { 1.0 - frac[1] } else { frac[1] };
+                            for dk in 0..2isize {
+                                let wz = if dk == 0 { 1.0 - frac[2] } else { frac[2] };
+                                let w = wx * wy * wz;
+                                let mut ii = ci[0] + di;
+                                let mut jj = ci[1] + dj;
+                                let mut kk = ci[2] + dk;
+                                if is_periodic {
+                                    ii = ii.rem_euclid(nx as isize);
+                                    jj = jj.rem_euclid(ny as isize);
+                                    kk = kk.rem_euclid(nz as isize);
+                                } else if ii < 0 || ii >= nx as isize
+                                    || jj < 0 || jj >= ny as isize
+                                    || kk < 0 || kk >= nz as isize
+                                {
+                                    continue;
+                                }
+                                let flat = ii as usize * ny * nz + jj as usize * nz + kk as usize;
+                                local[flat] += particle_mass * w;
                             }
                         }
-
-                        let flat = ii as usize * ny * nz + jj as usize * nz + kk as usize;
-                        density[flat] += self.particle_mass * w;
                     }
-                }
-            }
-        }
+                    local
+                },
+            )
+            .reduce(
+                || vec![0.0f64; n_cells],
+                |mut a, b| {
+                    for i in 0..n_cells {
+                        a[i] += b[i];
+                    }
+                    a
+                },
+            );
 
-        // Convert from mass per cell to mass density (divide by cell volume).
+        // Convert from mass per cell to mass density
+        let mut density = density_data;
         for d in &mut density {
             *d /= cell_vol;
         }
