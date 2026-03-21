@@ -15,7 +15,11 @@ impl CustomIC {
     }
 
     /// Evaluate `self.func` at every (x, v) grid point.
-    pub fn sample_on_grid(&self, domain: &Domain) -> PhaseSpaceSnapshot {
+    pub fn sample_on_grid(
+        &self,
+        domain: &Domain,
+        progress: Option<&crate::tooling::core::progress::StepProgress>,
+    ) -> PhaseSpaceSnapshot {
         let nx1 = domain.spatial_res.x1 as usize;
         let nx2 = domain.spatial_res.x2 as usize;
         let nx3 = domain.spatial_res.x3 as usize;
@@ -38,6 +42,14 @@ impl CustomIC {
         let total = nx1 * nx2 * nx3 * nv1 * nv2 * nv3;
         let mut data = vec![0.0f64; total];
 
+        let counter = std::sync::atomic::AtomicU64::new(0);
+        let report_interval = (nx1 / 100).max(1) as u64;
+
+        // Establish 0% baseline so the TUI doesn't jump to a non-zero first value
+        if let Some(p) = progress {
+            p.set_intra_progress(0, nx1 as u64);
+        }
+
         for ix1 in 0..nx1 {
             let x1 = -lx[0] + (ix1 as f64 + 0.5) * dx[0];
             for ix2 in 0..nx2 {
@@ -57,6 +69,13 @@ impl CustomIC {
                             }
                         }
                     }
+                }
+            }
+
+            if let Some(p) = progress {
+                let c = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if c.is_multiple_of(report_interval) {
+                    p.set_intra_progress(c, nx1 as u64);
                 }
             }
         }
@@ -115,7 +134,7 @@ impl CustomICArray {
 
         let data: Vec<f64> = raw
             .chunks_exact(8)
-            .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+            .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap_or([0u8; 8])))
             .collect();
 
         if data.len() != expected {

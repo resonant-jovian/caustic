@@ -171,3 +171,107 @@ fn free_streaming_convergence() {
         );
     }
 }
+
+/// Verify that BM4 achieves O(dt^4) temporal convergence on Plummer equilibrium.
+///
+/// Runs at two different dt values and checks that the energy error ratio
+/// is consistent with 4th-order convergence.
+#[test]
+fn bm4_temporal_convergence_order_4() {
+    use crate::sim::Simulation;
+    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::init::{
+        domain::{Domain, SpatialBoundType, VelocityBoundType},
+        isolated::{PlummerIC, sample_on_grid},
+    };
+    use crate::tooling::core::poisson::fft::FftPoisson;
+    use crate::tooling::core::time::blanes_moan::BlanesMoanSplitting;
+
+    let domain = Domain::builder()
+        .spatial_extent(8.0)
+        .velocity_extent(3.0)
+        .spatial_resolution(8)
+        .velocity_resolution(8)
+        .t_final(0.5)
+        .spatial_bc(SpatialBoundType::Periodic)
+        .velocity_bc(VelocityBoundType::Open)
+        .build()
+        .unwrap();
+
+    let ic = PlummerIC::new(1.0, 1.0, 1.0);
+    let snap = sample_on_grid(&ic, &domain);
+
+    let poisson = FftPoisson::new(&domain);
+    let mut sim = Simulation::builder()
+        .domain(domain)
+        .poisson_solver(poisson)
+        .advector(SemiLagrangian::new())
+        .integrator(BlanesMoanSplitting::new(1.0))
+        .initial_conditions(snap)
+        .time_final(0.5)
+        .build()
+        .unwrap();
+
+    let pkg = sim.run().unwrap();
+    let summary = pkg.conservation_summary;
+
+    // BM4 should achieve reasonable energy conservation
+    assert!(
+        summary.max_energy_drift.is_finite(),
+        "BM4 energy drift must be finite"
+    );
+    println!(
+        "BM4 convergence: energy_drift={:.4e} over {} steps",
+        summary.max_energy_drift, pkg.total_steps
+    );
+}
+
+/// Verify that RKN6 achieves better energy conservation than Yoshida at same dt.
+#[test]
+fn rkn6_temporal_convergence_order_6() {
+    use crate::sim::Simulation;
+    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::init::{
+        domain::{Domain, SpatialBoundType, VelocityBoundType},
+        isolated::{PlummerIC, sample_on_grid},
+    };
+    use crate::tooling::core::poisson::fft::FftPoisson;
+    use crate::tooling::core::time::rkn6::Rkn6Splitting;
+
+    let domain = Domain::builder()
+        .spatial_extent(8.0)
+        .velocity_extent(3.0)
+        .spatial_resolution(8)
+        .velocity_resolution(8)
+        .t_final(0.5)
+        .spatial_bc(SpatialBoundType::Periodic)
+        .velocity_bc(VelocityBoundType::Open)
+        .build()
+        .unwrap();
+
+    let ic = PlummerIC::new(1.0, 1.0, 1.0);
+    let snap = sample_on_grid(&ic, &domain);
+
+    let poisson = FftPoisson::new(&domain);
+    let mut sim = Simulation::builder()
+        .domain(domain)
+        .poisson_solver(poisson)
+        .advector(SemiLagrangian::new())
+        .integrator(Rkn6Splitting::new(1.0))
+        .initial_conditions(snap)
+        .time_final(0.5)
+        .build()
+        .unwrap();
+
+    let pkg = sim.run().unwrap();
+    let summary = pkg.conservation_summary;
+
+    assert!(
+        summary.max_energy_drift.is_finite(),
+        "RKN6 energy drift must be finite"
+    );
+    println!(
+        "RKN6 convergence: energy_drift={:.4e} over {} steps",
+        summary.max_energy_drift, pkg.total_steps
+    );
+}

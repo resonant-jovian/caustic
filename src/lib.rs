@@ -1,22 +1,13 @@
-#![allow(non_ascii_idents)]
-#![allow(non_snake_case)]
-#![allow(dead_code)]
-#![allow(unused_variables)]
-#![allow(unused_imports)]
-
 // Feature-gated global allocators
 #[cfg(feature = "jemalloc")]
-#[allow(unsafe_code)]
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[cfg(feature = "mimalloc-alloc")]
-#[allow(unsafe_code)]
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[cfg(feature = "dhat-heap")]
-#[allow(unsafe_code)]
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
@@ -45,6 +36,7 @@ pub use tooling::core::init::cosmological::{ZeldovichIC, ZeldovichSingleMode};
 pub use tooling::core::init::domain::{SpatialBoundType, VelocityBoundType};
 pub use tooling::core::init::isolated::{
     HernquistIC, IsolatedEquilibrium, KingIC, NfwIC, PlummerIC, sample_on_grid,
+    sample_on_grid_with_progress,
 };
 pub use tooling::core::init::mergers::MergerIC;
 pub use tooling::core::init::stability::DiskStabilityIC;
@@ -54,12 +46,23 @@ pub use tooling::core::output::phasespace::{PhaseSpaceDiagnostics, field_energy_
 pub use tooling::core::poisson::fft::{FftIsolated, FftPoisson};
 pub use tooling::core::poisson::ht_poisson::HtPoisson;
 pub use tooling::core::poisson::multigrid::Multigrid;
+pub use tooling::core::poisson::multipole::MultipoleExpansion;
 pub use tooling::core::poisson::spherical::SphericalHarmonicsPoisson;
+pub use tooling::core::poisson::spherical_1d::Spherical1DPoisson;
 pub use tooling::core::poisson::tensor_poisson::TensorPoisson;
 pub use tooling::core::poisson::tree::TreePoisson;
+pub use tooling::core::poisson::vgf::VgfPoisson;
+pub use tooling::core::time::adaptive::AdaptiveStrangSplitting;
+pub use tooling::core::time::blanes_moan::BlanesMoanSplitting;
+pub use tooling::core::time::bug::{BugConfig, BugIntegrator};
+pub use tooling::core::time::cosmological::CosmologicalStrangSplitting;
+pub use tooling::core::time::lawson::LawsonRkIntegrator;
 pub use tooling::core::time::lie::LieSplitting;
+pub use tooling::core::time::parallel_bug::{ParallelBugConfig, ParallelBugIntegrator};
 pub use tooling::core::time::rank_monitor::{InstrumentedStrangSplitting, StepRankDiagnostics};
+pub use tooling::core::time::rk_bug::{RkBugConfig, RkBugIntegrator};
 pub use tooling::core::time::rkei::RkeiIntegrator;
+pub use tooling::core::time::rkn6::Rkn6Splitting;
 pub use tooling::core::time::strang::StrangSplitting;
 pub use tooling::core::time::unsplit::UnsplitIntegrator;
 pub use tooling::core::time::yoshida::YoshidaSplitting;
@@ -72,8 +75,11 @@ pub use tooling::core::algos::amr::AmrGrid;
 pub use tooling::core::algos::hybrid::HybridRepr;
 pub use tooling::core::algos::sheet::SheetTracker;
 pub use tooling::core::algos::spectral::SpectralV;
+pub use tooling::core::algos::spherical_repr::SphericalRepr;
 pub use tooling::core::algos::tensor::TensorTrain;
 pub use tooling::core::algos::uniform::UniformGrid6D;
+pub use tooling::core::algos::wpfc;
+pub use tooling::core::algos::wpfc::AdvectionScheme;
 
 // Conservation framework (Phase 4: LoMaC)
 pub use tooling::core::conservation::conservative_svd;

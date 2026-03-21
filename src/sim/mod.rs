@@ -44,6 +44,10 @@ pub struct Simulation {
     /// Per-step phase timing breakdown from the most recent `step()` call.
     /// Includes integrator sub-step timings + post-advance diagnostics timing.
     pub last_step_timings: StepTimings,
+    /// Cached density from the most recent step, for TUI reuse.
+    pub cached_density: Option<DensityField>,
+    /// Cached potential from the most recent step, for TUI reuse.
+    pub cached_potential: Option<PotentialField>,
     /// Optional shared progress state for intra-step TUI visibility.
     progress: Option<Arc<StepProgress>>,
 }
@@ -58,7 +62,15 @@ impl Simulation {
     pub fn run(&mut self) -> anyhow::Result<ExitPackage> {
         loop {
             if let Some(reason) = self.step()? {
-                let snapshot = self.repr.to_snapshot(self.time);
+                let snapshot = if self.repr.can_materialize() {
+                    self.repr.to_snapshot(self.time)
+                } else {
+                    PhaseSpaceSnapshot {
+                        data: vec![],
+                        shape: [0; 6],
+                        time: self.time,
+                    }
+                };
                 let history = self.diagnostics.history.clone();
                 let wall_secs = self.start_time.elapsed().as_secs_f64();
                 return Ok(ExitPackage::assemble(
@@ -91,6 +103,11 @@ impl Simulation {
             self.integrator.max_dt(&*self.repr, cfl_factor)
         };
 
+        // Use adaptive integrator's suggestion if available (CFL as hard upper bound)
+        if let Some(adaptive_dt) = self.integrator.suggested_dt() {
+            dt = dt.min(adaptive_dt);
+        }
+
         // Clamp dt to not overshoot t_final by more than necessary
         let t_final = {
             use rust_decimal::prelude::ToPrimitive;
@@ -110,12 +127,21 @@ impl Simulation {
             .cloned()
             .unwrap_or_default();
 
+        // Extend sub_step tracking to include post-advance phases
+        if let Some(ref p) = self.progress {
+            let snap = p.read();
+            let post_count: u8 = 2 + u8::from(self.lomac.is_some());
+            p.set_sub_step(snap.sub_step, snap.sub_step_total + post_count);
+        }
+
         // LoMaC conservation projection: advance macroscopic state in sync
         // with kinetic, then project f to restore exact moments.
         if self.lomac.is_some()
             && let Some(ref p) = self.progress
         {
+            let sub = p.read().sub_step;
             p.set_phase(StepPhase::LoMaC);
+            p.set_sub_step(sub + 1, p.read().sub_step_total);
         }
         if let Some(ref mut lomac) = self.lomac {
             let t0 = std::time::Instant::now();
@@ -152,6 +178,9 @@ impl Simulation {
                         self.domain.clone(),
                     ),
                 );
+                if let Some(ref p) = self.progress {
+                    self.repr.set_progress(p.clone());
+                }
             } else {
                 // Dense path (UniformGrid6D, etc.)
                 let snapshot = self.repr.to_snapshot(self.time);
@@ -167,6 +196,9 @@ impl Simulation {
                         self.domain.clone(),
                     ),
                 );
+                if let Some(ref p) = self.progress {
+                    self.repr.set_progress(p.clone());
+                }
             }
             timings.other_ms += t0.elapsed().as_secs_f64() * 1000.0;
         }
@@ -176,10 +208,21 @@ impl Simulation {
 
         // Post-advance density computation (for diagnostics + caching)
         if let Some(ref p) = self.progress {
+            let sub = p.read().sub_step;
             p.set_phase(StepPhase::PostDensity);
+            p.set_sub_step(sub + 1, p.read().sub_step_total);
         }
         let t0 = std::time::Instant::now();
-        let density = self.repr.compute_density();
+        // When LoMaC is active, the post-projection density equals the KFVS
+        // target density by construction, so skip the redundant compute_density().
+        let density = if let Some(ref lomac) = self.lomac {
+            DensityField {
+                data: lomac.kfvs.state.iter().map(|m| m.density).collect(),
+                shape: lomac.spatial_shape,
+            }
+        } else {
+            self.repr.compute_density()
+        };
         let potential = self.poisson.solve(&density, self.g);
         timings.density_ms += t0.elapsed().as_secs_f64() * 1000.0;
 
@@ -190,7 +233,9 @@ impl Simulation {
         self.cached_rho_max = Some(density.data.iter().cloned().fold(0.0_f64, f64::max));
 
         if let Some(ref p) = self.progress {
+            let sub = p.read().sub_step;
             p.set_phase(StepPhase::Diagnostics);
+            p.set_sub_step(sub + 1, p.read().sub_step_total);
         }
         let t0 = std::time::Instant::now();
         let diag = self.diagnostics.compute_with_density(
@@ -204,6 +249,10 @@ impl Simulation {
 
         self.last_step_timings = timings;
 
+        // Cache density and potential for TUI reuse (avoids redundant recomputation)
+        self.cached_density = Some(density);
+        self.cached_potential = Some(potential);
+
         if let Some(ref p) = self.progress {
             p.set_phase(StepPhase::StepComplete);
         }
@@ -215,6 +264,11 @@ impl Simulation {
     /// Propagates to the integrator so sub-step phases are reported.
     pub fn set_progress(&mut self, p: Arc<StepProgress>) {
         self.integrator.set_progress(p.clone());
+        self.repr.set_progress(p.clone());
+        self.poisson.set_progress(p.clone());
+        if let Some(ref mut lomac) = self.lomac {
+            lomac.set_progress(p.clone());
+        }
         self.progress = Some(p);
     }
 
@@ -445,9 +499,16 @@ impl SimulationBuilder {
             ];
             let mut lom = LoMaC::new(spatial_shape, velocity_shape, dx, dv, v_min);
 
-            // Initialize from the IC distribution
-            let snapshot = repr.to_snapshot(0.0);
-            lom.initialize_from_kinetic(&snapshot.data);
+            // Initialize from the IC distribution — use HT-native path if available
+            if let Some(ht) = repr
+                .as_any()
+                .downcast_ref::<crate::tooling::core::algos::ht::HtTensor>()
+            {
+                lom.initialize_from_ht(ht);
+            } else {
+                let snapshot = repr.to_snapshot(0.0);
+                lom.initialize_from_kinetic(&snapshot.data);
+            }
             Some(lom)
         } else {
             None
@@ -470,6 +531,8 @@ impl SimulationBuilder {
             start_time: std::time::Instant::now(),
             cached_rho_max: None,
             last_step_timings: StepTimings::default(),
+            cached_density: None,
+            cached_potential: None,
             progress: None,
         })
     }

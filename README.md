@@ -12,6 +12,8 @@ caustic is a modular, general-purpose library for solving the Vlasov–Poisson e
 
 The library provides a pluggable architecture where the phase-space representation, Poisson solver, time integrator, and initial condition generator can be swapped independently.
 
+> **Note:** This library has not yet reached version 0.1.0. The API is unstable, features may be incomplete or change without notice, and it is not yet intended for general use. Even after 0.1.0, until version 1.0.0 it should not be relied upon for production workloads or serious research.
+
 ## Why not N-body?
 
 N-body simulations sample the distribution function with discrete particles. This introduces noise and artificial two-body relaxation that destroys exactly the structures a collisionless solver should preserve: caustic surfaces, thin phase-space streams, and the true velocity distribution at any point. caustic solves the governing equation directly — no particles, no sampling noise, no artificial collisionality.
@@ -22,7 +24,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-caustic = "0.0.9"
+caustic = "0.0.11"
 ```
 
 ### Minimal example: Plummer sphere equilibrium
@@ -85,10 +87,10 @@ Each solver component is a Rust trait; implementations are swapped independently
 
 | Trait | Role | Implementations |
 |---|---|---|
-| `PhaseSpaceRepr` | Store and query f(x,v) | `UniformGrid6D`, `HtTensor`, `TensorTrain`, `SheetTracker`, `SpectralV`, `AmrGrid`, `HybridRepr` |
-| `PoissonSolver` | Solve ∇²Φ = 4πGρ | `FftPoisson`, `FftIsolated`, `TensorPoisson`, `Multigrid`, `SphericalHarmonicsPoisson`, `TreePoisson` |
+| `PhaseSpaceRepr` | Store and query f(x,v) | `UniformGrid6D`, `HtTensor`, `TensorTrain`, `SheetTracker`, `SpectralV`, `AmrGrid`, `HybridRepr`, `SphericalRepr` |
+| `PoissonSolver` | Solve ∇²Φ = 4πGρ | `FftPoisson`, `FftIsolated` *(deprecated)*, `VgfPoisson`, `TensorPoisson`, `HtPoisson`, `Multigrid`, `SphericalHarmonicsPoisson`, `TreePoisson`, `MultipoleExpansion`, `Spherical1DPoisson` |
 | `Advector` | Advance f by Δt | `SemiLagrangian` (Catmull-Rom + sparse polynomial) |
-| `TimeIntegrator` | Orchestrate timestep | `StrangSplitting` (2nd), `YoshidaSplitting` (4th), `LieSplitting` (1st), `UnsplitIntegrator` (RK2/3/4) |
+| `TimeIntegrator` | Orchestrate timestep | `StrangSplitting` (2nd), `YoshidaSplitting` (4th), `LieSplitting` (1st), `UnsplitIntegrator` (RK2/3/4), `RkeiIntegrator` (3rd), `InstrumentedStrangSplitting` (2nd), `AdaptiveStrangSplitting` (2nd), `BlanesMoanSplitting` (4th), `Rkn6Splitting` (6th), `BugIntegrator`, `RkBugIntegrator`, `ParallelBugIntegrator`, `CosmologicalStrangSplitting` (2nd), `LawsonRkIntegrator` |
 
 ### Phase-space representations
 
@@ -101,18 +103,22 @@ Each solver component is a Rust trait; implementations are swapped independently
 | `SpectralV` | O(N³M³) | Hermite spectral basis in velocity; finite-difference in space. |
 | `AmrGrid` | adaptive | Adaptive mesh refinement in 6D with gradient-based refinement. |
 | `HybridRepr` | adaptive | Sheet/grid hybrid with caustic-aware interface switching. |
+| `SphericalRepr` | O(N_r N_l²) | Spherical harmonic basis with radial grid. |
 
 ### Poisson solvers
 
 | Solver | BC | Complexity | Description |
 |---|---|---|---|
 | `FftPoisson` | Periodic | O(N³ log N) | Real-to-complex FFT via `realfft`, rayon-parallelized. |
-| `FftIsolated` | Isolated | O(N³ log N) | Hockney-Eastwood zero-padding on (2N)³ grid. |
+| `FftIsolated` *(deprecated)* | Isolated | O(N³ log N) | Hockney-Eastwood zero-padding on (2N)³ grid. Deprecated in favor of `VgfPoisson`. |
+| `VgfPoisson` | Isolated | O(N³ log N) | Spectral-accuracy isolated BC via Vico-Greengard-Ferrando method. |
 | `TensorPoisson` | Isolated | O(N³ log N) | Braess-Hackbusch exponential sum Green's function + dense 3D FFT. 2nd-order near-field correction. |
 | `HtPoisson` | Isolated | O(R_G·r·N log N) | HT-format Poisson: exp-sum Green's function in HT tensor format with rank re-compression. |
 | `Multigrid` | Periodic/Isolated | O(N³) | V-cycle with red-black Gauss-Seidel smoothing, rayon-parallelized. |
 | `SphericalHarmonicsPoisson` | Isolated | O(l²_max N) | Legendre decomposition + radial ODE integration. |
 | `TreePoisson` | Isolated | O(N³ log N³) | Barnes-Hut octree with multipole expansion, rayon-parallelized. |
+| `MultipoleExpansion` | Isolated | O(l²_max N) | Multipole expansion gravity solver. |
+| `Spherical1DPoisson` | Spherical | O(N_r) | 1D radial Poisson solver for spherically symmetric problems. |
 
 ### Time integrators
 
@@ -124,6 +130,14 @@ Each solver component is a Rust trait; implementations are swapped independently
 | `UnsplitIntegrator` | 2/3/4 | Method-of-lines RK on full Vlasov PDE. No splitting error. Re-solves Poisson at each stage. |
 | `RkeiIntegrator` | 3 | RKEI (Runge-Kutta Exponential Integrator). SSP-RK3 with unsplit characteristics. 3 Poisson solves per step. |
 | `InstrumentedStrangSplitting` | 2 | Strang splitting with per-sub-step rank diagnostics (drift/kick/Poisson amplification tracking). |
+| `AdaptiveStrangSplitting` | 2 | Strang with adaptive timestep control. |
+| `BlanesMoanSplitting` | 4 | Blanes-Moan optimized splitting coefficients. |
+| `Rkn6Splitting` | 6 | 6th-order Runge-Kutta-Nyström splitting. |
+| `BugIntegrator` | varies | Basis Update & Galerkin (BUG) for HT tensors. |
+| `RkBugIntegrator` | varies | Runge-Kutta BUG variant. |
+| `ParallelBugIntegrator` | varies | Parallelized BUG. |
+| `CosmologicalStrangSplitting` | 2 | Strang with cosmological scale factor. |
+| `LawsonRkIntegrator` | varies | Lawson Runge-Kutta exponential integrator. |
 
 ### The `PhaseSpaceRepr` trait
 
@@ -140,10 +154,13 @@ pub trait PhaseSpaceRepr: Send + Sync {
     fn entropy(&self) -> f64;
     fn stream_count(&self) -> StreamCountField;
     fn velocity_distribution(&self, position: &[f64; 3]) -> Vec<f64>;
-    fn total_kinetic_energy(&self) -> f64;
-    fn to_snapshot(&self, time: f64) -> PhaseSpaceSnapshot;
+    fn total_kinetic_energy(&self) -> f64;       // default: NAN
+    fn to_snapshot(&self, time: f64) -> PhaseSpaceSnapshot;  // default: empty
     fn load_snapshot(&mut self, snap: PhaseSpaceSnapshot);
     fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;    // required, no default
+    fn can_materialize(&self) -> bool;           // default: true
+    fn memory_bytes(&self) -> usize;             // default: 0
 }
 ```
 
@@ -241,7 +258,7 @@ Termination is configurable via the builder API:
 
 ## Validation suite
 
-**163+ tests** — run with `cargo test --release -- --test-threads=1`:
+**188 tests** — run with `cargo test --release -- --test-threads=1`:
 
 ### Physics validation
 
@@ -305,12 +322,14 @@ Plus integration tests, HT tensor/ACA tests (17), conservation framework tests (
 | NFW: numerical Eddington inversion | `init/isolated.rs` | Navarro, Frenk & White, ApJ 462 (1996) |
 | Zel'dovich approximation | `init/cosmological.rs` | Zel'dovich, A&A 5 (1970) |
 | Shu disk DF: f(E, L_z) | `init/stability.rs` | Shu, ApJ 160 (1970) |
+| VGF isolated Poisson | `poisson/vgf.rs` | Vico, Greengard & Ferrando, JCP 323 (2016) |
+| BUG (Basis Update & Galerkin) | `time/bug.rs` | Ceruti, Lubich et al., BIT Numer. Math. (2022) |
 
 ## Feature flags
 
 ```toml
 [dependencies]
-caustic = { version = "0.0.6", features = ["hdf5"] }
+caustic = { version = "0.0.11", features = ["hdf5"] }
 ```
 
 | Flag | Description |
@@ -329,6 +348,12 @@ caustic = { version = "0.0.6", features = ["hdf5"] }
 - **Benchmarks**: criterion benchmarks (`cargo bench`), benchmark binary: `solver_kernels`
 - **Instrumentation**: `tracing::info_span!` on all hot methods (zero overhead without a subscriber)
 - **Profiling profile**: `[profile.profiling]` inherits release with debug symbols for `perf`/`samply`
+
+## Code quality
+
+- **`warnings = "forbid"`** — all rustc warnings are hard errors
+- **`clippy::unwrap_used`, `expect_used`, `panic` = `"deny"`** — no panicking in non-test code
+- **HT OOM protection** — `can_materialize()` lets compressed representations (HT, TT) report whether full 6D materialization is safe; large grids gracefully degrade instead of crashing
 
 ## Companion: phasma
 

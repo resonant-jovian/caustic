@@ -11,6 +11,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use caustic::prelude::*;
 use caustic::tooling::core::algos::lagrangian::sl_shift_1d;
 use caustic::tooling::core::algos::uniform::UniformGrid6D;
+#[allow(deprecated)]
 use caustic::{
     FftIsolated, FftPoisson, KfvsSolver, LoMaC, Multigrid, PlummerIC, RkeiIntegrator,
     SemiLagrangian, SphericalHarmonicsPoisson, StrangSplitting, TensorPoisson, TreePoisson,

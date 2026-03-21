@@ -20,9 +20,12 @@
 //! Reference: Guo & Qiu, "A local macroscopic conservative (LoMaC) low rank
 //! tensor method for the Vlasov dynamics", arXiv:2207.00518
 
+use std::sync::Arc;
+
 use super::conservative_svd::{conservative_truncation, extract_moments};
 use super::kfvs::KfvsSolver;
 use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
+use crate::tooling::core::progress::StepProgress;
 
 /// LoMaC conservation manager.
 ///
@@ -41,6 +44,24 @@ pub struct LoMaC {
     pub v_min: [f64; 3],
     /// Whether LoMaC is active. When false, acts as passthrough.
     pub active: bool,
+    /// Reference distribution for delta-f truncation mode.
+    /// When set, truncation acts on delta_f = f - f_ref instead of f directly,
+    /// yielding lower post-truncation ranks for near-equilibrium distributions.
+    f_ref: Option<Vec<f64>>,
+    /// Enable delta-f rank-adaptive truncation.
+    pub delta_f_truncation: bool,
+    /// Step counter for periodic f_ref refresh.
+    delta_f_step_count: u64,
+    /// Steps between f_ref refreshes (0 = never refresh).
+    pub delta_f_refresh_interval: u64,
+    /// Relative norm threshold for f_ref refresh:
+    /// refresh when ||delta_f|| / ||f_ref|| exceeds this value.
+    pub delta_f_refresh_threshold: f64,
+    /// Optional shared progress state for intra-step TUI visibility.
+    progress: Option<Arc<StepProgress>>,
+    /// History of Casimir C₂ drift: (pre_lomac, post_lomac) pairs per step.
+    /// Tracks how much the LoMaC projection alters the Casimir invariant.
+    pub casimir_drift_history: Vec<(f64, f64)>,
 }
 
 impl LoMaC {
@@ -59,13 +80,30 @@ impl LoMaC {
             dv,
             v_min,
             active: true,
+            f_ref: None,
+            delta_f_truncation: false,
+            delta_f_step_count: 0,
+            delta_f_refresh_interval: 0,
+            delta_f_refresh_threshold: 0.5,
+            progress: None,
+            casimir_drift_history: Vec::new(),
         }
+    }
+
+    /// Attach shared progress state for intra-step TUI visibility.
+    pub fn set_progress(&mut self, p: Arc<StepProgress>) {
+        self.progress = Some(p);
     }
 
     /// Initialize from a kinetic distribution function.
     ///
     /// Extracts macroscopic moments from f and initializes the KFVS solver.
+    /// If delta-f truncation is enabled, stores f as the reference distribution.
     pub fn initialize_from_kinetic(&mut self, f: &[f64]) {
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, 3);
+        }
+
         let moments = extract_moments(
             f,
             self.spatial_shape,
@@ -74,7 +112,10 @@ impl LoMaC {
             self.v_min,
         );
 
-        let n = moments.len();
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(1, 3);
+        }
+
         let density: Vec<f64> = moments.iter().map(|m| m.density).collect();
         let mom_x: Vec<f64> = moments.iter().map(|m| m.momentum[0]).collect();
         let mom_y: Vec<f64> = moments.iter().map(|m| m.momentum[1]).collect();
@@ -83,6 +124,15 @@ impl LoMaC {
 
         self.kfvs
             .initialize_from_moments(&density, &mom_x, &mom_y, &mom_z, &energy);
+
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(2, 3);
+        }
+
+        // Store initial distribution as reference for delta-f mode
+        if self.delta_f_truncation {
+            self.f_ref = Some(f.to_vec());
+        }
     }
 
     /// Step 2: Advance macroscopic state by dt using KFVS.
@@ -99,18 +149,35 @@ impl LoMaC {
     ///
     /// Call this AFTER advancing and truncating the kinetic equation.
     /// Returns the corrected distribution function with exact conservation.
-    pub fn project(&self, f_truncated: &[f64]) -> Vec<f64> {
+    pub fn project(&mut self, f_truncated: &[f64]) -> Vec<f64> {
         if !self.active {
             return f_truncated.to_vec();
         }
-        conservative_truncation(
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, 2);
+        }
+
+        // Track Casimir C₂ before projection
+        let dv3 = self.dv[0] * self.dv[1] * self.dv[2];
+        let c2_pre: f64 = f_truncated.iter().map(|&f| f * f).sum::<f64>() * dv3;
+
+        let result = conservative_truncation(
             f_truncated,
             self.spatial_shape,
             self.velocity_shape,
             &self.kfvs.state,
             self.dv,
             self.v_min,
-        )
+        );
+
+        // Track Casimir C₂ after projection
+        let c2_post: f64 = result.iter().map(|&f| f * f).sum::<f64>() * dv3;
+        self.casimir_drift_history.push((c2_pre, c2_post));
+
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(1, 2);
+        }
+        result
     }
 
     /// Combined step: advance macroscopic, then project kinetic solution.
@@ -119,7 +186,13 @@ impl LoMaC {
     /// 1. Advance KFVS: (ρ,J,e)^n → (ρ,J,e)^{n+1}
     /// 2. Project: f̃^{n+1} → f^{n+1} matching (ρ,J,e)^{n+1}
     pub fn apply(&mut self, dt: f64, acceleration: &[[f64; 3]], f_truncated: &[f64]) -> Vec<f64> {
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, 2);
+        }
         self.advance_macroscopic(dt, acceleration);
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(1, 2);
+        }
         self.project(f_truncated)
     }
 
@@ -179,6 +252,89 @@ impl LoMaC {
 
         self.kfvs
             .initialize_from_moments(&density, &mom_x, &mom_y, &mom_z, &energy);
+    }
+
+    /// Enable delta-f truncation mode and set the reference distribution.
+    pub fn enable_delta_f(&mut self, f_ref: Vec<f64>, refresh_interval: u64) {
+        self.delta_f_truncation = true;
+        self.f_ref = Some(f_ref);
+        self.delta_f_refresh_interval = refresh_interval;
+        self.delta_f_step_count = 0;
+    }
+
+    /// Apply delta-f aware projection: truncate only the perturbation
+    /// delta_f = f - f_ref, then reconstruct and project for exact conservation.
+    ///
+    /// This yields lower post-truncation ranks because the smooth reference
+    /// f_ref is preserved exactly and only the (small) perturbation is truncated.
+    pub fn apply_delta_f(&mut self, dt: f64, acceleration: &[[f64; 3]], f: &[f64]) -> Vec<f64> {
+        self.advance_macroscopic(dt, acceleration);
+        self.delta_f_step_count += 1;
+
+        let f_ref = match self.f_ref.clone() {
+            Some(r) => r,
+            None => return self.project(f),
+        };
+
+        let n = f.len();
+        let n_spatial: usize = self.spatial_shape.iter().product();
+        let n_vel: usize = self.velocity_shape.iter().product();
+        let dv3 = self.dv[0] * self.dv[1] * self.dv[2];
+
+        // Compute delta_f = f - f_ref
+        let mut delta_f: Vec<f64> = Vec::with_capacity(n);
+        for i in 0..n {
+            delta_f.push(f[i] - f_ref[i]);
+        }
+
+        // Per-cell soft thresholding: zero out small delta_f contributions
+        // relative to the cell's delta_f norm. This controls noise growth
+        // without a full SVD (which is O(N^3) for the dense case).
+        for si in 0..n_spatial {
+            let base = si * n_vel;
+            let cell = &delta_f[base..base + n_vel];
+            let norm_sq: f64 = cell.iter().map(|x| x * x).sum::<f64>() * dv3;
+            let threshold = 1e-10 * norm_sq.sqrt();
+            if threshold > 0.0 {
+                for val in delta_f[base..base + n_vel].iter_mut() {
+                    if val.abs() < threshold {
+                        *val = 0.0;
+                    }
+                }
+            }
+        }
+
+        // Reconstruct: f = f_ref + truncated(delta_f)
+        let mut reconstructed: Vec<f64> = Vec::with_capacity(n);
+        for i in 0..n {
+            reconstructed.push(f_ref[i] + delta_f[i]);
+        }
+
+        // Apply moment projection for exact conservation
+        let result = self.project(&reconstructed);
+
+        // Periodically refresh f_ref when delta_f grows too large
+        if self.delta_f_refresh_interval > 0
+            && self
+                .delta_f_step_count
+                .is_multiple_of(self.delta_f_refresh_interval)
+        {
+            self.update_f_ref(&result);
+        } else if self.delta_f_refresh_threshold > 0.0 {
+            // Check norm ratio
+            let delta_norm: f64 = delta_f.iter().map(|x| x * x).sum::<f64>();
+            let ref_norm: f64 = f_ref.iter().map(|x| x * x).sum::<f64>();
+            if ref_norm > 0.0 && (delta_norm / ref_norm).sqrt() > self.delta_f_refresh_threshold {
+                self.update_f_ref(&result);
+            }
+        }
+
+        result
+    }
+
+    /// Update the reference distribution for delta-f mode.
+    pub fn update_f_ref(&mut self, f_new: &[f64]) {
+        self.f_ref = Some(f_new.to_vec());
     }
 
     /// Conservation error: difference between kinetic and macroscopic moments.

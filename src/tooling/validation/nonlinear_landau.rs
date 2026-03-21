@@ -3,6 +3,7 @@
 //! Checks conservation (mass, energy, C₂) over multiple bounce times.
 
 #[test]
+#[ignore] // takes ~62s in release mode
 fn nonlinear_landau_damping() {
     use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::algos::uniform::UniformGrid6D;

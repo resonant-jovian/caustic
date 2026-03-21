@@ -94,8 +94,9 @@ impl DiskStabilityIC {
             halo_potential: None,
             perturbation_mode_m,
             perturbation_pattern_speed: Decimal::from_f64_retain(perturbation_pattern_speed)
-                .unwrap(),
-            perturbation_amplitude: Decimal::from_f64_retain(perturbation_amplitude).unwrap(),
+                .unwrap_or(Decimal::ZERO),
+            perturbation_amplitude: Decimal::from_f64_retain(perturbation_amplitude)
+                .unwrap_or(Decimal::ZERO),
             perturbation_pattern_speed_f64: perturbation_pattern_speed,
             perturbation_amplitude_f64: perturbation_amplitude,
         }
@@ -115,8 +116,8 @@ impl DiskStabilityIC {
             bulge: None,
             halo_potential: None,
             perturbation_mode_m,
-            perturbation_pattern_speed_f64: perturbation_pattern_speed.to_f64().unwrap(),
-            perturbation_amplitude_f64: perturbation_amplitude.to_f64().unwrap(),
+            perturbation_pattern_speed_f64: perturbation_pattern_speed.to_f64().unwrap_or(0.0),
+            perturbation_amplitude_f64: perturbation_amplitude.to_f64().unwrap_or(0.0),
             perturbation_pattern_speed,
             perturbation_amplitude,
         }
@@ -274,7 +275,11 @@ impl DiskStabilityIC {
     ///
     /// The vertical structure uses a sech²(z/z_0) profile with
     /// z_0 = σ_z / √(4πGΣ), assuming σ_z ≈ σ_R (isotropic approximation).
-    pub fn sample_on_grid(&self, domain: &Domain) -> PhaseSpaceSnapshot {
+    pub fn sample_on_grid(
+        &self,
+        domain: &Domain,
+        progress: Option<&crate::tooling::core::progress::StepProgress>,
+    ) -> PhaseSpaceSnapshot {
         let g = 1.0;
 
         let nx1 = domain.spatial_res.x1 as usize;
@@ -305,6 +310,14 @@ impl DiskStabilityIC {
 
         let perturbation_m = self.perturbation_mode_m;
         let perturbation_amp = self.perturbation_amplitude_f64;
+
+        let counter = std::sync::atomic::AtomicU64::new(0);
+        let report_interval = (nx1 / 100).max(1) as u64;
+
+        // Establish 0% baseline so the TUI doesn't jump to a non-zero first value
+        if let Some(p) = progress {
+            p.set_intra_progress(0, nx1 as u64);
+        }
 
         for ix1 in 0..nx1 {
             let x1 = -lx[0] + (ix1 as f64 + 0.5) * dx[0];
@@ -443,6 +456,13 @@ impl DiskStabilityIC {
                     }
                 }
             }
+
+            if let Some(p) = progress {
+                let c = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if c.is_multiple_of(report_interval) {
+                    p.set_intra_progress(c, nx1 as u64);
+                }
+            }
         }
 
         PhaseSpaceSnapshot {
@@ -499,7 +519,7 @@ mod tests {
             .velocity_bc(VelocityBoundType::Open)
             .build()
             .unwrap();
-        let snap = ic.sample_on_grid(&domain);
+        let snap = ic.sample_on_grid(&domain, None);
         assert_eq!(snap.shape, [8, 8, 8, 8, 8, 8]);
         assert!(snap.data.iter().all(|v| v.is_finite()));
         assert!(

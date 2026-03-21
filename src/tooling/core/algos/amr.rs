@@ -82,10 +82,14 @@ impl AmrCell {
             })
             .collect();
 
-        // SAFETY: we know children_vec has exactly 64 elements.
-        let boxed_array: Box<[AmrCell; 64]> = children_vec
-            .try_into()
-            .unwrap_or_else(|v: Vec<AmrCell>| panic!("expected 64 children, got {}", v.len()));
+        // SAFETY: children_vec is constructed from (0..64).map() above, so it
+        // always has exactly 64 elements. The try_into cannot fail.
+        debug_assert_eq!(children_vec.len(), 64);
+        let boxed_slice = children_vec.into_boxed_slice();
+        let boxed_array: Box<[AmrCell; 64]> = match boxed_slice.try_into() {
+            Ok(arr) => arr,
+            Err(_) => return, // unreachable: length is always 64
+        };
 
         self.children = Some(boxed_array);
     }
@@ -203,6 +207,11 @@ pub struct AmrGrid {
     pub gradient_threshold: f64,
     /// Maximum refinement level (0 = root only).
     pub max_level: usize,
+    /// Velocity block removal threshold: blocks with max(|f|) < this are deallocated.
+    /// Set to 0 to disable sparse velocity cleanup. Default: 1e-14.
+    pub velocity_removal_threshold: f64,
+    /// Current active block count (leaves with non-negligible f).
+    pub active_block_count: usize,
 }
 
 impl AmrGrid {
@@ -226,19 +235,24 @@ impl AmrGrid {
             level: 0,
         };
 
-        AmrGrid {
+        let mut grid = AmrGrid {
             root,
             domain,
             refinement_threshold,
             gradient_threshold: refinement_threshold,
             max_level: max_levels,
-        }
+            velocity_removal_threshold: 1e-14,
+            active_block_count: 1,
+        };
+        grid.update_block_count();
+        grid
     }
 
     /// Refine cells where |f| exceeds the refinement threshold, up to max_level.
     pub fn refine(&mut self) {
         self.root
             .refine_recursive(self.refinement_threshold, self.max_level);
+        self.update_block_count();
     }
 
     /// Merge children back into parent when their values are nearly uniform
@@ -246,6 +260,26 @@ impl AmrGrid {
     pub fn coarsen(&mut self) {
         let merge_threshold = self.refinement_threshold / 10.0;
         self.root.coarsen_recursive(merge_threshold);
+        self.update_block_count();
+    }
+
+    /// Remove velocity-space blocks where max(|f|) < velocity_removal_threshold.
+    ///
+    /// Walks the tree and coarsens leaf cells in velocity dimensions whose
+    /// values are below the threshold. This reduces memory for cold/warm
+    /// distributions where most of velocity space is empty.
+    pub fn cleanup_sparse_velocity(&mut self) {
+        if self.velocity_removal_threshold <= 0.0 {
+            return;
+        }
+        let thresh = self.velocity_removal_threshold;
+        self.root.coarsen_recursive(thresh);
+        self.update_block_count();
+    }
+
+    /// Update the active block count from the tree.
+    fn update_block_count(&mut self) {
+        self.active_block_count = self.root.collect_leaves().len();
     }
 
     /// Number of leaf cells currently in the tree.
@@ -727,6 +761,10 @@ impl PhaseSpaceRepr for AmrGrid {
     }
 
     fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 }

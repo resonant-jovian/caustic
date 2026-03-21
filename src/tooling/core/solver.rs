@@ -11,4 +11,7 @@ pub trait PoissonSolver {
     /// Compute the gravitational acceleration g = −∇Φ via spectral differentiation
     /// or finite differences.
     fn compute_acceleration(&self, potential: &PotentialField) -> AccelerationField;
+
+    /// Attach shared progress state for intra-phase cell-level reporting.
+    fn set_progress(&mut self, _progress: std::sync::Arc<super::progress::StepProgress>) {}
 }

@@ -2,6 +2,8 @@
 //! O(N³) per V-cycle, O(N³ log ε) total.
 
 use rayon::prelude::*;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::super::{
     init::domain::{Domain, SpatialBoundType},
@@ -20,6 +22,8 @@ pub struct Multigrid {
     pub bc: SpatialBoundType,
     pub n_smooth: usize,
     pub tolerance: f64,
+    /// Shared progress state for intra-phase reporting.
+    progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
 impl Multigrid {
@@ -62,6 +66,7 @@ impl Multigrid {
             bc,
             n_smooth: smoothing_steps,
             tolerance: 1e-10,
+            progress: None,
         }
     }
 }
@@ -94,32 +99,30 @@ fn smooth_red_black(
 
     let is_periodic = matches!(bc, SpatialBoundType::Periodic);
 
-    // Pre-compute flat indices for each parity
-    let mut red_indices = Vec::new();
-    let mut black_indices = Vec::new();
+    // Pre-compute (flat, ix, iy, iz) tuples for each parity to avoid
+    // repeated integer division (ix = flat / (ny*nz), ~13 cycles) inside
+    // the parallel closure.
+    let mut red_indices: Vec<(usize, usize, usize, usize)> = Vec::new();
+    let mut black_indices: Vec<(usize, usize, usize, usize)> = Vec::new();
     for flat in 0..n_total {
         let ix = flat / (ny * nz);
         let iy = (flat / nz) % ny;
         let iz = flat % nz;
         if (ix + iy + iz) % 2 == 0 {
-            red_indices.push(flat);
+            red_indices.push((flat, ix, iy, iz));
         } else {
-            black_indices.push(flat);
+            black_indices.push((flat, ix, iy, iz));
         }
     }
     let parity_sets = [&red_indices, &black_indices];
 
     for _sweep in 0..n_sweeps {
         for indices in &parity_sets {
-            // Collect-then-write: compute new values in parallel, then write back sequentially.
-            // This avoids unsafe while maintaining the red-black correctness guarantee.
+            // Compute new values in parallel, then write back sequentially.
+            // Red-black GS guarantees no write conflicts within a parity pass.
             let new_values: Vec<(usize, f64)> = indices
                 .par_iter()
-                .map(|&flat| {
-                    let ix = flat / (ny * nz);
-                    let iy = (flat / nz) % ny;
-                    let iz = flat % nz;
-
+                .map(|&(flat, ix, iy, iz)| {
                     let (phi_xm, phi_xp, phi_ym, phi_yp, phi_zm, phi_zp);
 
                     if is_periodic {
@@ -461,6 +464,10 @@ fn l2_norm(v: &[f64]) -> f64 {
 }
 
 impl PoissonSolver for Multigrid {
+    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
+        self.progress = Some(p);
+    }
+
     /// Solve ∇²Φ = 4πGρ using multigrid V-cycles.
     ///
     /// Iterates V-cycles until the relative residual drops below `tolerance`
@@ -481,8 +488,11 @@ impl PoissonSolver for Multigrid {
         // Initialize phi to zero
         let mut phi = vec![0.0; n_total];
 
-        let max_iter = 100;
+        let max_iter = 100u64;
         for _iter in 0..max_iter {
+            if let Some(ref p) = self.progress {
+                p.set_intra_progress(_iter, max_iter);
+            }
             v_cycle(
                 &mut phi,
                 &rhs,

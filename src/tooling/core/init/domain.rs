@@ -131,14 +131,14 @@ impl Domain {
         velocity_res: &VelocityRes,
     ) -> ([f64; 3], [f64; 3], [f64; 3], [f64; 3]) {
         let lx = [
-            spatial.x1.to_f64().unwrap(),
-            spatial.x2.to_f64().unwrap(),
-            spatial.x3.to_f64().unwrap(),
+            spatial.x1.to_f64().unwrap_or(1.0),
+            spatial.x2.to_f64().unwrap_or(1.0),
+            spatial.x3.to_f64().unwrap_or(1.0),
         ];
         let lv = [
-            velocity.v1.to_f64().unwrap(),
-            velocity.v2.to_f64().unwrap(),
-            velocity.v3.to_f64().unwrap(),
+            velocity.v1.to_f64().unwrap_or(1.0),
+            velocity.v2.to_f64().unwrap_or(1.0),
+            velocity.v3.to_f64().unwrap_or(1.0),
         ];
         let dx = [
             2.0 * lx[0] / spatial_res.x1 as f64,
@@ -196,7 +196,7 @@ impl DomainBuilder {
 
     /// Set symmetric spatial extent: domain spans [−L, L]³.
     pub fn spatial_extent(mut self, l: f64) -> Self {
-        let L = Decimal::from_f64_retain(l).expect("spatial extent: l should be a decimal");
+        let L = Decimal::from_f64_retain(l).unwrap_or(Decimal::ZERO);
         self.spatial = Some(SpatialDom {
             x1: L,
             x2: L,
@@ -210,7 +210,7 @@ impl DomainBuilder {
 
     /// Set symmetric velocity extent: domain spans [−Lv, Lv]³.
     pub fn velocity_extent(mut self, lv: f64) -> Self {
-        let Lv = Decimal::from_f64_retain(lv).expect("velocity extent");
+        let Lv = Decimal::from_f64_retain(lv).unwrap_or(Decimal::ZERO);
         self.velocity = Some(VelocityDom {
             v1: Lv,
             v2: Lv,
@@ -246,7 +246,7 @@ impl DomainBuilder {
     pub fn t_final(mut self, t: f64) -> Self {
         self.time_range = Some(TimeRange {
             t0: Decimal::ZERO,
-            t_final: Decimal::from_f64_retain(t).expect("t_final"),
+            t_final: Decimal::from_f64_retain(t).unwrap_or(Decimal::ZERO),
         });
         self
     }

@@ -26,6 +26,7 @@ use rayon::prelude::*;
 use rustfft::FftPlanner;
 use rustfft::num_complex::Complex64;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// HT-format Poisson solver for isolated BCs.
 ///
@@ -63,6 +64,8 @@ pub struct HtPoisson {
     leaf_fft_plans: [Arc<dyn rustfft::Fft<f64>>; 3],
     /// Cached inverse FFT plans for leaf frames.
     leaf_ifft_plans: [Arc<dyn rustfft::Fft<f64>>; 3],
+    /// Shared progress state for intra-phase reporting.
+    progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
 impl HtPoisson {
@@ -147,6 +150,7 @@ impl HtPoisson {
             near_field_integral_2,
             leaf_fft_plans,
             leaf_ifft_plans,
+            progress: None,
         }
     }
 
@@ -173,6 +177,10 @@ impl HtPoisson {
 }
 
 impl PoissonSolver for HtPoisson {
+    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
+        self.progress = Some(p);
+    }
+
     fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
         let [nx, ny, nz] = self.shape;
         let [px, py, pz] = self.padded_shape;
@@ -210,6 +218,7 @@ impl PoissonSolver for HtPoisson {
         // In HT format: scale each leaf column by the diagonal → preserves rank exactly.
         let mut phi_hat: Option<HtTensor3DComplex> = None;
 
+        let total = self.r_g as u64;
         for k in 0..self.r_g {
             let c_k = self.exp_c[k];
             let scale = self.prefactor * c_k;
@@ -221,6 +230,10 @@ impl PoissonSolver for HtPoisson {
                 None => scaled,
                 Some(acc) => add_complex_ht(&acc, &scaled),
             });
+
+            if let Some(ref p) = self.progress {
+                p.set_intra_progress(k as u64 + 1, total);
+            }
         }
 
         let phi_hat = match phi_hat {
@@ -467,7 +480,11 @@ fn add_complex_ht(a: &HtTensor3DComplex, b: &HtTensor3DComplex) -> HtTensor3DCom
                     });
                 }
             }
-            _ => panic!("Mismatched node types at index {idx}"),
+            _ => {
+                debug_assert!(false, "Mismatched node types at index {idx}");
+                // Carry forward node from `a` unchanged as a safe fallback
+                nodes.push(na.clone());
+            }
         }
     }
 

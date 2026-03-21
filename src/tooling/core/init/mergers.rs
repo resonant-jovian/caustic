@@ -36,12 +36,12 @@ impl MergerIC {
     ) -> Self {
         Self {
             body1,
-            mass1: Decimal::from_f64_retain(mass1).unwrap(),
+            mass1: Decimal::from_f64_retain(mass1).unwrap_or(Decimal::ZERO),
             body2,
-            mass2: Decimal::from_f64_retain(mass2).unwrap(),
+            mass2: Decimal::from_f64_retain(mass2).unwrap_or(Decimal::ZERO),
             separation,
             relative_velocity,
-            impact_parameter: Decimal::from_f64_retain(impact_parameter).unwrap(),
+            impact_parameter: Decimal::from_f64_retain(impact_parameter).unwrap_or(Decimal::ZERO),
             mass1_f64: mass1,
             mass2_f64: mass2,
             impact_parameter_f64: impact_parameter,
@@ -60,12 +60,12 @@ impl MergerIC {
     ) -> Self {
         Self {
             body1,
-            mass1_f64: mass1.to_f64().unwrap(),
+            mass1_f64: mass1.to_f64().unwrap_or(0.0),
             body2,
-            mass2_f64: mass2.to_f64().unwrap(),
+            mass2_f64: mass2.to_f64().unwrap_or(0.0),
             separation,
             relative_velocity,
-            impact_parameter_f64: impact_parameter.to_f64().unwrap(),
+            impact_parameter_f64: impact_parameter.to_f64().unwrap_or(0.0),
             mass1,
             mass2,
             impact_parameter,
@@ -75,7 +75,11 @@ impl MergerIC {
     /// Sample both components on the grid and sum.
     /// Body 1 is centred at (-sep/2, 0, 0) with velocity (-v_rel/2, 0, 0).
     /// Body 2 is centred at (+sep/2, 0, 0) with velocity (+v_rel/2, 0, 0).
-    pub fn sample_on_grid(&self, domain: &Domain) -> PhaseSpaceSnapshot {
+    pub fn sample_on_grid(
+        &self,
+        domain: &Domain,
+        progress: Option<&crate::tooling::core::progress::StepProgress>,
+    ) -> PhaseSpaceSnapshot {
         let nx1 = domain.spatial_res.x1 as usize;
         let nx2 = domain.spatial_res.x2 as usize;
         let nx3 = domain.spatial_res.x3 as usize;
@@ -119,6 +123,14 @@ impl MergerIC {
 
         let total = nx1 * nx2 * nx3 * nv1 * nv2 * nv3;
         let mut data = vec![0.0f64; total];
+
+        let counter = std::sync::atomic::AtomicU64::new(0);
+        let report_interval = (nx1 / 100).max(1) as u64;
+
+        // Establish 0% baseline so the TUI doesn't jump to a non-zero first value
+        if let Some(p) = progress {
+            p.set_intra_progress(0, nx1 as u64);
+        }
 
         for ix1 in 0..nx1 {
             let x1 = -lx[0] + (ix1 as f64 + 0.5) * dx[0];
@@ -170,6 +182,13 @@ impl MergerIC {
                             }
                         }
                     }
+                }
+            }
+
+            if let Some(p) = progress {
+                let c = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if c.is_multiple_of(report_interval) {
+                    p.set_intra_progress(c, nx1 as u64);
                 }
             }
         }

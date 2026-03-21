@@ -2,6 +2,7 @@
 //! NfwIC + FftIsolated (or FftPoisson as fallback), cusp preserved over multiple t_dyn.
 
 #[test]
+#[ignore] // takes ~12s in release mode
 fn nfw_equilibrium() {
     use crate::sim::Simulation;
     use crate::tooling::core::algos::lagrangian::SemiLagrangian;

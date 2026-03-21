@@ -143,7 +143,10 @@ impl VelocityMoments {
                 }
                 out
             }
-            _ => panic!("axis must be 0, 1, or 2"),
+            _ => {
+                debug_assert!(false, "axis must be 0, 1, or 2");
+                vec![]
+            }
         }
     }
 

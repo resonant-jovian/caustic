@@ -5,6 +5,8 @@
 //! Far cells are approximated as monopoles; nearby cells are recursed into.
 
 use rayon::prelude::*;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::super::{init::domain::Domain, solver::PoissonSolver, types::*};
 
@@ -261,6 +263,8 @@ pub struct TreePoisson {
     pub domain: Domain,
     /// Plummer softening length (prevents 1/r singularity).
     pub softening: f64,
+    /// Shared progress state for intra-phase reporting.
+    progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
 impl TreePoisson {
@@ -275,11 +279,16 @@ impl TreePoisson {
             opening_angle,
             domain,
             softening,
+            progress: None,
         }
     }
 }
 
 impl PoissonSolver for TreePoisson {
+    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
+        self.progress = Some(p);
+    }
+
     fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
         let _span = tracing::info_span!("tree_poisson_solve").entered();
         let [nx, ny, nz] = density.shape;
@@ -304,6 +313,9 @@ impl PoissonSolver for TreePoisson {
                 // Empty density field — zero potential
             }
             Some(ref root) => {
+                let total = n_total as u64;
+                let counter = AtomicU64::new(0);
+                let report_interval = (total / 100).max(1);
                 phi.par_iter_mut().enumerate().for_each(|(flat, val)| {
                     let ix = flat / (ny * nz);
                     let iy = (flat / nz) % ny;
@@ -314,6 +326,12 @@ impl PoissonSolver for TreePoisson {
                         origin[2] + (iz as f64 + 0.5) * dx[2],
                     ];
                     *val = tree_potential(root, &point, self.opening_angle, g, self.softening);
+                    if let Some(ref p) = self.progress {
+                        let c = counter.fetch_add(1, Ordering::Relaxed);
+                        if c.is_multiple_of(report_interval) {
+                            p.set_intra_progress(c, total);
+                        }
+                    }
                 });
             }
         }
@@ -440,6 +458,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn tree_vs_fft_isolated() {
         use crate::tooling::core::poisson::fft::FftIsolated;
         let domain = test_domain(8);

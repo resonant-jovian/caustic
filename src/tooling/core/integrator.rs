@@ -76,4 +76,10 @@ pub trait TimeIntegrator {
     /// Attach shared progress state for intra-step TUI visibility.
     /// Default is a no-op; integrators that support progress override this.
     fn set_progress(&mut self, _progress: Arc<StepProgress>) {}
+
+    /// Return a suggested Δt from the adaptive controller (if any).
+    /// Default returns `None`; adaptive integrators override this.
+    fn suggested_dt(&self) -> Option<f64> {
+        None
+    }
 }

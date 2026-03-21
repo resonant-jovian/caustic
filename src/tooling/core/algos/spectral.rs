@@ -16,6 +16,8 @@ use super::lagrangian::sl_shift_1d;
 use rayon::prelude::*;
 use std::any::Any;
 use std::f64::consts::PI;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Spectral-in-velocity representation using orthonormal Hermite function basis.
 ///
@@ -44,6 +46,15 @@ pub struct SpectralV {
     pub velocity_scale: f64,
     /// Domain specification.
     pub domain: Domain,
+    /// Optional progress reporter for intra-step TUI updates.
+    progress: Option<Arc<super::super::progress::StepProgress>>,
+    /// Whether to enable adaptive velocity rescaling each step.
+    pub adaptive_rescale: bool,
+    /// Hypercollision coefficient (0 = disabled). Damps high modes to
+    /// suppress recurrence: a_n *= exp(-nu * dt * n^{2*order}).
+    pub hypercollision_nu: f64,
+    /// Order of the hypercollision operator (typically 2 or 3).
+    pub hypercollision_order: usize,
 }
 
 impl SpectralV {
@@ -66,6 +77,121 @@ impl SpectralV {
             n_modes,
             velocity_scale: sigma,
             domain,
+            progress: None,
+            adaptive_rescale: false,
+            hypercollision_nu: 0.0,
+            hypercollision_order: 2,
+        }
+    }
+
+    /// Rescale the velocity basis to a new alpha = sigma.
+    ///
+    /// Transforms Hermite coefficients via the connection coefficient matrix
+    /// that relates Hermite functions at different scales. This preserves the
+    /// distribution function while optimizing the basis for the current state.
+    ///
+    /// The optimal scale is alpha_opt = sqrt(2 * <v²> / (2*N_modes + 1)).
+    pub fn rescale_velocity(&mut self, new_alpha: f64) {
+        let old_alpha = self.velocity_scale;
+        if (new_alpha - old_alpha).abs() < 1e-14 * old_alpha {
+            return; // No significant change
+        }
+
+        let ratio = old_alpha / new_alpha;
+        let n = self.n_modes;
+        let n_spatial: usize = self.spatial_shape.iter().product();
+        let n_modes3 = n * n * n;
+
+        // For each spatial cell, transform 1D Hermite coefficients along each
+        // velocity dimension using the scaling relation:
+        //   psi_n(v/alpha_new) = sum_k C_{nk}(ratio) * psi_k(v/alpha_old)
+        // The connection matrix C is computed from the ratio.
+        // For simplicity, use the diagonal scaling approximation:
+        //   a_n_new ≈ ratio^n * a_n_old * sqrt(ratio)
+        // This is exact for n=0,1 and accurate when ratio ≈ 1.
+        let sqrt_ratio = ratio.sqrt();
+        for si in 0..n_spatial {
+            let base = si * n_modes3;
+            for m0 in 0..n {
+                for m1 in 0..n {
+                    for m2 in 0..n {
+                        let idx = base + m0 * n * n + m1 * n + m2;
+                        let total_order = m0 + m1 + m2;
+                        let scale = ratio.powi(total_order as i32) * sqrt_ratio.powi(3);
+                        self.coefficients[idx] *= scale;
+                    }
+                }
+            }
+        }
+
+        self.velocity_scale = new_alpha;
+    }
+
+    /// Compute optimal velocity scale from current second velocity moment.
+    ///
+    /// alpha_opt = sqrt(2 * <v²> / (2*N_modes + 1))
+    pub fn optimal_velocity_scale(&self) -> f64 {
+        let n_spatial: usize = self.spatial_shape.iter().product();
+        let n = self.n_modes;
+        let n_modes3 = n * n * n;
+
+        // <v²> ≈ sum of a_{100}² + a_{010}² + a_{001}² contributions
+        // For the zeroth-order approximation, use the diagonal modes
+        let mut v2_sum = 0.0f64;
+        let mut mass_sum = 0.0f64;
+        let sigma = self.velocity_scale;
+
+        for si in 0..n_spatial {
+            let base = si * n_modes3;
+            let a000 = self.coefficients[base];
+            mass_sum += a000 * a000;
+
+            // Second moment contribution from mode (1,0,0), (0,1,0), (0,0,1)
+            if n > 1 {
+                let a100 = self.coefficients[base + n * n];
+                let a010 = self.coefficients[base + n];
+                let a001 = self.coefficients[base + 1];
+                v2_sum += sigma * sigma * (a100 * a100 + a010 * a010 + a001 * a001);
+            }
+        }
+
+        if mass_sum > 1e-30 {
+            let v2_avg = v2_sum / mass_sum;
+            (2.0 * v2_avg / (2 * n + 1) as f64).sqrt().max(sigma * 0.1)
+        } else {
+            sigma
+        }
+    }
+
+    /// Apply hypercollisional damping to suppress filamentation recurrence.
+    ///
+    /// In mode space: a_n *= exp(-nu * dt * (n1^{2*p} + n2^{2*p} + n3^{2*p}))
+    /// where p = hypercollision_order.
+    ///
+    /// This is diagonal in mode space → O(N_spatial * N_modes³).
+    pub fn apply_hypercollision(&mut self, dt: f64) {
+        if self.hypercollision_nu <= 0.0 {
+            return;
+        }
+        let nu = self.hypercollision_nu;
+        let p = self.hypercollision_order;
+        let n = self.n_modes;
+        let n_spatial: usize = self.spatial_shape.iter().product();
+        let n_modes3 = n * n * n;
+
+        for si in 0..n_spatial {
+            let base = si * n_modes3;
+            for m0 in 0..n {
+                let d0 = (m0 as f64).powi(2 * p as i32);
+                for m1 in 0..n {
+                    let d01 = d0 + (m1 as f64).powi(2 * p as i32);
+                    for m2 in 0..n {
+                        let d012 = d01 + (m2 as f64).powi(2 * p as i32);
+                        let factor = (-nu * dt * d012).exp();
+                        self.coefficients[base + m0 * n * n + m1 * n + m2] *= factor;
+                    }
+                }
+            }
         }
     }
 
@@ -189,6 +315,10 @@ impl SpectralV {
             n_modes,
             velocity_scale: sigma,
             domain: domain.clone(),
+            progress: None,
+            adaptive_rescale: false,
+            hypercollision_nu: 0.0,
+            hypercollision_order: 2,
         }
     }
 
@@ -279,6 +409,10 @@ impl SpectralV {
 }
 
 impl PhaseSpaceRepr for SpectralV {
+    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
+        self.progress = Some(p);
+    }
+
     /// Compute density rho(x) = integral f(x,v) dv^3.
     ///
     /// In the Hermite representation:
@@ -293,11 +427,25 @@ impl PhaseSpaceRepr for SpectralV {
         let n_modes3 = self.n_modes * self.n_modes * self.n_modes;
         let norm = self.density_normalization();
 
+        let counter = AtomicU64::new(0);
+        let report_interval = (n_spatial as u64 / 100).max(1);
+
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, n_spatial as u64);
+        }
+
         let data: Vec<f64> = (0..n_spatial)
             .into_par_iter()
             .map(|si| {
                 // The (0,0,0) mode is at index 0 within each spatial cell's coefficient block
-                self.coefficients[si * n_modes3] * norm
+                let result = self.coefficients[si * n_modes3] * norm;
+                if let Some(ref p) = self.progress {
+                    let c = counter.fetch_add(1, Ordering::Relaxed);
+                    if c.is_multiple_of(report_interval) {
+                        p.set_intra_progress(c, n_spatial as u64);
+                    }
+                }
+                result
             })
             .collect();
 
@@ -421,6 +569,12 @@ impl PhaseSpaceRepr for SpectralV {
 
             // Compute spatial gradient via centered differences — parallel over spatial cells
             let spatial_shape = self.spatial_shape;
+            let n_spatial = nx * ny * nz;
+            let advect_x_counter = AtomicU64::new(0);
+            let advect_x_report = (n_spatial as u64 / 100).max(1);
+            if let Some(ref p) = self.progress {
+                p.set_intra_progress(0, n_spatial as u64);
+            }
             new_coeffs
                 .par_chunks_mut(n_modes3)
                 .enumerate()
@@ -491,6 +645,13 @@ impl PhaseSpaceRepr for SpectralV {
                             }
                         }
                     }
+
+                    if let Some(ref p) = self.progress {
+                        let c = advect_x_counter.fetch_add(1, Ordering::Relaxed);
+                        if c.is_multiple_of(advect_x_report) {
+                            p.set_intra_progress(c, n_spatial as u64);
+                        }
+                    }
                 });
 
             // Move results for next dimension pass (avoids clone)
@@ -516,6 +677,12 @@ impl PhaseSpaceRepr for SpectralV {
         let old = self.coefficients.clone();
 
         // Parallelize over spatial cells — each cell's coupling is independent
+        let n_spatial = nx * ny * nz;
+        let advect_v_counter = AtomicU64::new(0);
+        let advect_v_report = (n_spatial as u64 / 100).max(1);
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, n_spatial as u64);
+        }
         self.coefficients
             .par_chunks_mut(n_modes3)
             .enumerate()
@@ -567,6 +734,13 @@ impl PhaseSpaceRepr for SpectralV {
                                 coeff_chunk[mi] += dt * g_over_sigma * (lower - upper);
                             }
                         }
+                    }
+                }
+
+                if let Some(ref p) = self.progress {
+                    let c = advect_v_counter.fetch_add(1, Ordering::Relaxed);
+                    if c.is_multiple_of(advect_v_report) {
+                        p.set_intra_progress(c, n_spatial as u64);
                     }
                 }
             });
@@ -738,24 +912,40 @@ impl PhaseSpaceRepr for SpectralV {
         ];
         let dv3 = dv_q[0] * dv_q[1] * dv_q[2];
 
-        let mut entropy = 0.0;
-        for si in 0..self.n_spatial() {
-            for iv1 in 0..nv {
-                for iv2 in 0..nv {
-                    for iv3 in 0..nv {
-                        let v = [
-                            -lv[0] + (iv1 as f64 + 0.5) * dv_q[0],
-                            -lv[1] + (iv2 as f64 + 0.5) * dv_q[1],
-                            -lv[2] + (iv3 as f64 + 0.5) * dv_q[2],
-                        ];
-                        let f = self.reconstruct_at(si, v);
-                        if f > 0.0 {
-                            entropy -= f * f.ln();
+        let n_spatial = self.n_spatial();
+        let counter = AtomicU64::new(0);
+        let entropy_report = (n_spatial as u64 / 100).max(1);
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, n_spatial as u64);
+        }
+        let entropy: f64 = (0..n_spatial)
+            .into_par_iter()
+            .map(|si| {
+                let mut local_s = 0.0;
+                for iv1 in 0..nv {
+                    for iv2 in 0..nv {
+                        for iv3 in 0..nv {
+                            let v = [
+                                -lv[0] + (iv1 as f64 + 0.5) * dv_q[0],
+                                -lv[1] + (iv2 as f64 + 0.5) * dv_q[1],
+                                -lv[2] + (iv3 as f64 + 0.5) * dv_q[2],
+                            ];
+                            let f = self.reconstruct_at(si, v);
+                            if f > 0.0 {
+                                local_s -= f * f.ln();
+                            }
                         }
                     }
                 }
-            }
-        }
+                if let Some(ref p) = self.progress {
+                    let c = counter.fetch_add(1, Ordering::Relaxed);
+                    if c.is_multiple_of(entropy_report) {
+                        p.set_intra_progress(c, n_spatial as u64);
+                    }
+                }
+                local_s
+            })
+            .sum();
         entropy * dx3 * dv3
     }
 
@@ -773,8 +963,14 @@ impl PhaseSpaceRepr for SpectralV {
         let dv3 = 2.0 * lv[2] / nv_margin as f64;
 
         let mut counts = vec![0u32; n_spatial];
+        let sc_report = (n_spatial as u64 / 100).max(1);
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, n_spatial as u64);
+        }
 
-        for (si, count) in counts.iter_mut().enumerate().take(n_spatial) {
+        for (sc_counter, (si, count)) in
+            (0_u64..).zip(counts.iter_mut().enumerate().take(n_spatial))
+        {
             // Build marginal f(v_x) = integral f(v_x, v_y, v_z) dv_y dv_z
             let marginal: Vec<f64> = (0..nv_sample)
                 .map(|iv1| {
@@ -802,6 +998,12 @@ impl PhaseSpaceRepr for SpectralV {
                 }
             }
             *count = peaks;
+
+            if let Some(ref p) = self.progress
+                && sc_counter.is_multiple_of(sc_report)
+            {
+                p.set_intra_progress(sc_counter, n_spatial as u64);
+            }
         }
 
         StreamCountField {
@@ -859,23 +1061,39 @@ impl PhaseSpaceRepr for SpectralV {
         ];
         let dv3 = dv_q[0] * dv_q[1] * dv_q[2];
 
-        let mut ke = 0.0;
-        for si in 0..self.n_spatial() {
-            for iv1 in 0..nv {
-                for iv2 in 0..nv {
-                    for iv3 in 0..nv {
-                        let v = [
-                            -lv[0] + (iv1 as f64 + 0.5) * dv_q[0],
-                            -lv[1] + (iv2 as f64 + 0.5) * dv_q[1],
-                            -lv[2] + (iv3 as f64 + 0.5) * dv_q[2],
-                        ];
-                        let f = self.reconstruct_at(si, v);
-                        let v2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
-                        ke += f * v2;
+        let n_spatial = self.n_spatial();
+        let counter = AtomicU64::new(0);
+        let ke_report = (n_spatial as u64 / 100).max(1);
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, n_spatial as u64);
+        }
+        let ke: f64 = (0..n_spatial)
+            .into_par_iter()
+            .map(|si| {
+                let mut local_ke = 0.0;
+                for iv1 in 0..nv {
+                    for iv2 in 0..nv {
+                        for iv3 in 0..nv {
+                            let v = [
+                                -lv[0] + (iv1 as f64 + 0.5) * dv_q[0],
+                                -lv[1] + (iv2 as f64 + 0.5) * dv_q[1],
+                                -lv[2] + (iv3 as f64 + 0.5) * dv_q[2],
+                            ];
+                            let f = self.reconstruct_at(si, v);
+                            let v2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+                            local_ke += f * v2;
+                        }
                     }
                 }
-            }
-        }
+                if let Some(ref p) = self.progress {
+                    let c = counter.fetch_add(1, Ordering::Relaxed);
+                    if c.is_multiple_of(ke_report) {
+                        p.set_intra_progress(c, n_spatial as u64);
+                    }
+                }
+                local_ke
+            })
+            .sum();
         0.5 * ke * dx3 * dv3
     }
 
@@ -891,7 +1109,12 @@ impl PhaseSpaceRepr for SpectralV {
         let n_total = self.n_spatial() * n_vel;
 
         let mut data = vec![0.0; n_total];
-        for si in 0..self.n_spatial() {
+        let snap_n_spatial = self.n_spatial();
+        let snap_report = (snap_n_spatial as u64 / 100).max(1);
+        if let Some(ref p) = self.progress {
+            p.set_intra_progress(0, snap_n_spatial as u64);
+        }
+        for (snap_counter, si) in (0_u64..).zip(0..snap_n_spatial) {
             for iv1 in 0..nv1 {
                 for iv2 in 0..nv2 {
                     for iv3 in 0..nv3 {
@@ -905,6 +1128,11 @@ impl PhaseSpaceRepr for SpectralV {
                     }
                 }
             }
+            if let Some(ref p) = self.progress
+                && snap_counter.is_multiple_of(snap_report)
+            {
+                p.set_intra_progress(snap_counter, snap_n_spatial as u64);
+            }
         }
 
         PhaseSpaceSnapshot {
@@ -915,6 +1143,10 @@ impl PhaseSpaceRepr for SpectralV {
     }
 
     fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 }

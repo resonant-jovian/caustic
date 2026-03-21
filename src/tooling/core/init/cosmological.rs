@@ -24,10 +24,10 @@ impl CosmologyParams {
     /// Create from f64 parameters (backward-compatible).
     pub fn new(h0: f64, omega_m: f64, omega_lambda: f64, a_init: f64) -> Self {
         Self {
-            h0: Decimal::from_f64_retain(h0).unwrap(),
-            omega_m: Decimal::from_f64_retain(omega_m).unwrap(),
-            omega_lambda: Decimal::from_f64_retain(omega_lambda).unwrap(),
-            a_init: Decimal::from_f64_retain(a_init).unwrap(),
+            h0: Decimal::from_f64_retain(h0).unwrap_or(Decimal::ZERO),
+            omega_m: Decimal::from_f64_retain(omega_m).unwrap_or(Decimal::ZERO),
+            omega_lambda: Decimal::from_f64_retain(omega_lambda).unwrap_or(Decimal::ZERO),
+            a_init: Decimal::from_f64_retain(a_init).unwrap_or(Decimal::ZERO),
             h0_f64: h0,
             omega_m_f64: omega_m,
             omega_lambda_f64: omega_lambda,
@@ -43,10 +43,10 @@ impl CosmologyParams {
         a_init: Decimal,
     ) -> Self {
         Self {
-            h0_f64: h0.to_f64().unwrap(),
-            omega_m_f64: omega_m.to_f64().unwrap(),
-            omega_lambda_f64: omega_lambda.to_f64().unwrap(),
-            a_init_f64: a_init.to_f64().unwrap(),
+            h0_f64: h0.to_f64().unwrap_or(0.0),
+            omega_m_f64: omega_m.to_f64().unwrap_or(0.0),
+            omega_lambda_f64: omega_lambda.to_f64().unwrap_or(0.0),
+            a_init_f64: a_init.to_f64().unwrap_or(0.0),
             h0,
             omega_m,
             omega_lambda,
@@ -82,7 +82,7 @@ impl ZeldovichIC {
     /// Create from f64 parameters via CosmologyParams (backward-compatible).
     pub fn new(mean_density: f64, cosmology: CosmologyParams, seed: u64) -> Self {
         Self {
-            mean_density: Decimal::from_f64_retain(mean_density).unwrap(),
+            mean_density: Decimal::from_f64_retain(mean_density).unwrap_or(Decimal::ZERO),
             h0: cosmology.h0,
             omega_m: cosmology.omega_m,
             omega_lambda: cosmology.omega_lambda,
@@ -106,11 +106,11 @@ impl ZeldovichIC {
         seed: u64,
     ) -> Self {
         Self {
-            mean_density_f64: mean_density.to_f64().unwrap(),
-            h0_f64: h0.to_f64().unwrap(),
-            omega_m_f64: omega_m.to_f64().unwrap(),
-            omega_lambda_f64: omega_lambda.to_f64().unwrap(),
-            scale_factor_init_f64: scale_factor_init.to_f64().unwrap(),
+            mean_density_f64: mean_density.to_f64().unwrap_or(0.0),
+            h0_f64: h0.to_f64().unwrap_or(0.0),
+            omega_m_f64: omega_m.to_f64().unwrap_or(0.0),
+            omega_lambda_f64: omega_lambda.to_f64().unwrap_or(0.0),
+            scale_factor_init_f64: scale_factor_init.to_f64().unwrap_or(0.0),
             mean_density,
             h0,
             omega_m,
@@ -361,7 +361,11 @@ impl ZeldovichIC {
     ///
     /// f(x,v) = ρ̄ / ((2π)^{3/2} σ_v³) · exp(-|v - v₀(x)|² / (2σ_v²))
     /// where σ_v = 0.3 · max(Δv) keeps the distribution cold but resolved.
-    pub fn sample_on_grid(&self, domain: &Domain) -> PhaseSpaceSnapshot {
+    pub fn sample_on_grid(
+        &self,
+        domain: &Domain,
+        progress: Option<&crate::tooling::core::progress::StepProgress>,
+    ) -> PhaseSpaceSnapshot {
         use std::f64::consts::PI;
 
         let [vx0, vy0, vz0] = self.velocity_field(domain);
@@ -393,6 +397,14 @@ impl ZeldovichIC {
 
         let inv_2sig2 = 1.0 / (2.0 * sigma * sigma);
 
+        let counter = std::sync::atomic::AtomicU64::new(0);
+        let report_interval = (nx1 / 100).max(1) as u64;
+
+        // Establish 0% baseline so the TUI doesn't jump to a non-zero first value
+        if let Some(p) = progress {
+            p.set_intra_progress(0, nx1 as u64);
+        }
+
         // Parallelize over ix1 slabs — each slab is independent
         data.par_chunks_mut(s_x1)
             .enumerate()
@@ -421,6 +433,13 @@ impl ZeldovichIC {
                                 }
                             }
                         }
+                    }
+                }
+
+                if let Some(p) = progress {
+                    let c = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if c.is_multiple_of(report_interval) {
+                        p.set_intra_progress(c, nx1 as u64);
                     }
                 }
             });
@@ -500,7 +519,11 @@ pub struct ZeldovichSingleMode {
 impl ZeldovichSingleMode {
     /// Sample f(x,v) = ρ̄/(√(2π)σ_v)³ · exp(-(v - v₀(x))²/(2σ_v²))
     /// where v₀(x) = (-A·sin(k·x₁), 0, 0)
-    pub fn sample_on_grid(&self, domain: &Domain) -> PhaseSpaceSnapshot {
+    pub fn sample_on_grid(
+        &self,
+        domain: &Domain,
+        progress: Option<&crate::tooling::core::progress::StepProgress>,
+    ) -> PhaseSpaceSnapshot {
         use std::f64::consts::PI;
 
         let nx1 = domain.spatial_res.x1 as usize;
@@ -528,6 +551,14 @@ impl ZeldovichSingleMode {
         let sigma = self.sigma_v;
         let norm = self.mean_density / ((2.0 * PI).sqrt() * sigma).powi(3);
 
+        let counter = std::sync::atomic::AtomicU64::new(0);
+        let report_interval = (nx1 / 100).max(1) as u64;
+
+        // Establish 0% baseline so the TUI doesn't jump to a non-zero first value
+        if let Some(p) = progress {
+            p.set_intra_progress(0, nx1 as u64);
+        }
+
         for ix1 in 0..nx1 {
             let x1 = -lx[0] + (ix1 as f64 + 0.5) * dx[0];
             let v0x = -self.amplitude * (self.wavenumber * x1).sin();
@@ -551,6 +582,13 @@ impl ZeldovichSingleMode {
                             }
                         }
                     }
+                }
+            }
+
+            if let Some(p) = progress {
+                let c = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if c.is_multiple_of(report_interval) {
+                    p.set_intra_progress(c, nx1 as u64);
                 }
             }
         }
@@ -644,7 +682,7 @@ mod tests {
             .unwrap();
         let cosmo = CosmologyParams::new(1.0, 0.3, 0.7, 1.0);
         let ic = ZeldovichIC::new(1.0, cosmo, 42);
-        let snap = ic.sample_on_grid(&domain);
+        let snap = ic.sample_on_grid(&domain, None);
         assert_eq!(snap.shape, [8, 8, 8, 8, 8, 8]);
         assert!(snap.data.iter().all(|v| v.is_finite() && *v >= 0.0));
         let mass: f64 = snap.data.iter().sum::<f64>();

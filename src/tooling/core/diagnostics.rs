@@ -24,6 +24,12 @@ pub struct GlobalDiagnostics {
     pub casimir_c2: f64,
     pub entropy: f64,
     pub mass_in_box: f64,
+    /// Casimir C₂ measured before LoMaC projection (None if LoMaC inactive).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub casimir_c2_pre_lomac: Option<f64>,
+    /// Casimir C₂ measured after LoMaC projection (None if LoMaC inactive).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub casimir_c2_post_lomac: Option<f64>,
 }
 
 /// Accumulates time series of `GlobalDiagnostics`.
@@ -79,6 +85,8 @@ impl Diagnostics {
             casimir_c2: c2,
             entropy: s,
             mass_in_box: m,
+            casimir_c2_pre_lomac: None,
+            casimir_c2_post_lomac: None,
         };
         self.history.push(diag);
         diag
@@ -458,6 +466,8 @@ mod tests {
             casimir_c2: 1.0,
             entropy: 0.5,
             mass_in_box: 10.0,
+            casimir_c2_pre_lomac: None,
+            casimir_c2_post_lomac: None,
         });
         diags.history.push(GlobalDiagnostics {
             time: 1.0,
@@ -470,6 +480,8 @@ mod tests {
             casimir_c2: 1.0,
             entropy: 0.5,
             mass_in_box: 10.0,
+            casimir_c2_pre_lomac: None,
+            casimir_c2_post_lomac: None,
         });
         let summary = diags.conservation_summary();
         assert!(

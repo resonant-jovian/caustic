@@ -6,6 +6,8 @@
 //! reconstructs the potential on the Cartesian grid.
 
 use rayon::prelude::*;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::super::{solver::PoissonSolver, types::*};
 use super::utils::finite_difference_acceleration;
@@ -22,6 +24,8 @@ pub struct SphericalHarmonicsPoisson {
     pub r_max: f64,
     pub shape: [usize; 3],
     pub dx: [f64; 3],
+    /// Shared progress state for intra-phase reporting.
+    progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
 impl SphericalHarmonicsPoisson {
@@ -47,6 +51,7 @@ impl SphericalHarmonicsPoisson {
             r_max,
             shape,
             dx,
+            progress: None,
         }
     }
 
@@ -371,12 +376,16 @@ fn reconstruct_potential(
     dx: &[f64; 3],
     n_radial: usize,
     r_max: f64,
+    progress: &Option<Arc<super::super::progress::StepProgress>>,
 ) -> PotentialField {
     let [nx, ny, nz] = *shape;
     let n_total = nx * ny * nz;
     let dr = r_max / n_radial as f64;
     let mut pot_data = vec![0.0f64; n_total];
 
+    let total = n_total as u64;
+    let counter = AtomicU64::new(0);
+    let report_interval = (total / 100).max(1);
     pot_data.par_iter_mut().enumerate().for_each(|(flat, val)| {
         let ix = flat / (ny * nz);
         let iy = (flat / nz) % ny;
@@ -404,6 +413,12 @@ fn reconstruct_potential(
             }
         }
         *val = sum;
+        if let Some(p) = progress {
+            let c = counter.fetch_add(1, Ordering::Relaxed);
+            if c.is_multiple_of(report_interval) {
+                p.set_intra_progress(c, total);
+            }
+        }
     });
 
     PotentialField {
@@ -417,6 +432,10 @@ fn reconstruct_potential(
 // ---------------------------------------------------------------------------
 
 impl PoissonSolver for SphericalHarmonicsPoisson {
+    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
+        self.progress = Some(p);
+    }
+
     /// Solve nabla^2 Phi = 4 pi G rho via spherical harmonic decomposition.
     ///
     /// Steps:
@@ -460,6 +479,7 @@ impl PoissonSolver for SphericalHarmonicsPoisson {
             &self.dx,
             self.n_radial,
             self.r_max,
+            &self.progress,
         )
     }
 
