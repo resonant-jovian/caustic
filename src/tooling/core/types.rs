@@ -1,12 +1,14 @@
 //! Shared physics field types used across all traits and implementations throughout caustic.
 
 /// 3D scalar field ρ(x); flat `Vec<f64>` with `(nx1, nx2, nx3)` shape.
+#[derive(Clone)]
 pub struct DensityField {
     pub data: Vec<f64>,
     pub shape: [usize; 3],
 }
 
 /// 3D scalar potential field Φ(x); same layout as `DensityField`.
+#[derive(Clone)]
 pub struct PotentialField {
     pub data: Vec<f64>,
     pub shape: [usize; 3],

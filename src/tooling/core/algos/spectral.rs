@@ -912,34 +912,40 @@ impl PhaseSpaceRepr for SpectralV {
         ];
         let dv3 = dv_q[0] * dv_q[1] * dv_q[2];
 
-        let mut entropy = 0.0;
         let n_spatial = self.n_spatial();
+        let counter = AtomicU64::new(0);
         let entropy_report = (n_spatial as u64 / 100).max(1);
         if let Some(ref p) = self.progress {
             p.set_intra_progress(0, n_spatial as u64);
         }
-        for (entropy_counter, si) in (0_u64..).zip(0..n_spatial) {
-            for iv1 in 0..nv {
-                for iv2 in 0..nv {
-                    for iv3 in 0..nv {
-                        let v = [
-                            -lv[0] + (iv1 as f64 + 0.5) * dv_q[0],
-                            -lv[1] + (iv2 as f64 + 0.5) * dv_q[1],
-                            -lv[2] + (iv3 as f64 + 0.5) * dv_q[2],
-                        ];
-                        let f = self.reconstruct_at(si, v);
-                        if f > 0.0 {
-                            entropy -= f * f.ln();
+        let entropy: f64 = (0..n_spatial)
+            .into_par_iter()
+            .map(|si| {
+                let mut local_s = 0.0;
+                for iv1 in 0..nv {
+                    for iv2 in 0..nv {
+                        for iv3 in 0..nv {
+                            let v = [
+                                -lv[0] + (iv1 as f64 + 0.5) * dv_q[0],
+                                -lv[1] + (iv2 as f64 + 0.5) * dv_q[1],
+                                -lv[2] + (iv3 as f64 + 0.5) * dv_q[2],
+                            ];
+                            let f = self.reconstruct_at(si, v);
+                            if f > 0.0 {
+                                local_s -= f * f.ln();
+                            }
                         }
                     }
                 }
-            }
-            if let Some(ref p) = self.progress
-                && entropy_counter.is_multiple_of(entropy_report)
-            {
-                p.set_intra_progress(entropy_counter, n_spatial as u64);
-            }
-        }
+                if let Some(ref p) = self.progress {
+                    let c = counter.fetch_add(1, Ordering::Relaxed);
+                    if c.is_multiple_of(entropy_report) {
+                        p.set_intra_progress(c, n_spatial as u64);
+                    }
+                }
+                local_s
+            })
+            .sum();
         entropy * dx3 * dv3
     }
 
@@ -1055,33 +1061,39 @@ impl PhaseSpaceRepr for SpectralV {
         ];
         let dv3 = dv_q[0] * dv_q[1] * dv_q[2];
 
-        let mut ke = 0.0;
         let n_spatial = self.n_spatial();
+        let counter = AtomicU64::new(0);
         let ke_report = (n_spatial as u64 / 100).max(1);
         if let Some(ref p) = self.progress {
             p.set_intra_progress(0, n_spatial as u64);
         }
-        for (ke_counter, si) in (0_u64..).zip(0..n_spatial) {
-            for iv1 in 0..nv {
-                for iv2 in 0..nv {
-                    for iv3 in 0..nv {
-                        let v = [
-                            -lv[0] + (iv1 as f64 + 0.5) * dv_q[0],
-                            -lv[1] + (iv2 as f64 + 0.5) * dv_q[1],
-                            -lv[2] + (iv3 as f64 + 0.5) * dv_q[2],
-                        ];
-                        let f = self.reconstruct_at(si, v);
-                        let v2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
-                        ke += f * v2;
+        let ke: f64 = (0..n_spatial)
+            .into_par_iter()
+            .map(|si| {
+                let mut local_ke = 0.0;
+                for iv1 in 0..nv {
+                    for iv2 in 0..nv {
+                        for iv3 in 0..nv {
+                            let v = [
+                                -lv[0] + (iv1 as f64 + 0.5) * dv_q[0],
+                                -lv[1] + (iv2 as f64 + 0.5) * dv_q[1],
+                                -lv[2] + (iv3 as f64 + 0.5) * dv_q[2],
+                            ];
+                            let f = self.reconstruct_at(si, v);
+                            let v2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+                            local_ke += f * v2;
+                        }
                     }
                 }
-            }
-            if let Some(ref p) = self.progress
-                && ke_counter.is_multiple_of(ke_report)
-            {
-                p.set_intra_progress(ke_counter, n_spatial as u64);
-            }
-        }
+                if let Some(ref p) = self.progress {
+                    let c = counter.fetch_add(1, Ordering::Relaxed);
+                    if c.is_multiple_of(ke_report) {
+                        p.set_intra_progress(c, n_spatial as u64);
+                    }
+                }
+                local_ke
+            })
+            .sum();
         0.5 * ke * dx3 * dv3
     }
 

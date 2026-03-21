@@ -75,7 +75,11 @@ mod tests {
 
         let sigma = 1.0;
         let snap = gaussian_ic(&domain, sigma);
-        let mass_0: f64 = snap.data.iter().sum();
+        // Compute mass with proper volume element (dx³·dv³) to match total_mass()
+        let dx = domain.dx();
+        let dv = domain.dv();
+        let dv6 = dx[0] * dx[1] * dx[2] * dv[0] * dv[1] * dv[2];
+        let mass_0: f64 = snap.data.iter().sum::<f64>() * dv6;
         assert!(mass_0 > 0.0, "IC must have positive mass");
 
         let poisson = FftPoisson::new(&domain);

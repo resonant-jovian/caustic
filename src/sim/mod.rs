@@ -44,6 +44,10 @@ pub struct Simulation {
     /// Per-step phase timing breakdown from the most recent `step()` call.
     /// Includes integrator sub-step timings + post-advance diagnostics timing.
     pub last_step_timings: StepTimings,
+    /// Cached density from the most recent step, for TUI reuse.
+    pub cached_density: Option<DensityField>,
+    /// Cached potential from the most recent step, for TUI reuse.
+    pub cached_potential: Option<PotentialField>,
     /// Optional shared progress state for intra-step TUI visibility.
     progress: Option<Arc<StepProgress>>,
 }
@@ -236,6 +240,10 @@ impl Simulation {
         timings.diagnostics_ms += t0.elapsed().as_secs_f64() * 1000.0;
 
         self.last_step_timings = timings;
+
+        // Cache density and potential for TUI reuse (avoids redundant recomputation)
+        self.cached_density = Some(density);
+        self.cached_potential = Some(potential);
 
         if let Some(ref p) = self.progress {
             p.set_phase(StepPhase::StepComplete);
@@ -508,6 +516,8 @@ impl SimulationBuilder {
             start_time: std::time::Instant::now(),
             cached_rho_max: None,
             last_step_timings: StepTimings::default(),
+            cached_density: None,
+            cached_potential: None,
             progress: None,
         })
     }
