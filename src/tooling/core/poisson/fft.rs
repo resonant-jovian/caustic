@@ -123,7 +123,8 @@ impl FftPoisson {
             });
 
         // Take cached scratch (avoids per-call allocation)
-        let mut scratch = std::mem::take(&mut *self.scratch_cache.lock().unwrap_or_else(|e| e.into_inner()));
+        let mut scratch =
+            std::mem::take(&mut *self.scratch_cache.lock().unwrap_or_else(|e| e.into_inner()));
         scratch.resize(n_total_c, Complex::new(0.0, 0.0));
 
         // --- y-axis: C2C via tiled transpose on half-complex grid ---
@@ -186,7 +187,8 @@ impl FftPoisson {
 
         // Take cached scratch (avoids per-call allocation)
         let n_total_c = nx * ny * nz_c;
-        let mut scratch = std::mem::take(&mut *self.scratch_cache.lock().unwrap_or_else(|e| e.into_inner()));
+        let mut scratch =
+            std::mem::take(&mut *self.scratch_cache.lock().unwrap_or_else(|e| e.into_inner()));
         scratch.resize(n_total_c, Complex::new(0.0, 0.0));
 
         // --- x-axis: C2C inverse via transpose ---
@@ -337,7 +339,8 @@ impl PoissonSolver for FftPoisson {
             .collect();
 
         // Use cached scratch for all C2C FFTs (saves 4 allocations per call)
-        let mut scratch = std::mem::take(&mut *self.scratch_cache.lock().unwrap_or_else(|e| e.into_inner()));
+        let mut scratch =
+            std::mem::take(&mut *self.scratch_cache.lock().unwrap_or_else(|e| e.into_inner()));
         scratch.resize(n_total, Complex::new(0.0, 0.0));
 
         super::fft_utils::fft_3d_c2c_scratch(&mut phi_hat, &mut scratch, self.shape, &self.fwd);
@@ -535,7 +538,8 @@ impl PoissonSolver for FftIsolated {
             });
 
         // Use cached scratch for (2N)³ FFTs (saves 2 large allocations per solve)
-        let mut scratch = std::mem::take(&mut *self.scratch_cache.lock().unwrap_or_else(|e| e.into_inner()));
+        let mut scratch =
+            std::mem::take(&mut *self.scratch_cache.lock().unwrap_or_else(|e| e.into_inner()));
         scratch.resize(n2_total, Complex::new(0.0, 0.0));
 
         // 2. Forward FFT

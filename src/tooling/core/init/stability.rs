@@ -95,7 +95,8 @@ impl DiskStabilityIC {
             perturbation_mode_m,
             perturbation_pattern_speed: Decimal::from_f64_retain(perturbation_pattern_speed)
                 .unwrap_or(Decimal::ZERO),
-            perturbation_amplitude: Decimal::from_f64_retain(perturbation_amplitude).unwrap_or(Decimal::ZERO),
+            perturbation_amplitude: Decimal::from_f64_retain(perturbation_amplitude)
+                .unwrap_or(Decimal::ZERO),
             perturbation_pattern_speed_f64: perturbation_pattern_speed,
             perturbation_amplitude_f64: perturbation_amplitude,
         }
