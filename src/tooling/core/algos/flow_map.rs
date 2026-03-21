@@ -419,10 +419,8 @@ impl FlowMapRepr {
                 self.positions[3 * i + 1],
                 self.positions[3 * i + 2],
             ];
-            if let Some(c) = self.cell_index(&pos) {
-                if c == target {
-                    result.push(i);
-                }
+            if let Some(c) = self.cell_index(&pos) && c == target {
+                result.push(i);
             }
         }
         result
@@ -565,7 +563,7 @@ impl PhaseSpaceRepr for FlowMapRepr {
                 }
                 if let Some(ref prog) = progress {
                     let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c % report_interval == 0 {
+                    if c.is_multiple_of(report_interval) {
                         prog.set_intra_progress(c, n_tracers_u64);
                     }
                 }
@@ -617,7 +615,7 @@ impl PhaseSpaceRepr for FlowMapRepr {
                 }
                 if let Some(ref prog) = progress {
                     let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c % report_interval == 0 {
+                    if c.is_multiple_of(report_interval) {
                         prog.set_intra_progress(c, n_tracers_u64);
                     }
                 }

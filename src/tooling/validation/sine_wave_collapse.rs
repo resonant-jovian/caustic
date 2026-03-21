@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Sine-wave gravitational collapse convergence test.
 //!
 //! A sinusoidal density perturbation on a warm Maxwellian background undergoes

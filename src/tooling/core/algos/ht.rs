@@ -1191,7 +1191,7 @@ fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64 + Sync>(
 
     // SVD failed or returned degenerate result — fall back to rank-1 identity transfer
     if u.ncols() == 0 {
-        let mut transfer = vec![0.0f64; 1 * k_lr];
+        let mut transfer = vec![0.0f64; k_lr];
         if k_lr > 0 {
             transfer[0] = 1.0;
         }
