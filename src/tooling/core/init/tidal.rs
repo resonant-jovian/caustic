@@ -84,9 +84,7 @@ impl TidalIC {
 
                         // Position relative to progenitor centre
                         let x_rel = [x1 - pos[0], x2 - pos[1], x3 - pos[2]];
-                        let r = (x_rel[0] * x_rel[0]
-                            + x_rel[1] * x_rel[1]
-                            + x_rel[2] * x_rel[2])
+                        let r = (x_rel[0] * x_rel[0] + x_rel[1] * x_rel[1] + x_rel[2] * x_rel[2])
                             .sqrt();
                         let phi = self.progenitor.potential(r);
 
@@ -103,10 +101,8 @@ impl TidalIC {
                                     let dv3 = v3 - vel[2];
                                     let v2sq = dv1 * dv1 + dv2 * dv2 + dv3 * dv3;
                                     let energy = 0.5 * v2sq + phi;
-                                    let f = self
-                                        .progenitor
-                                        .distribution_function(energy, 0.0)
-                                        .max(0.0);
+                                    let f =
+                                        self.progenitor.distribution_function(energy, 0.0).max(0.0);
                                     chunk[base + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3] = f;
                                 }
                             }

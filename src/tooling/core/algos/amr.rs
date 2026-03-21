@@ -767,8 +767,7 @@ impl PhaseSpaceRepr for AmrGrid {
                     .floor()
                     .clamp(0.0, (nv[2] - 1) as f64) as usize;
 
-                let flat =
-                    ix * s_x1 + iy * s_x2 + iz * s_x3 + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3;
+                let flat = ix * s_x1 + iy * s_x2 + iz * s_x3 + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3;
                 // Accumulate — multiple AMR leaves may map to the same uniform cell.
                 // Weight by the ratio of the leaf's 6D volume to the uniform cell volume.
                 let weight = leaf.cell_volume() / uniform_vol;

@@ -102,7 +102,8 @@ fn smooth_red_black(
     // Pre-compute (flat, ix, iy, iz) tuples for each parity to avoid
     // repeated integer division (ix = flat / (ny*nz), ~13 cycles) inside
     // the parallel closure.
-    let (red_indices, black_indices): (Vec<_>, Vec<_>) = (0..n_total).into_par_iter()
+    let (red_indices, black_indices): (Vec<_>, Vec<_>) = (0..n_total)
+        .into_par_iter()
         .fold(
             || (Vec::new(), Vec::new()),
             |(mut red, mut black), flat| {

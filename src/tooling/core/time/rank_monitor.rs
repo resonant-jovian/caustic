@@ -70,14 +70,20 @@ fn singular_values(mat: &faer::Mat<f64>) -> Vec<f64> {
             // Fallback: compute singular values via column norms.
             // For a single-column matrix the sole singular value is the column norm.
             if n == 1 {
-                let norm: f64 = (0..m).map(|i| mat[(i, 0)] * mat[(i, 0)]).sum::<f64>().sqrt();
+                let norm: f64 = (0..m)
+                    .map(|i| mat[(i, 0)] * mat[(i, 0)])
+                    .sum::<f64>()
+                    .sqrt();
                 if norm.is_finite() {
                     return vec![norm];
                 }
                 return vec![];
             }
             if m == 1 {
-                let norm: f64 = (0..n).map(|j| mat[(0, j)] * mat[(0, j)]).sum::<f64>().sqrt();
+                let norm: f64 = (0..n)
+                    .map(|j| mat[(0, j)] * mat[(0, j)])
+                    .sum::<f64>()
+                    .sqrt();
                 if norm.is_finite() {
                     return vec![norm];
                 }
@@ -495,11 +501,12 @@ mod tests {
                                     + i3 * n.pow(2)
                                     + i4 * n
                                     + i5;
-                                data[idx] = ((i0 + 1) * (i1 + 1) * (i2 + 1)
+                                data[idx] = ((i0 + 1)
+                                    * (i1 + 1)
+                                    * (i2 + 1)
                                     * (i3 + 1)
                                     * (i4 + 1)
-                                    * (i5 + 1))
-                                    as f64;
+                                    * (i5 + 1)) as f64;
                             }
                         }
                     }

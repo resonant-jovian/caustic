@@ -35,7 +35,7 @@ pub use tooling::core::init::arbitrary::CustomICArray;
 pub use tooling::core::init::cosmological::{ZeldovichIC, ZeldovichSingleMode};
 pub use tooling::core::init::domain::{SpatialBoundType, VelocityBoundType};
 pub use tooling::core::init::isolated::{
-    HernquistIC, IsolatedEquilibrium, IsochroneIC, KingIC, NfwIC, PlummerIC, sample_on_grid,
+    HernquistIC, IsochroneIC, IsolatedEquilibrium, KingIC, NfwIC, PlummerIC, sample_on_grid,
     sample_on_grid_with_progress,
 };
 pub use tooling::core::init::mergers::MergerIC;
@@ -47,11 +47,11 @@ pub use tooling::core::poisson::fft::{FftIsolated, FftPoisson};
 pub use tooling::core::poisson::ht_poisson::HtPoisson;
 pub use tooling::core::poisson::multigrid::Multigrid;
 pub use tooling::core::poisson::multipole::MultipoleExpansion;
+pub use tooling::core::poisson::range_separated::RangeSeparatedPoisson;
 pub use tooling::core::poisson::spherical::SphericalHarmonicsPoisson;
 pub use tooling::core::poisson::spherical_1d::Spherical1DPoisson;
 pub use tooling::core::poisson::tensor_poisson::TensorPoisson;
 pub use tooling::core::poisson::tree::TreePoisson;
-pub use tooling::core::poisson::range_separated::RangeSeparatedPoisson;
 pub use tooling::core::poisson::vgf::VgfPoisson;
 pub use tooling::core::time::adaptive::AdaptiveStrangSplitting;
 pub use tooling::core::time::blanes_moan::BlanesMoanSplitting;
@@ -284,7 +284,7 @@ pub mod prelude {
         init::input::optional::OptionalParams,
         init::{
             cosmological::ZeldovichIC,
-            isolated::{HernquistIC, IsolatedEquilibrium, IsochroneIC, KingIC, NfwIC, PlummerIC},
+            isolated::{HernquistIC, IsochroneIC, IsolatedEquilibrium, KingIC, NfwIC, PlummerIC},
             mergers::MergerIC,
         },
         integrator::SimState,

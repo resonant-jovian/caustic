@@ -68,8 +68,7 @@ impl CustomIC {
                                 for iv3 in 0..nv3 {
                                     let v3 = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
                                     let f = (self.func)([x1, x2, x3], [v1, v2, v3]);
-                                    chunk[base + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3] =
-                                        f.max(0.0);
+                                    chunk[base + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3] = f.max(0.0);
                                 }
                             }
                         }

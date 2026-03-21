@@ -9,10 +9,7 @@
 //! Conservation of mass, momentum, and energy is exact by construction.
 
 use super::super::{
-    init::domain::Domain,
-    phasespace::PhaseSpaceRepr,
-    progress::StepProgress,
-    types::*,
+    init::domain::Domain, phasespace::PhaseSpaceRepr, progress::StepProgress, types::*,
 };
 use rayon::prelude::*;
 use std::any::Any;
@@ -316,10 +313,7 @@ mod tests {
         // Density must match the inner representation's density.
         assert_eq!(mm.density.len(), grid_density.data.len());
         for (a, b) in mm.density.iter().zip(grid_density.data.iter()) {
-            assert!(
-                (a - b).abs() < 1e-14,
-                "density mismatch: {a} vs {b}"
-            );
+            assert!((a - b).abs() < 1e-14, "density mismatch: {a} vs {b}");
         }
         // Spatial shape must match.
         assert_eq!(mm.spatial_shape, grid_density.shape);

@@ -186,18 +186,16 @@ impl UniformGrid6D {
 
         // Process spatial cells in parallel. Each cell owns a contiguous velocity
         // block of length n_vel that can be filtered independently.
-        self.data
-            .par_chunks_mut(n_vel)
-            .for_each(|block| {
-                // Filter along v1 (outermost velocity index): pencils of length nv1
-                filter_pencils_dim0(block, nv1, nv2, nv3, &kernel_v1);
+        self.data.par_chunks_mut(n_vel).for_each(|block| {
+            // Filter along v1 (outermost velocity index): pencils of length nv1
+            filter_pencils_dim0(block, nv1, nv2, nv3, &kernel_v1);
 
-                // Filter along v2 (middle velocity index): pencils of length nv2
-                filter_pencils_dim1(block, nv1, nv2, nv3, &kernel_v2);
+            // Filter along v2 (middle velocity index): pencils of length nv2
+            filter_pencils_dim1(block, nv1, nv2, nv3, &kernel_v2);
 
-                // Filter along v3 (innermost velocity index): pencils of length nv3
-                filter_pencils_dim2(block, nv1, nv2, nv3, &kernel_v3);
-            });
+            // Filter along v3 (innermost velocity index): pencils of length nv3
+            filter_pencils_dim2(block, nv1, nv2, nv3, &kernel_v3);
+        });
 
         // Sanity: there are n_spatial blocks
         debug_assert_eq!(n_spatial * n_vel, self.data.len());

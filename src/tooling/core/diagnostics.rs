@@ -257,23 +257,37 @@ pub fn norm_linf(data: &[f64]) -> f64 {
 /// L1 error between two fields: ‖a − b‖₁ / ‖b‖₁.
 /// Returns absolute L1 error if `reference` is zero everywhere.
 pub fn error_l1(computed: &[f64], reference: &[f64], cell_volume: f64) -> f64 {
-    let num = computed.par_iter().zip(reference.par_iter())
-        .map(|(a, b)| (a - b).abs()).sum::<f64>() * cell_volume;
+    let num = computed
+        .par_iter()
+        .zip(reference.par_iter())
+        .map(|(a, b)| (a - b).abs())
+        .sum::<f64>()
+        * cell_volume;
     let den = norm_l1(reference, cell_volume);
     if den > 1e-30 { num / den } else { num }
 }
 
 /// L2 error between two fields: ‖a − b‖₂ / ‖b‖₂.
 pub fn error_l2(computed: &[f64], reference: &[f64], cell_volume: f64) -> f64 {
-    let num = (computed.par_iter().zip(reference.par_iter())
-        .map(|(a, b)| { let d = a - b; d * d }).sum::<f64>() * cell_volume).sqrt();
+    let num = (computed
+        .par_iter()
+        .zip(reference.par_iter())
+        .map(|(a, b)| {
+            let d = a - b;
+            d * d
+        })
+        .sum::<f64>()
+        * cell_volume)
+        .sqrt();
     let den = norm_l2(reference, cell_volume);
     if den > 1e-30 { num / den } else { num }
 }
 
 /// L∞ error between two fields: max|aᵢ − bᵢ| / max|bᵢ|.
 pub fn error_linf(computed: &[f64], reference: &[f64]) -> f64 {
-    let diff_max = computed.par_iter().zip(reference.par_iter())
+    let diff_max = computed
+        .par_iter()
+        .zip(reference.par_iter())
         .map(|(a, b)| (a - b).abs())
         .reduce(|| 0.0f64, f64::max);
     let ref_max = norm_linf(reference);
@@ -409,25 +423,20 @@ pub fn coarse_grained_entropy(
                         let c4 = (i4 / factor).min(coarse_shape[4] - 1);
                         for i5 in 0..shape[5] {
                             let c5 = (i5 / factor).min(coarse_shape[5] - 1);
-                            let fine_idx = i0
-                                * shape[1]
-                                * shape[2]
-                                * shape[3]
-                                * shape[4]
-                                * shape[5]
-                                + i1 * shape[2] * shape[3] * shape[4] * shape[5]
-                                + i2 * shape[3] * shape[4] * shape[5]
-                                + i3 * shape[4] * shape[5]
-                                + i4 * shape[5]
-                                + i5;
+                            let fine_idx =
+                                i0 * shape[1] * shape[2] * shape[3] * shape[4] * shape[5]
+                                    + i1 * shape[2] * shape[3] * shape[4] * shape[5]
+                                    + i2 * shape[3] * shape[4] * shape[5]
+                                    + i3 * shape[4] * shape[5]
+                                    + i4 * shape[5]
+                                    + i5;
                             let coarse_idx = c0
                                 * coarse_shape[1]
                                 * coarse_shape[2]
                                 * coarse_shape[3]
                                 * coarse_shape[4]
                                 * coarse_shape[5]
-                                + c1
-                                    * coarse_shape[2]
+                                + c1 * coarse_shape[2]
                                     * coarse_shape[3]
                                     * coarse_shape[4]
                                     * coarse_shape[5]

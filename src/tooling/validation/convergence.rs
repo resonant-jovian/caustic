@@ -579,10 +579,7 @@ fn spatial_convergence_free_streaming_3_resolutions() {
 
     // All results should be finite
     for &(h, err) in &pairs {
-        assert!(
-            err.is_finite(),
-            "Energy error at h={h:.4} should be finite"
-        );
+        assert!(err.is_finite(), "Energy error at h={h:.4} should be finite");
     }
 
     // Estimate convergence order from 3 data points (gives 2 order estimates)

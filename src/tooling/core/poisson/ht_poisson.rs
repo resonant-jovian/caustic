@@ -681,12 +681,7 @@ mod tests {
         let mag = solver.last_near_field_magnitude();
 
         // Compute the L2 norm of the potential for comparison
-        let phi_l2 = potential
-            .data
-            .iter()
-            .map(|v| v * v)
-            .sum::<f64>()
-            .sqrt();
+        let phi_l2 = potential.data.iter().map(|v| v * v).sum::<f64>().sqrt();
 
         assert!(
             mag < phi_l2,
@@ -699,8 +694,7 @@ mod tests {
         // When near-field correction is disabled, magnitude should be zero.
         let shape = [8, 8, 8];
         let dx = [1.0, 1.0, 1.0];
-        let solver = HtPoisson::new(shape, dx, 1e-4, 1e-3, 20)
-            .with_near_field_enabled(false);
+        let solver = HtPoisson::new(shape, dx, 1e-4, 1e-3, 20).with_near_field_enabled(false);
 
         let n = 512;
         let mut rho = vec![0.0; n];

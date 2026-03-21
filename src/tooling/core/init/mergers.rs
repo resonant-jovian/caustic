@@ -169,8 +169,7 @@ impl MergerIC {
                                     let dv1_1 = v1 - v1_offset[0];
                                     let dv1_2 = v2 - v1_offset[1];
                                     let dv1_3 = v3 - v1_offset[2];
-                                    let e1 = 0.5
-                                        * (dv1_1 * dv1_1 + dv1_2 * dv1_2 + dv1_3 * dv1_3)
+                                    let e1 = 0.5 * (dv1_1 * dv1_1 + dv1_2 * dv1_2 + dv1_3 * dv1_3)
                                         + phi1;
                                     let f1 = self.body1.distribution_function(e1, 0.0).max(0.0);
 
@@ -178,8 +177,7 @@ impl MergerIC {
                                     let dv2_1 = v1 - v2_offset[0];
                                     let dv2_2 = v2 - v2_offset[1];
                                     let dv2_3 = v3 - v2_offset[2];
-                                    let e2 = 0.5
-                                        * (dv2_1 * dv2_1 + dv2_2 * dv2_2 + dv2_3 * dv2_3)
+                                    let e2 = 0.5 * (dv2_1 * dv2_1 + dv2_2 * dv2_2 + dv2_3 * dv2_3)
                                         + phi2;
                                     let f2 = self.body2.distribution_function(e2, 0.0).max(0.0);
 

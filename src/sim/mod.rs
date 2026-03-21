@@ -231,7 +231,13 @@ impl Simulation {
         let dx3 = dx[0] * dx[1] * dx[2];
 
         // Cache ρ_max for next step's dt computation (avoids redundant compute_density)
-        self.cached_rho_max = Some(density.data.par_iter().cloned().reduce(|| 0.0_f64, f64::max));
+        self.cached_rho_max = Some(
+            density
+                .data
+                .par_iter()
+                .cloned()
+                .reduce(|| 0.0_f64, f64::max),
+        );
 
         if let Some(ref p) = self.progress {
             let sub = p.read().sub_step;

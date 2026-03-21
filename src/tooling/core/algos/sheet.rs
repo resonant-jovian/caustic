@@ -175,7 +175,9 @@ impl SheetTracker {
         }
 
         let shape = self.shape;
-        let counts = self.particles.par_iter()
+        let counts = self
+            .particles
+            .par_iter()
             .fold(
                 || vec![0u32; n_cells],
                 |mut local, p| {
@@ -239,7 +241,9 @@ impl SheetTracker {
         }
 
         let particle_mass = self.particle_mass;
-        let density_data = self.particles.par_iter()
+        let density_data = self
+            .particles
+            .par_iter()
             .fold(
                 || vec![0.0f64; n_cells],
                 |mut local, p| {
@@ -264,9 +268,12 @@ impl SheetTracker {
                                     ii = ii.rem_euclid(nx as isize);
                                     jj = jj.rem_euclid(ny as isize);
                                     kk = kk.rem_euclid(nz as isize);
-                                } else if ii < 0 || ii >= nx as isize
-                                    || jj < 0 || jj >= ny as isize
-                                    || kk < 0 || kk >= nz as isize
+                                } else if ii < 0
+                                    || ii >= nx as isize
+                                    || jj < 0
+                                    || jj >= ny as isize
+                                    || kk < 0
+                                    || kk >= nz as isize
                                 {
                                     continue;
                                 }

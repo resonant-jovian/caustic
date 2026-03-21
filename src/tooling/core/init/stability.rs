@@ -346,8 +346,7 @@ impl DiskStabilityIC {
                         let sigma_surf_here = (self.disk_surface_density)(r_cyl);
                         let sigma_z = sigma_r_here; // isotropic approximation
                         let z_0 = if sigma_surf_here > 1e-30 {
-                            sigma_z
-                                / (4.0 * std::f64::consts::PI * g * sigma_surf_here).sqrt()
+                            sigma_z / (4.0 * std::f64::consts::PI * g * sigma_surf_here).sqrt()
                         } else {
                             1e10 // effectively infinite scale height if no surface density
                         };
@@ -413,8 +412,7 @@ impl DiskStabilityIC {
                                     let omega2_rc = omega_rc * omega_rc;
                                     let omega2_plus = self.vc_squared(r_cp) / (r_cp * r_cp);
                                     let omega2_minus = self.vc_squared(r_cm) / (r_cm * r_cm);
-                                    let domega2_dr =
-                                        (omega2_plus - omega2_minus) / (r_cp - r_cm);
+                                    let domega2_dr = (omega2_plus - omega2_minus) / (r_cp - r_cm);
                                     let kappa2_rc = r_c * domega2_dr + 4.0 * omega2_rc;
                                     if kappa2_rc <= 0.0 {
                                         continue;
@@ -423,8 +421,7 @@ impl DiskStabilityIC {
 
                                     // Circular orbit energy at R_c:
                                     // E_c = ½ v_c(R_c)² + Φ(R_c, 0)
-                                    let phi_rc =
-                                        self.total_potential(r_c, 0.0, [r_c, 0.0, 0.0]);
+                                    let phi_rc = self.total_potential(r_c, 0.0, [r_c, 0.0, 0.0]);
                                     let e_c = 0.5 * vc2_rc + phi_rc;
 
                                     // Total energy E = ½ v² + Φ(x)
@@ -455,8 +452,7 @@ impl DiskStabilityIC {
                                     let f_val = f_shu * f_z * pert_factor;
 
                                     if f_val > 0.0 {
-                                        chunk[base + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3] =
-                                            f_val;
+                                        chunk[base + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3] = f_val;
                                     }
                                 }
                             }

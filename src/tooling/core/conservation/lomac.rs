@@ -282,8 +282,11 @@ impl LoMaC {
         let dv3 = self.dv[0] * self.dv[1] * self.dv[2];
 
         // Compute delta_f = f - f_ref
-        let mut delta_f: Vec<f64> = f.par_iter().zip(f_ref.par_iter())
-            .map(|(&fi, &fri)| fi - fri).collect();
+        let mut delta_f: Vec<f64> = f
+            .par_iter()
+            .zip(f_ref.par_iter())
+            .map(|(&fi, &fri)| fi - fri)
+            .collect();
 
         // Per-cell soft thresholding: zero out small delta_f contributions
         // relative to the cell's delta_f norm. This controls noise growth
@@ -301,8 +304,11 @@ impl LoMaC {
         });
 
         // Reconstruct: f = f_ref + truncated(delta_f)
-        let reconstructed: Vec<f64> = f_ref.par_iter().zip(delta_f.par_iter())
-            .map(|(&fri, &dfi)| fri + dfi).collect();
+        let reconstructed: Vec<f64> = f_ref
+            .par_iter()
+            .zip(delta_f.par_iter())
+            .map(|(&fri, &dfi)| fri + dfi)
+            .collect();
 
         // Pre-compute norms BEFORE self.project() so the f_ref borrow ends by NLL
         let delta_norm: f64 = delta_f.par_iter().map(|x| x * x).sum::<f64>();

@@ -76,9 +76,7 @@ fn mixing_coarse_entropy_growth() {
     assert!(s_fine_0.is_finite(), "Initial entropy should be finite");
     assert!(s_fine_f.is_finite(), "Final entropy should be finite");
 
-    println!(
-        "Mixing: S_fine(0)={s_fine_0:.4}, S_fine(f)={s_fine_f:.4}"
-    );
+    println!("Mixing: S_fine(0)={s_fine_0:.4}, S_fine(f)={s_fine_f:.4}");
     println!(
         "  steps={}, t_final={:.2}",
         hist.len(),

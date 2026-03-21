@@ -243,32 +243,38 @@ impl HtTensor {
         ];
 
         // Compute frames for all nodes via mode unfolding + SVD
-        let mut frames: Vec<Mat<f64>> = (0..10usize).into_par_iter().map(|node_idx| {
-            let dims = dim_sets[node_idx];
-            let mat = multi_mode_unfold(data, &shape, dims);
-            let (u, s, _vt) = thin_svd(&mat);
-            if u.ncols() == 0 {
-                // SVD failed — use first column of unfolding as single basis vector
-                let n = mat.nrows();
-                let mut frame = Mat::zeros(n, 1);
-                if mat.ncols() > 0 {
-                    let norm: f64 = (0..n).map(|i| mat[(i, 0)] * mat[(i, 0)]).sum::<f64>().sqrt();
-                    if norm > 1e-30 {
-                        for i in 0..n {
-                            frame[(i, 0)] = mat[(i, 0)] / norm;
+        let mut frames: Vec<Mat<f64>> = (0..10usize)
+            .into_par_iter()
+            .map(|node_idx| {
+                let dims = dim_sets[node_idx];
+                let mat = multi_mode_unfold(data, &shape, dims);
+                let (u, s, _vt) = thin_svd(&mat);
+                if u.ncols() == 0 {
+                    // SVD failed — use first column of unfolding as single basis vector
+                    let n = mat.nrows();
+                    let mut frame = Mat::zeros(n, 1);
+                    if mat.ncols() > 0 {
+                        let norm: f64 = (0..n)
+                            .map(|i| mat[(i, 0)] * mat[(i, 0)])
+                            .sum::<f64>()
+                            .sqrt();
+                        if norm > 1e-30 {
+                            for i in 0..n {
+                                frame[(i, 0)] = mat[(i, 0)] / norm;
+                            }
+                        } else {
+                            frame[(0, 0)] = 1.0;
                         }
                     } else {
                         frame[(0, 0)] = 1.0;
                     }
+                    frame
                 } else {
-                    frame[(0, 0)] = 1.0;
+                    let rank = truncation_rank(&s, eps_node).max(1).min(u.ncols());
+                    u.subcols(0, rank).to_owned()
                 }
-                frame
-            } else {
-                let rank = truncation_rank(&s, eps_node).max(1).min(u.ncols());
-                u.subcols(0, rank).to_owned()
-            }
-        }).collect();
+            })
+            .collect();
 
         // Root frame: trivially [1] (1×1)
         let mut root_frame = Mat::zeros(1, 1);
@@ -1198,7 +1204,11 @@ fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64 + Sync>(
         return (transfer, 1);
     }
 
-    let kt = truncation_rank(&sv, eps).max(1).min(max_rank).min(k_lr).min(u.ncols());
+    let kt = truncation_rank(&sv, eps)
+        .max(1)
+        .min(max_rank)
+        .min(k_lr)
+        .min(u.ncols());
 
     // Transfer tensor B_t[i, (jl, jr)] = U_R[(jl*kr+jr), i]
     // No singular value scaling — the HT format propagates scale through the tree.
@@ -1662,8 +1672,12 @@ impl HtTensor {
             }
         } else {
             // Fiber-based sampling path: evaluate along the main diagonal
-            let n_samples = self.shape[0].min(self.shape[1]).min(self.shape[2])
-                .min(self.shape[3]).min(self.shape[4]).min(self.shape[5]);
+            let n_samples = self.shape[0]
+                .min(self.shape[1])
+                .min(self.shape[2])
+                .min(self.shape[3])
+                .min(self.shape[4])
+                .min(self.shape[5]);
             let mut neg_count: u64 = 0;
             for i in 0..n_samples {
                 let val = self.evaluate([i, i, i, i, i, i]);
@@ -4191,7 +4205,10 @@ mod tests {
     fn test_positivity_disabled_by_default() {
         let domain = test_domain(8);
         let ht = HtTensor::new(&domain, 4);
-        assert!(!ht.positivity_limiter, "positivity_limiter should be false by default");
+        assert!(
+            !ht.positivity_limiter,
+            "positivity_limiter should be false by default"
+        );
         assert_eq!(ht.positivity_violations(), 0);
     }
 
@@ -4220,8 +4237,7 @@ mod tests {
                                 let v0 = -lv[0] + (i3 as f64 + 0.5) * dv[0];
                                 let v1 = -lv[1] + (i4 as f64 + 0.5) * dv[1];
                                 let v2 = -lv[2] + (i5 as f64 + 0.5) * dv[2];
-                                let r2 = x0 * x0 + x1 * x1 + x2 * x2
-                                    + v0 * v0 + v1 * v1 + v2 * v2;
+                                let r2 = x0 * x0 + x1 * x1 + x2 * x2 + v0 * v0 + v1 * v1 + v2 * v2;
                                 let idx = flat_index(&shape, [i0, i1, i2, i3, i4, i5]);
                                 data[idx] = (-r2).exp();
                             }
@@ -4279,8 +4295,7 @@ mod tests {
                                 let v0 = -lv[0] + (i3 as f64 + 0.5) * dv[0];
                                 let v1 = -lv[1] + (i4 as f64 + 0.5) * dv[1];
                                 let v2 = -lv[2] + (i5 as f64 + 0.5) * dv[2];
-                                let r2 = x0 * x0 + x1 * x1 + x2 * x2
-                                    + v0 * v0 + v1 * v1 + v2 * v2;
+                                let r2 = x0 * x0 + x1 * x1 + x2 * x2 + v0 * v0 + v1 * v1 + v2 * v2;
                                 // Use a function that oscillates: positive near center,
                                 // negative further out
                                 let idx = flat_index(&shape, [i0, i1, i2, i3, i4, i5]);

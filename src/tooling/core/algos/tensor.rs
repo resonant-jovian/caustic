@@ -1996,8 +1996,8 @@ mod tests {
             shape,
             time: 0.0,
         };
-        let mut tt = TensorTrain::from_snapshot(&snap, 20, 1e-10, &domain)
-            .with_positivity_limiter(true);
+        let mut tt =
+            TensorTrain::from_snapshot(&snap, 20, 1e-10, &domain).with_positivity_limiter(true);
         let dummy = DisplacementField {
             dx: vec![0.0; 8 * 8 * 8],
             dy: vec![0.0; 8 * 8 * 8],
@@ -2068,8 +2068,8 @@ mod tests {
             shape,
             time: 0.0,
         };
-        let mut tt = TensorTrain::from_snapshot(&snap, 20, 1e-10, &domain)
-            .with_positivity_limiter(true);
+        let mut tt =
+            TensorTrain::from_snapshot(&snap, 20, 1e-10, &domain).with_positivity_limiter(true);
         let mass_before = tt.total_mass();
 
         let dummy = DisplacementField {

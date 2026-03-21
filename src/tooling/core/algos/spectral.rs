@@ -149,7 +149,9 @@ impl SpectralV {
         // For the zeroth-order approximation, use the diagonal modes
         let sigma = self.velocity_scale;
 
-        let (v2_sum, mass_sum) = self.coefficients.par_chunks(n_modes3)
+        let (v2_sum, mass_sum) = self
+            .coefficients
+            .par_chunks(n_modes3)
             .fold(
                 || (0.0f64, 0.0f64),
                 |(mut v2, mut mass), cell| {
@@ -282,85 +284,82 @@ impl SpectralV {
         // Each pass reduces the residual negatives from Gibbs ringing.
         let max_iter = 3;
 
-        self.coefficients
-            .par_chunks_mut(n_modes3)
-            .for_each(|cell| {
-                for _iter in 0..max_iter {
-                    // Step 1: Evaluate f at all quadrature points
-                    let mut f_vals = vec![0.0f64; nq3];
-                    let mut any_negative = false;
+        self.coefficients.par_chunks_mut(n_modes3).for_each(|cell| {
+            for _iter in 0..max_iter {
+                // Step 1: Evaluate f at all quadrature points
+                let mut f_vals = vec![0.0f64; nq3];
+                let mut any_negative = false;
 
-                    for iq0 in 0..nq {
-                        for iq1 in 0..nq {
-                            for iq2 in 0..nq {
-                                let qi = iq0 * nq * nq + iq1 * nq + iq2;
-                                let mut f_val = 0.0;
-                                for m0 in 0..n_modes {
-                                    let p0 = psi_tables[0][m0][iq0];
-                                    for m1 in 0..n_modes {
-                                        let p01 = p0 * psi_tables[1][m1][iq1];
-                                        for (m2, psi_m2) in
-                                            psi_tables[2].iter().enumerate().take(n_modes)
-                                        {
-                                            let mi =
-                                                m0 * n_modes * n_modes + m1 * n_modes + m2;
-                                            f_val += cell[mi] * p01 * psi_m2[iq2];
-                                        }
+                for iq0 in 0..nq {
+                    for iq1 in 0..nq {
+                        for iq2 in 0..nq {
+                            let qi = iq0 * nq * nq + iq1 * nq + iq2;
+                            let mut f_val = 0.0;
+                            for m0 in 0..n_modes {
+                                let p0 = psi_tables[0][m0][iq0];
+                                for m1 in 0..n_modes {
+                                    let p01 = p0 * psi_tables[1][m1][iq1];
+                                    for (m2, psi_m2) in
+                                        psi_tables[2].iter().enumerate().take(n_modes)
+                                    {
+                                        let mi = m0 * n_modes * n_modes + m1 * n_modes + m2;
+                                        f_val += cell[mi] * p01 * psi_m2[iq2];
                                     }
-                                }
-                                // Include the sigma^3 factor from reconstruction
-                                f_val *= sigma3;
-                                f_vals[qi] = f_val;
-                                if f_val < 0.0 {
-                                    any_negative = true;
                                 }
                             }
-                        }
-                    }
-
-                    if !any_negative {
-                        break;
-                    }
-
-                    // Step 2: Clip negatives and count violations
-                    let mut violations = 0u64;
-                    for val in f_vals.iter_mut() {
-                        if *val < 0.0 {
-                            *val = 0.0;
-                            violations += 1;
-                        }
-                    }
-                    total_violations.fetch_add(violations, Ordering::Relaxed);
-
-                    // Step 3: Re-project clipped values onto Hermite basis
-                    // Since the Hermite functions are orthonormal, the Gram matrix is identity.
-                    // a_{m0,m1,m2} = integral f(v) * psi_{m0}(v0/s) * psi_{m1}(v1/s) * psi_{m2}(v2/s) dv^3 / sigma^3
-                    // Approximated by quadrature sum:
-                    for m0 in 0..n_modes {
-                        for m1 in 0..n_modes {
-                            for m2 in 0..n_modes {
-                                let mi = m0 * n_modes * n_modes + m1 * n_modes + m2;
-                                let mut sum = 0.0;
-                                for iq0 in 0..nq {
-                                    let p0 = psi_tables[0][m0][iq0];
-                                    for iq1 in 0..nq {
-                                        let p01 = p0 * psi_tables[1][m1][iq1];
-                                        for (iq2, psi_q2) in
-                                            psi_tables[2][m2].iter().enumerate().take(nq)
-                                        {
-                                            let qi = iq0 * nq * nq + iq1 * nq + iq2;
-                                            // f_vals already includes sigma^3; divide it
-                                            // back out for the projection formula
-                                            sum += (f_vals[qi] / sigma3) * p01 * psi_q2;
-                                        }
-                                    }
-                                }
-                                cell[mi] = sum * dv_over_sigma3;
+                            // Include the sigma^3 factor from reconstruction
+                            f_val *= sigma3;
+                            f_vals[qi] = f_val;
+                            if f_val < 0.0 {
+                                any_negative = true;
                             }
                         }
                     }
                 }
-            });
+
+                if !any_negative {
+                    break;
+                }
+
+                // Step 2: Clip negatives and count violations
+                let mut violations = 0u64;
+                for val in f_vals.iter_mut() {
+                    if *val < 0.0 {
+                        *val = 0.0;
+                        violations += 1;
+                    }
+                }
+                total_violations.fetch_add(violations, Ordering::Relaxed);
+
+                // Step 3: Re-project clipped values onto Hermite basis
+                // Since the Hermite functions are orthonormal, the Gram matrix is identity.
+                // a_{m0,m1,m2} = integral f(v) * psi_{m0}(v0/s) * psi_{m1}(v1/s) * psi_{m2}(v2/s) dv^3 / sigma^3
+                // Approximated by quadrature sum:
+                for m0 in 0..n_modes {
+                    for m1 in 0..n_modes {
+                        for m2 in 0..n_modes {
+                            let mi = m0 * n_modes * n_modes + m1 * n_modes + m2;
+                            let mut sum = 0.0;
+                            for iq0 in 0..nq {
+                                let p0 = psi_tables[0][m0][iq0];
+                                for iq1 in 0..nq {
+                                    let p01 = p0 * psi_tables[1][m1][iq1];
+                                    for (iq2, psi_q2) in
+                                        psi_tables[2][m2].iter().enumerate().take(nq)
+                                    {
+                                        let qi = iq0 * nq * nq + iq1 * nq + iq2;
+                                        // f_vals already includes sigma^3; divide it
+                                        // back out for the projection formula
+                                        sum += (f_vals[qi] / sigma3) * p01 * psi_q2;
+                                    }
+                                }
+                            }
+                            cell[mi] = sum * dv_over_sigma3;
+                        }
+                    }
+                }
+            }
+        });
 
         self.positivity_violations
             .fetch_add(total_violations.load(Ordering::Relaxed), Ordering::Relaxed);
@@ -1791,9 +1790,8 @@ mod tests {
             let base = si * n_modes3;
             spec.coefficients[base] = 1.0; // a_{0,0,0}
             // Put amplitude in a high mode to create Gibbs-like oscillations
-            let high_mode = (n_modes - 1) * n_modes * n_modes
-                + (n_modes - 1) * n_modes
-                + (n_modes - 1);
+            let high_mode =
+                (n_modes - 1) * n_modes * n_modes + (n_modes - 1) * n_modes + (n_modes - 1);
             spec.coefficients[base + high_mode] = 2.0;
         }
 
@@ -1847,9 +1845,8 @@ mod tests {
         for si in 0..(4 * 4 * 4) {
             let base = si * n_modes3;
             spec_before.coefficients[base] = 1.0;
-            let high_mode = (n_modes - 1) * n_modes * n_modes
-                + (n_modes - 1) * n_modes
-                + (n_modes - 1);
+            let high_mode =
+                (n_modes - 1) * n_modes * n_modes + (n_modes - 1) * n_modes + (n_modes - 1);
             spec_before.coefficients[base + high_mode] = 2.0;
         }
 
@@ -1883,7 +1880,8 @@ mod tests {
         assert!(
             worst_negative_after.abs() < worst_negative_before.abs() * 0.2,
             "Positivity enforcement should reduce negative magnitude by at least 5x: before={}, after={}",
-            worst_negative_before, worst_negative_after
+            worst_negative_before,
+            worst_negative_after
         );
     }
 
@@ -1907,9 +1905,8 @@ mod tests {
         for si in 0..(4 * 4 * 4) {
             let base = si * n_modes3;
             spec.coefficients[base] = 1.0;
-            let high_mode = (n_modes - 1) * n_modes * n_modes
-                + (n_modes - 1) * n_modes
-                + (n_modes - 1);
+            let high_mode =
+                (n_modes - 1) * n_modes * n_modes + (n_modes - 1) * n_modes + (n_modes - 1);
             spec.coefficients[base + high_mode] = 2.0;
         }
 

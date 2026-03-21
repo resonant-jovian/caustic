@@ -75,11 +75,14 @@ impl HybridRepr {
         );
 
         // Identify newly multi-stream cells
-        self.mask.par_iter_mut().zip(counts.data.par_iter()).for_each(|(m, &c)| {
-            if c > self.stream_threshold && !*m {
-                *m = true;
-            }
-        });
+        self.mask
+            .par_iter_mut()
+            .zip(counts.data.par_iter())
+            .for_each(|(m, &c)| {
+                if c > self.stream_threshold && !*m {
+                    *m = true;
+                }
+            });
 
         // Deposit sheet particles that sit in grid-mode cells into the 6D grid.
         // We iterate particles; for each in a grid-mode cell, CIC deposit.
@@ -291,7 +294,11 @@ impl PhaseSpaceRepr for HybridRepr {
             .zip(grid_density.data.par_iter())
             .zip(sheet_density.data.par_iter())
             .map(|((&use_grid, &gd), &sd)| {
-                if use_grid { gd * cell_vol } else { sd * cell_vol }
+                if use_grid {
+                    gd * cell_vol
+                } else {
+                    sd * cell_vol
+                }
             })
             .sum();
         total

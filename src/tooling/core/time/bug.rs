@@ -180,7 +180,10 @@ pub(crate) fn k_step_leaf(
     if u.ncols() == 0 {
         return (q_aug, r_aug.subcols(0, k).to_owned());
     }
-    let rank = truncation_rank(&sv, tolerance).max(1).min(target_rank).min(u.ncols());
+    let rank = truncation_rank(&sv, tolerance)
+        .max(1)
+        .min(target_rank)
+        .min(u.ncols());
 
     // Truncated basis: Q_trunc = Q_aug @ U[:, :rank]
     let u_trunc = u.subcols(0, rank);

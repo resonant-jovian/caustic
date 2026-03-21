@@ -184,14 +184,7 @@ impl FlowMapRepr {
 
             // Interpolate f₀ from the snapshot at this (x, v) point
             let f0 = Self::interpolate_6d(
-                &snap.data,
-                snap.shape,
-                &pos,
-                &vel,
-                &snap_dx,
-                &snap_dv,
-                &lx,
-                &lv,
+                &snap.data, snap.shape, &pos, &vel, &snap_dx, &snap_dv, &lx, &lv,
             );
 
             let f0 = f0.max(0.0);
@@ -282,19 +275,31 @@ impl FlowMapRepr {
                     let wx = wx0 * wx1 * wx2;
 
                     for div0 in 0..2isize {
-                        let wv0 = if div0 == 0 { 1.0 - v_frac[0] } else { v_frac[0] };
+                        let wv0 = if div0 == 0 {
+                            1.0 - v_frac[0]
+                        } else {
+                            v_frac[0]
+                        };
                         let iv0 = v_ci[0] + div0;
                         if iv0 < 0 || iv0 >= ns_v[0] as isize {
                             continue;
                         }
                         for div1 in 0..2isize {
-                            let wv1 = if div1 == 0 { 1.0 - v_frac[1] } else { v_frac[1] };
+                            let wv1 = if div1 == 0 {
+                                1.0 - v_frac[1]
+                            } else {
+                                v_frac[1]
+                            };
                             let iv1 = v_ci[1] + div1;
                             if iv1 < 0 || iv1 >= ns_v[1] as isize {
                                 continue;
                             }
                             for div2 in 0..2isize {
-                                let wv2 = if div2 == 0 { 1.0 - v_frac[2] } else { v_frac[2] };
+                                let wv2 = if div2 == 0 {
+                                    1.0 - v_frac[2]
+                                } else {
+                                    v_frac[2]
+                                };
                                 let iv2 = v_ci[2] + div2;
                                 if iv2 < 0 || iv2 >= ns_v[2] as isize {
                                     continue;
@@ -419,7 +424,9 @@ impl FlowMapRepr {
                 self.positions[3 * i + 1],
                 self.positions[3 * i + 2],
             ];
-            if let Some(c) = self.cell_index(&pos) && c == target {
+            if let Some(c) = self.cell_index(&pos)
+                && c == target
+            {
                 result.push(i);
             }
         }
@@ -497,8 +504,7 @@ impl PhaseSpaceRepr for FlowMapRepr {
                                 {
                                     continue;
                                 }
-                                let flat =
-                                    ii as usize * ny * nz + jj as usize * nz + kk as usize;
+                                let flat = ii as usize * ny * nz + jj as usize * nz + kk as usize;
                                 local[flat] += mass * w;
                             }
                         }
@@ -595,11 +601,7 @@ impl PhaseSpaceRepr for FlowMapRepr {
             .par_chunks_mut(3)
             .enumerate()
             .for_each(|(i, vel_chunk)| {
-                let pos = [
-                    positions[3 * i],
-                    positions[3 * i + 1],
-                    positions[3 * i + 2],
-                ];
+                let pos = [positions[3 * i], positions[3 * i + 1], positions[3 * i + 2]];
                 let a = Self::interpolate_vec_field(
                     &acceleration.gx,
                     &acceleration.gy,
@@ -939,19 +941,31 @@ impl PhaseSpaceRepr for FlowMapRepr {
                         let wx = wx0 * wx1 * wx2;
 
                         for div0 in 0..2isize {
-                            let wv0 = if div0 == 0 { 1.0 - v_frac[0] } else { v_frac[0] };
+                            let wv0 = if div0 == 0 {
+                                1.0 - v_frac[0]
+                            } else {
+                                v_frac[0]
+                            };
                             let iv0 = v_ci[0] + div0;
                             if iv0 < 0 || iv0 >= nv[0] as isize {
                                 continue;
                             }
                             for div1 in 0..2isize {
-                                let wv1 = if div1 == 0 { 1.0 - v_frac[1] } else { v_frac[1] };
+                                let wv1 = if div1 == 0 {
+                                    1.0 - v_frac[1]
+                                } else {
+                                    v_frac[1]
+                                };
                                 let iv1 = v_ci[1] + div1;
                                 if iv1 < 0 || iv1 >= nv[1] as isize {
                                     continue;
                                 }
                                 for div2 in 0..2isize {
-                                    let wv2 = if div2 == 0 { 1.0 - v_frac[2] } else { v_frac[2] };
+                                    let wv2 = if div2 == 0 {
+                                        1.0 - v_frac[2]
+                                    } else {
+                                        v_frac[2]
+                                    };
                                     let iv2 = v_ci[2] + div2;
                                     if iv2 < 0 || iv2 >= nv[2] as isize {
                                         continue;
@@ -1049,8 +1063,8 @@ mod tests {
 
             let r2 = x * x + y * y + z * z;
             let v2 = vx * vx + vy * vy + vz * vz;
-            let f0 = (-r2 / (2.0 * sigma_x * sigma_x)).exp()
-                * (-v2 / (2.0 * sigma_v * sigma_v)).exp();
+            let f0 =
+                (-r2 / (2.0 * sigma_x * sigma_x)).exp() * (-v2 / (2.0 * sigma_v * sigma_v)).exp();
 
             repr.f0_values[i] = f0;
             repr.masses[i] = f0 * phase_vol;
