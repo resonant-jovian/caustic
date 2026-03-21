@@ -219,8 +219,27 @@ impl HtTensor {
             let dims = dim_sets[node_idx];
             let mat = multi_mode_unfold(data, &shape, dims);
             let (u, s, _vt) = thin_svd(&mat);
-            let rank = truncation_rank(&s, eps_node).max(1);
-            u.subcols(0, rank).to_owned()
+            if u.ncols() == 0 {
+                // SVD failed — use first column of unfolding as single basis vector
+                let n = mat.nrows();
+                let mut frame = Mat::zeros(n, 1);
+                if mat.ncols() > 0 {
+                    let norm: f64 = (0..n).map(|i| mat[(i, 0)] * mat[(i, 0)]).sum::<f64>().sqrt();
+                    if norm > 1e-30 {
+                        for i in 0..n {
+                            frame[(i, 0)] = mat[(i, 0)] / norm;
+                        }
+                    } else {
+                        frame[(0, 0)] = 1.0;
+                    }
+                } else {
+                    frame[(0, 0)] = 1.0;
+                }
+                frame
+            } else {
+                let rank = truncation_rank(&s, eps_node).max(1).min(u.ncols());
+                u.subcols(0, rank).to_owned()
+            }
         }).collect();
 
         // Root frame: trivially [1] (1×1)
@@ -1068,7 +1087,17 @@ fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64 + Sync>(
     // When child frames are good: B ≈ U_R^T (transfer tensor is just the transposed left SVD vecs).
     // The singular values are implicitly captured by the parent-level transfer.
     let (u, sv, _vt) = thin_svd(&proj_mat);
-    let kt = truncation_rank(&sv, eps).max(1).min(max_rank).min(k_lr);
+
+    // SVD failed or returned degenerate result — fall back to rank-1 identity transfer
+    if u.ncols() == 0 {
+        let mut transfer = vec![0.0f64; 1 * k_lr];
+        if k_lr > 0 {
+            transfer[0] = 1.0;
+        }
+        return (transfer, 1);
+    }
+
+    let kt = truncation_rank(&sv, eps).max(1).min(max_rank).min(k_lr).min(u.ncols());
 
     // Transfer tensor B_t[i, (jl, jr)] = U_R[(jl*kr+jr), i]
     // No singular value scaling — the HT format propagates scale through the tree.
