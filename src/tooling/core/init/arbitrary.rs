@@ -134,7 +134,7 @@ impl CustomICArray {
 
         let data: Vec<f64> = raw
             .chunks_exact(8)
-            .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+            .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap_or([0u8; 8])))
             .collect();
 
         if data.len() != expected {

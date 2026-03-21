@@ -150,7 +150,7 @@ impl PoissonSolver for VgfPoisson {
             });
 
         // Use cached scratch for (2N)³ FFTs (saves 2 large allocations per solve)
-        let mut scratch = std::mem::take(&mut *self.scratch_cache.lock().unwrap());
+        let mut scratch = std::mem::take(&mut *self.scratch_cache.lock().unwrap_or_else(|e| e.into_inner()));
         scratch.resize(n2_total, Complex::new(0.0, 0.0));
 
         // 2. Forward FFT
@@ -189,7 +189,7 @@ impl PoissonSolver for VgfPoisson {
         );
 
         // Return scratch to cache
-        *self.scratch_cache.lock().unwrap() = scratch;
+        *self.scratch_cache.lock().unwrap_or_else(|e| e.into_inner()) = scratch;
         let norm = n2_total as f64;
 
         // 5. Extract N³ sub-grid (parallel over z-rows)

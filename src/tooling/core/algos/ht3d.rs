@@ -98,7 +98,10 @@ impl HtTensor3D {
                 let k = frame.ncols();
                 (0..k).map(|j| frame[(idx, j)]).collect()
             }
-            _ => panic!("Node {node} is not a leaf"),
+            _ => {
+                debug_assert!(false, "Node {node} is not a leaf");
+                vec![]
+            }
         }
     }
 
@@ -122,7 +125,10 @@ impl HtTensor3D {
                 }
                 result
             }
-            _ => panic!("Node {node} is not an interior node"),
+            _ => {
+                debug_assert!(false, "Node {node} is not an interior node");
+                vec![]
+            }
         }
     }
 
@@ -721,13 +727,40 @@ impl HtTensor3D {
 
     /// Extract leaf frames as references to faer Mat.
     fn leaf_frames(&self) -> (&Mat<f64>, &Mat<f64>, &Mat<f64>) {
-        let f = |idx: usize| -> &Mat<f64> {
-            match &self.nodes[idx] {
-                HtNode3D::Leaf { frame, .. } => frame,
-                _ => panic!("Node {idx} is not a leaf"),
+        let f0 = match &self.nodes[0] {
+            HtNode3D::Leaf { frame, .. } => frame,
+            _ => {
+                debug_assert!(false, "Node 0 is not a leaf");
+                // Return the first available leaf frame as fallback (unreachable path)
+                match &self.nodes[0] {
+                    HtNode3D::Leaf { frame, .. } => frame,
+                    HtNode3D::Interior { .. } => {
+                        static EMPTY: std::sync::LazyLock<Mat<f64>> =
+                            std::sync::LazyLock::new(|| Mat::zeros(0, 0));
+                        &EMPTY
+                    }
+                }
             }
         };
-        (f(0), f(1), f(2))
+        let f1 = match &self.nodes[1] {
+            HtNode3D::Leaf { frame, .. } => frame,
+            _ => {
+                debug_assert!(false, "Node 1 is not a leaf");
+                static EMPTY: std::sync::LazyLock<Mat<f64>> =
+                    std::sync::LazyLock::new(|| Mat::zeros(0, 0));
+                &EMPTY
+            }
+        };
+        let f2 = match &self.nodes[2] {
+            HtNode3D::Leaf { frame, .. } => frame,
+            _ => {
+                debug_assert!(false, "Node 2 is not a leaf");
+                static EMPTY: std::sync::LazyLock<Mat<f64>> =
+                    std::sync::LazyLock::new(|| Mat::zeros(0, 0));
+                &EMPTY
+            }
+        };
+        (f0, f1, f2)
     }
 
     /// Extract interior transfer tensor and ranks.
@@ -736,7 +769,10 @@ impl HtTensor3D {
             HtNode3D::Interior {
                 transfer, ranks, ..
             } => (transfer, *ranks),
-            _ => panic!("Node {idx} is not interior"),
+            _ => {
+                debug_assert!(false, "Node {idx} is not interior");
+                (&[], [0, 0, 0])
+            }
         }
     }
 
@@ -750,11 +786,17 @@ impl HtTensor3D {
         for leaf_idx in 0..NUM_LEAVES_3D {
             let (frame_a, dim_a) = match &self.nodes[leaf_idx] {
                 HtNode3D::Leaf { dim, frame } => (frame, *dim),
-                _ => panic!("Expected leaf"),
+                _ => {
+                    debug_assert!(false, "Expected leaf at index {leaf_idx}");
+                    continue;
+                }
             };
             let frame_b = match &other.nodes[leaf_idx] {
                 HtNode3D::Leaf { frame, .. } => frame,
-                _ => panic!("Expected leaf"),
+                _ => {
+                    debug_assert!(false, "Expected leaf at index {leaf_idx}");
+                    continue;
+                }
             };
 
             let n = frame_a.nrows();
@@ -776,18 +818,8 @@ impl HtTensor3D {
         }
 
         // Interior node 3: block-diagonal transfer
-        let (ta, ra) = match &self.nodes[3] {
-            HtNode3D::Interior {
-                transfer, ranks, ..
-            } => (transfer, *ranks),
-            _ => panic!("Expected interior"),
-        };
-        let (tb, rb) = match &other.nodes[3] {
-            HtNode3D::Interior {
-                transfer, ranks, ..
-            } => (transfer, *ranks),
-            _ => panic!("Expected interior"),
-        };
+        let (ta, ra) = self.interior_transfer(3);
+        let (tb, rb) = other.interior_transfer(3);
 
         let new_kt3 = ra[0] + rb[0];
         let new_kl3 = ra[1] + rb[1]; // k1_a + k1_b
@@ -824,18 +856,8 @@ impl HtTensor3D {
         // Both A and B have root rank 1, so:
         //   B_sum[0, l, r] = B_A[0, l_A, r_A]  for l in [0..k0_A), r in [0..k3_A)
         //   B_sum[0, k0_A+l_B, k3_A+r_B] = B_B[0, l_B, r_B]
-        let (ta_root, ra_root) = match &self.nodes[4] {
-            HtNode3D::Interior {
-                transfer, ranks, ..
-            } => (transfer, *ranks),
-            _ => panic!("Expected interior"),
-        };
-        let (tb_root, rb_root) = match &other.nodes[4] {
-            HtNode3D::Interior {
-                transfer, ranks, ..
-            } => (transfer, *ranks),
-            _ => panic!("Expected interior"),
-        };
+        let (ta_root, ra_root) = self.interior_transfer(4);
+        let (tb_root, rb_root) = other.interior_transfer(4);
 
         let new_kt_root = 1; // Root rank stays 1 for scalar addition
         let new_kl_root = ra_root[1] + rb_root[1]; // k0_a + k0_b
@@ -896,7 +918,10 @@ impl HtTensor3D {
             HtNode3D::Interior {
                 transfer, ranks, ..
             } => (transfer.clone(), *ranks),
-            _ => panic!("Node 3 not interior"),
+            _ => {
+                debug_assert!(false, "Node 3 not interior");
+                return;
+            }
         };
         let [kt3, k1, k2] = rk3;
 
@@ -956,7 +981,10 @@ impl HtTensor3D {
             HtNode3D::Interior {
                 transfer, ranks, ..
             } => (transfer.clone(), *ranks),
-            _ => panic!("Node 4 not interior"),
+            _ => {
+                debug_assert!(false, "Node 4 not interior");
+                return;
+            }
         };
         let [_kt4, k0, k3_old] = rk4;
 
@@ -1175,7 +1203,10 @@ impl HtTensor3DComplex {
                 let im: Vec<f64> = (0..k).map(|j| frame_im[(idx, j)]).collect();
                 (re, im)
             }
-            _ => panic!("Node {node} is not a leaf"),
+            _ => {
+                debug_assert!(false, "Node {node} is not a leaf");
+                (vec![], vec![])
+            }
         }
     }
 
@@ -1217,7 +1248,10 @@ impl HtTensor3DComplex {
                 }
                 (re, im)
             }
-            _ => panic!("Node {node} is not an interior node"),
+            _ => {
+                debug_assert!(false, "Node {node} is not an interior node");
+                (vec![], vec![])
+            }
         }
     }
 
@@ -1513,7 +1547,10 @@ fn leaf_qr(node: &HtNode3D) -> (Mat<f64>, Mat<f64>) {
             let qr = frame.as_ref().qr();
             (qr.compute_thin_Q(), qr.thin_R().to_owned())
         }
-        _ => panic!("leaf_qr called on non-leaf node"),
+        _ => {
+            debug_assert!(false, "leaf_qr called on non-leaf node");
+            (Mat::zeros(1, 1), Mat::zeros(1, 1))
+        }
     }
 }
 

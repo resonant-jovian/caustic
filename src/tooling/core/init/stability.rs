@@ -94,8 +94,8 @@ impl DiskStabilityIC {
             halo_potential: None,
             perturbation_mode_m,
             perturbation_pattern_speed: Decimal::from_f64_retain(perturbation_pattern_speed)
-                .unwrap(),
-            perturbation_amplitude: Decimal::from_f64_retain(perturbation_amplitude).unwrap(),
+                .unwrap_or(Decimal::ZERO),
+            perturbation_amplitude: Decimal::from_f64_retain(perturbation_amplitude).unwrap_or(Decimal::ZERO),
             perturbation_pattern_speed_f64: perturbation_pattern_speed,
             perturbation_amplitude_f64: perturbation_amplitude,
         }
@@ -115,8 +115,8 @@ impl DiskStabilityIC {
             bulge: None,
             halo_potential: None,
             perturbation_mode_m,
-            perturbation_pattern_speed_f64: perturbation_pattern_speed.to_f64().unwrap(),
-            perturbation_amplitude_f64: perturbation_amplitude.to_f64().unwrap(),
+            perturbation_pattern_speed_f64: perturbation_pattern_speed.to_f64().unwrap_or(0.0),
+            perturbation_amplitude_f64: perturbation_amplitude.to_f64().unwrap_or(0.0),
             perturbation_pattern_speed,
             perturbation_amplitude,
         }

@@ -36,12 +36,12 @@ impl MergerIC {
     ) -> Self {
         Self {
             body1,
-            mass1: Decimal::from_f64_retain(mass1).unwrap(),
+            mass1: Decimal::from_f64_retain(mass1).unwrap_or(Decimal::ZERO),
             body2,
-            mass2: Decimal::from_f64_retain(mass2).unwrap(),
+            mass2: Decimal::from_f64_retain(mass2).unwrap_or(Decimal::ZERO),
             separation,
             relative_velocity,
-            impact_parameter: Decimal::from_f64_retain(impact_parameter).unwrap(),
+            impact_parameter: Decimal::from_f64_retain(impact_parameter).unwrap_or(Decimal::ZERO),
             mass1_f64: mass1,
             mass2_f64: mass2,
             impact_parameter_f64: impact_parameter,
@@ -60,12 +60,12 @@ impl MergerIC {
     ) -> Self {
         Self {
             body1,
-            mass1_f64: mass1.to_f64().unwrap(),
+            mass1_f64: mass1.to_f64().unwrap_or(0.0),
             body2,
-            mass2_f64: mass2.to_f64().unwrap(),
+            mass2_f64: mass2.to_f64().unwrap_or(0.0),
             separation,
             relative_velocity,
-            impact_parameter_f64: impact_parameter.to_f64().unwrap(),
+            impact_parameter_f64: impact_parameter.to_f64().unwrap_or(0.0),
             mass1,
             mass2,
             impact_parameter,

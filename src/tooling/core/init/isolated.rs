@@ -33,9 +33,9 @@ impl PlummerIC {
     /// Create a Plummer IC from f64 parameters (backward-compatible).
     pub fn new(mass: f64, scale_radius: f64, g: f64) -> Self {
         Self {
-            mass: Decimal::from_f64_retain(mass).unwrap(),
-            scale_radius: Decimal::from_f64_retain(scale_radius).unwrap(),
-            g: Decimal::from_f64_retain(g).unwrap(),
+            mass: Decimal::from_f64_retain(mass).unwrap_or(Decimal::ZERO),
+            scale_radius: Decimal::from_f64_retain(scale_radius).unwrap_or(Decimal::ZERO),
+            g: Decimal::from_f64_retain(g).unwrap_or(Decimal::ZERO),
             mass_f64: mass,
             scale_radius_f64: scale_radius,
             g_f64: g,
@@ -45,9 +45,9 @@ impl PlummerIC {
     /// Create a Plummer IC from Decimal parameters (exact config).
     pub fn new_decimal(mass: Decimal, scale_radius: Decimal, g: Decimal) -> Self {
         Self {
-            mass_f64: mass.to_f64().unwrap(),
-            scale_radius_f64: scale_radius.to_f64().unwrap(),
-            g_f64: g.to_f64().unwrap(),
+            mass_f64: mass.to_f64().unwrap_or(0.0),
+            scale_radius_f64: scale_radius.to_f64().unwrap_or(0.0),
+            g_f64: g.to_f64().unwrap_or(0.0),
             mass,
             scale_radius,
             g,
@@ -239,10 +239,10 @@ impl KingIC {
         let norm_a = rho_scale / (2.0 * PI * sigma * sigma).powf(1.5);
 
         Self {
-            mass: Decimal::from_f64_retain(mass).unwrap(),
-            king_parameter_w0: Decimal::from_f64_retain(king_parameter_w0).unwrap(),
-            velocity_dispersion: Decimal::from_f64_retain(sigma).unwrap(),
-            g: Decimal::from_f64_retain(g).unwrap(),
+            mass: Decimal::from_f64_retain(mass).unwrap_or(Decimal::ZERO),
+            king_parameter_w0: Decimal::from_f64_retain(king_parameter_w0).unwrap_or(Decimal::ZERO),
+            velocity_dispersion: Decimal::from_f64_retain(sigma).unwrap_or(Decimal::ZERO),
+            g: Decimal::from_f64_retain(g).unwrap_or(Decimal::ZERO),
             mass_f64: mass,
             king_parameter_w0_f64: king_parameter_w0,
             velocity_dispersion_f64: sigma,
@@ -263,10 +263,10 @@ impl KingIC {
         g: Decimal,
     ) -> Self {
         Self::new(
-            mass.to_f64().unwrap(),
-            king_parameter_w0.to_f64().unwrap(),
-            scale_radius.to_f64().unwrap(),
-            g.to_f64().unwrap(),
+            mass.to_f64().unwrap_or(0.0),
+            king_parameter_w0.to_f64().unwrap_or(0.0),
+            scale_radius.to_f64().unwrap_or(0.0),
+            g.to_f64().unwrap_or(0.0),
         )
     }
 }
@@ -316,8 +316,8 @@ fn interpolate_table(x_table: &[f64], y_table: &[f64], x: f64) -> f64 {
     if x <= x_table[0] {
         return y_table[0];
     }
-    if x >= *x_table.last().unwrap() {
-        return *y_table.last().unwrap();
+    if x >= *x_table.last().unwrap_or(&0.0) {
+        return *y_table.last().unwrap_or(&0.0);
     }
     // Binary search for interval
     let mut lo = 0;
@@ -350,9 +350,9 @@ impl HernquistIC {
     /// Create a Hernquist IC from f64 parameters (backward-compatible).
     pub fn new(mass: f64, scale_radius: f64, g: f64) -> Self {
         Self {
-            mass: Decimal::from_f64_retain(mass).unwrap(),
-            scale_radius: Decimal::from_f64_retain(scale_radius).unwrap(),
-            g: Decimal::from_f64_retain(g).unwrap(),
+            mass: Decimal::from_f64_retain(mass).unwrap_or(Decimal::ZERO),
+            scale_radius: Decimal::from_f64_retain(scale_radius).unwrap_or(Decimal::ZERO),
+            g: Decimal::from_f64_retain(g).unwrap_or(Decimal::ZERO),
             mass_f64: mass,
             scale_radius_f64: scale_radius,
             g_f64: g,
@@ -362,9 +362,9 @@ impl HernquistIC {
     /// Create a Hernquist IC from Decimal parameters (exact config).
     pub fn new_decimal(mass: Decimal, scale_radius: Decimal, g: Decimal) -> Self {
         Self {
-            mass_f64: mass.to_f64().unwrap(),
-            scale_radius_f64: scale_radius.to_f64().unwrap(),
-            g_f64: g.to_f64().unwrap(),
+            mass_f64: mass.to_f64().unwrap_or(0.0),
+            scale_radius_f64: scale_radius.to_f64().unwrap_or(0.0),
+            g_f64: g.to_f64().unwrap_or(0.0),
             mass,
             scale_radius,
             g,
@@ -468,7 +468,7 @@ impl NfwIC {
                 (phi_of_r(r), rho_of_r(r))
             })
             .collect();
-        phi_rho.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        phi_rho.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         // Remove duplicates in Φ
         phi_rho.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-30);
 
@@ -488,7 +488,7 @@ impl NfwIC {
 
         // 3. Eddington integral: f(E) = 1/(√8·π²) ∫_{Φ_min}^{E} d²ρ/dΦ² / √(E-Φ) dΦ
         let phi_min = phi_tab[0];
-        let phi_max = *phi_tab.last().unwrap();
+        let phi_max = *phi_tab.last().unwrap_or(&0.0);
         let n_e = 200;
         let mut df_table_e = Vec::with_capacity(n_e);
         let mut df_table_f = Vec::with_capacity(n_e);
@@ -515,10 +515,10 @@ impl NfwIC {
         }
 
         Self {
-            mass: Decimal::from_f64_retain(mass).unwrap(),
-            scale_radius: Decimal::from_f64_retain(scale_radius).unwrap(),
-            concentration: Decimal::from_f64_retain(concentration).unwrap(),
-            g: Decimal::from_f64_retain(g).unwrap(),
+            mass: Decimal::from_f64_retain(mass).unwrap_or(Decimal::ZERO),
+            scale_radius: Decimal::from_f64_retain(scale_radius).unwrap_or(Decimal::ZERO),
+            concentration: Decimal::from_f64_retain(concentration).unwrap_or(Decimal::ZERO),
+            g: Decimal::from_f64_retain(g).unwrap_or(Decimal::ZERO),
             mass_f64: mass,
             scale_radius_f64: scale_radius,
             concentration_f64: concentration,
@@ -537,10 +537,10 @@ impl NfwIC {
         g: Decimal,
     ) -> Self {
         Self::new(
-            mass.to_f64().unwrap(),
-            scale_radius.to_f64().unwrap(),
-            concentration.to_f64().unwrap(),
-            g.to_f64().unwrap(),
+            mass.to_f64().unwrap_or(0.0),
+            scale_radius.to_f64().unwrap_or(0.0),
+            concentration.to_f64().unwrap_or(0.0),
+            g.to_f64().unwrap_or(0.0),
         )
     }
 }

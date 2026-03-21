@@ -62,7 +62,15 @@ impl Simulation {
     pub fn run(&mut self) -> anyhow::Result<ExitPackage> {
         loop {
             if let Some(reason) = self.step()? {
-                let snapshot = self.repr.to_snapshot(self.time);
+                let snapshot = if self.repr.can_materialize() {
+                    self.repr.to_snapshot(self.time)
+                } else {
+                    PhaseSpaceSnapshot {
+                        data: vec![],
+                        shape: [0; 6],
+                        time: self.time,
+                    }
+                };
                 let history = self.diagnostics.history.clone();
                 let wall_secs = self.start_time.elapsed().as_secs_f64();
                 return Ok(ExitPackage::assemble(
@@ -491,9 +499,16 @@ impl SimulationBuilder {
             ];
             let mut lom = LoMaC::new(spatial_shape, velocity_shape, dx, dv, v_min);
 
-            // Initialize from the IC distribution
-            let snapshot = repr.to_snapshot(0.0);
-            lom.initialize_from_kinetic(&snapshot.data);
+            // Initialize from the IC distribution — use HT-native path if available
+            if let Some(ht) = repr
+                .as_any()
+                .downcast_ref::<crate::tooling::core::algos::ht::HtTensor>()
+            {
+                lom.initialize_from_ht(ht);
+            } else {
+                let snapshot = repr.to_snapshot(0.0);
+                lom.initialize_from_kinetic(&snapshot.data);
+            }
             Some(lom)
         } else {
             None

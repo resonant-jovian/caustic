@@ -480,7 +480,11 @@ fn add_complex_ht(a: &HtTensor3DComplex, b: &HtTensor3DComplex) -> HtTensor3DCom
                     });
                 }
             }
-            _ => panic!("Mismatched node types at index {idx}"),
+            _ => {
+                debug_assert!(false, "Mismatched node types at index {idx}");
+                // Carry forward node from `a` unchanged as a safe fallback
+                nodes.push(na.clone());
+            }
         }
     }
 

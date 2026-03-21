@@ -24,10 +24,10 @@ impl CosmologyParams {
     /// Create from f64 parameters (backward-compatible).
     pub fn new(h0: f64, omega_m: f64, omega_lambda: f64, a_init: f64) -> Self {
         Self {
-            h0: Decimal::from_f64_retain(h0).unwrap(),
-            omega_m: Decimal::from_f64_retain(omega_m).unwrap(),
-            omega_lambda: Decimal::from_f64_retain(omega_lambda).unwrap(),
-            a_init: Decimal::from_f64_retain(a_init).unwrap(),
+            h0: Decimal::from_f64_retain(h0).unwrap_or(Decimal::ZERO),
+            omega_m: Decimal::from_f64_retain(omega_m).unwrap_or(Decimal::ZERO),
+            omega_lambda: Decimal::from_f64_retain(omega_lambda).unwrap_or(Decimal::ZERO),
+            a_init: Decimal::from_f64_retain(a_init).unwrap_or(Decimal::ZERO),
             h0_f64: h0,
             omega_m_f64: omega_m,
             omega_lambda_f64: omega_lambda,
@@ -43,10 +43,10 @@ impl CosmologyParams {
         a_init: Decimal,
     ) -> Self {
         Self {
-            h0_f64: h0.to_f64().unwrap(),
-            omega_m_f64: omega_m.to_f64().unwrap(),
-            omega_lambda_f64: omega_lambda.to_f64().unwrap(),
-            a_init_f64: a_init.to_f64().unwrap(),
+            h0_f64: h0.to_f64().unwrap_or(0.0),
+            omega_m_f64: omega_m.to_f64().unwrap_or(0.0),
+            omega_lambda_f64: omega_lambda.to_f64().unwrap_or(0.0),
+            a_init_f64: a_init.to_f64().unwrap_or(0.0),
             h0,
             omega_m,
             omega_lambda,
@@ -82,7 +82,7 @@ impl ZeldovichIC {
     /// Create from f64 parameters via CosmologyParams (backward-compatible).
     pub fn new(mean_density: f64, cosmology: CosmologyParams, seed: u64) -> Self {
         Self {
-            mean_density: Decimal::from_f64_retain(mean_density).unwrap(),
+            mean_density: Decimal::from_f64_retain(mean_density).unwrap_or(Decimal::ZERO),
             h0: cosmology.h0,
             omega_m: cosmology.omega_m,
             omega_lambda: cosmology.omega_lambda,
@@ -106,11 +106,11 @@ impl ZeldovichIC {
         seed: u64,
     ) -> Self {
         Self {
-            mean_density_f64: mean_density.to_f64().unwrap(),
-            h0_f64: h0.to_f64().unwrap(),
-            omega_m_f64: omega_m.to_f64().unwrap(),
-            omega_lambda_f64: omega_lambda.to_f64().unwrap(),
-            scale_factor_init_f64: scale_factor_init.to_f64().unwrap(),
+            mean_density_f64: mean_density.to_f64().unwrap_or(0.0),
+            h0_f64: h0.to_f64().unwrap_or(0.0),
+            omega_m_f64: omega_m.to_f64().unwrap_or(0.0),
+            omega_lambda_f64: omega_lambda.to_f64().unwrap_or(0.0),
+            scale_factor_init_f64: scale_factor_init.to_f64().unwrap_or(0.0),
             mean_density,
             h0,
             omega_m,

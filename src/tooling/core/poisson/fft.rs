@@ -117,11 +117,13 @@ impl FftPoisson {
                 let start = row * nz;
                 let mut inbuf = vec![0.0f64; nz];
                 inbuf.copy_from_slice(&input[start..start + nz]);
-                r2c.process(&mut inbuf, out_chunk).unwrap();
+                if let Err(e) = r2c.process(&mut inbuf, out_chunk) {
+                    tracing::error!("FFT R2C process failed: {e}");
+                }
             });
 
         // Take cached scratch (avoids per-call allocation)
-        let mut scratch = std::mem::take(&mut *self.scratch_cache.lock().unwrap());
+        let mut scratch = std::mem::take(&mut *self.scratch_cache.lock().unwrap_or_else(|e| e.into_inner()));
         scratch.resize(n_total_c, Complex::new(0.0, 0.0));
 
         // --- y-axis: C2C via tiled transpose on half-complex grid ---
@@ -171,7 +173,7 @@ impl FftPoisson {
             });
 
         // Return scratch to cache
-        *self.scratch_cache.lock().unwrap() = scratch;
+        *self.scratch_cache.lock().unwrap_or_else(|e| e.into_inner()) = scratch;
 
         buf
     }
@@ -184,7 +186,7 @@ impl FftPoisson {
 
         // Take cached scratch (avoids per-call allocation)
         let n_total_c = nx * ny * nz_c;
-        let mut scratch = std::mem::take(&mut *self.scratch_cache.lock().unwrap());
+        let mut scratch = std::mem::take(&mut *self.scratch_cache.lock().unwrap_or_else(|e| e.into_inner()));
         scratch.resize(n_total_c, Complex::new(0.0, 0.0));
 
         // --- x-axis: C2C inverse via transpose ---
@@ -245,7 +247,7 @@ impl FftPoisson {
         }
 
         // Return scratch to cache
-        *self.scratch_cache.lock().unwrap() = scratch;
+        *self.scratch_cache.lock().unwrap_or_else(|e| e.into_inner()) = scratch;
 
         let c2r = &self.c2r_z;
         let n_total_real = nx * ny * nz;
@@ -258,7 +260,9 @@ impl FftPoisson {
             .for_each(|(row, out_chunk)| {
                 let base = row * nz_c;
                 let mut inbuf = buf[base..base + nz_c].to_vec();
-                c2r.process(&mut inbuf, out_chunk).unwrap();
+                if let Err(e) = c2r.process(&mut inbuf, out_chunk) {
+                    tracing::error!("FFT C2R process failed: {e}");
+                }
             });
         output
     }
@@ -333,7 +337,7 @@ impl PoissonSolver for FftPoisson {
             .collect();
 
         // Use cached scratch for all C2C FFTs (saves 4 allocations per call)
-        let mut scratch = std::mem::take(&mut *self.scratch_cache.lock().unwrap());
+        let mut scratch = std::mem::take(&mut *self.scratch_cache.lock().unwrap_or_else(|e| e.into_inner()));
         scratch.resize(n_total, Complex::new(0.0, 0.0));
 
         super::fft_utils::fft_3d_c2c_scratch(&mut phi_hat, &mut scratch, self.shape, &self.fwd);
@@ -386,7 +390,7 @@ impl PoissonSolver for FftPoisson {
         super::fft_utils::fft_3d_c2c_scratch(&mut gz_hat, &mut scratch, self.shape, &self.inv);
 
         // Return scratch to cache
-        *self.scratch_cache.lock().unwrap() = scratch;
+        *self.scratch_cache.lock().unwrap_or_else(|e| e.into_inner()) = scratch;
 
         let inv_norm = 1.0 / n_total as f64;
         AccelerationField {
@@ -406,7 +410,7 @@ impl PoissonSolver for FftPoisson {
 /// **Deprecated:** Prefer [`VgfPoisson`](super::vgf::VgfPoisson) which provides
 /// spectral-accuracy isolated boundary conditions with lower memory overhead.
 #[deprecated(
-    since = "0.0.12",
+    since = "0.0.11",
     note = "use VgfPoisson for isolated BC; FftIsolated will be removed in a future release"
 )]
 pub struct FftIsolated {
@@ -531,7 +535,7 @@ impl PoissonSolver for FftIsolated {
             });
 
         // Use cached scratch for (2N)³ FFTs (saves 2 large allocations per solve)
-        let mut scratch = std::mem::take(&mut *self.scratch_cache.lock().unwrap());
+        let mut scratch = std::mem::take(&mut *self.scratch_cache.lock().unwrap_or_else(|e| e.into_inner()));
         scratch.resize(n2_total, Complex::new(0.0, 0.0));
 
         // 2. Forward FFT
@@ -570,7 +574,7 @@ impl PoissonSolver for FftIsolated {
         );
 
         // Return scratch to cache
-        *self.scratch_cache.lock().unwrap() = scratch;
+        *self.scratch_cache.lock().unwrap_or_else(|e| e.into_inner()) = scratch;
         let norm = n2_total as f64;
 
         // 5. Extract N³ sub-grid (parallel over z-rows)

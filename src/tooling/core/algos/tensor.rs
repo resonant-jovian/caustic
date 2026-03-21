@@ -1256,6 +1256,10 @@ impl PhaseSpaceRepr for TensorTrain {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 // ─── Linear algebra helpers (thin wrappers around faer) ──────────────────────
@@ -1268,7 +1272,10 @@ fn thin_svd(mat: &Mat<f64>) -> (Mat<f64>, Vec<f64>, Mat<f64>) {
     if k == 0 {
         return (Mat::zeros(m, 0), vec![], Mat::zeros(0, n));
     }
-    let svd = mat.as_ref().thin_svd().expect("SVD failed");
+    let svd = match mat.as_ref().thin_svd() {
+        Ok(s) => s,
+        Err(_) => return (Mat::zeros(m, 0), vec![], Mat::zeros(0, n)),
+    };
     let u = svd.U().to_owned();
     let vt = svd.V().transpose().to_owned();
     let s_diag = svd.S().column_vector();

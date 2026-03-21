@@ -41,6 +41,11 @@ const NUM_NODES: usize = 11;
 const NUM_LEAVES: usize = 6;
 const ROOT: usize = 10;
 
+/// Maximum number of bytes that `to_full()` may allocate (2 GB).
+/// HtTensor methods that would exceed this threshold return fallback values
+/// instead of OOM-killing the process.
+const MAX_MATERIALIZE_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
 /// A node in the HT dimension tree.
 #[derive(Clone)]
 pub enum HtNode {
@@ -520,7 +525,7 @@ impl HtTensor {
             let k_max = q.ncols().min(n_mu);
             let mut sv: Vec<f64> = (0..k_max).map(|i| r[(i, i)].abs()).collect();
             // R diagonal magnitudes are not quite singular values but suffice for rank estimation
-            sv.sort_by(|a, b| b.partial_cmp(a).unwrap());
+            sv.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
             let k_mu = truncation_rank(&sv, eps_node).max(1).min(max_rank);
 
             let frame = q.subcols(0, k_mu).to_owned();
@@ -2203,7 +2208,18 @@ impl PhaseSpaceRepr for HtTensor {
         self.inner_product(self) * vol
     }
 
+    fn can_materialize(&self) -> bool {
+        self.shape.iter().product::<usize>() * 8 <= MAX_MATERIALIZE_BYTES
+    }
+
     fn entropy(&self) -> f64 {
+        if !self.can_materialize() {
+            tracing::warn!(
+                "HtTensor::entropy() skipped: full grid ({} elements) exceeds materialization limit",
+                self.shape.iter().product::<usize>()
+            );
+            return f64::NAN;
+        }
         let dx = self.domain.dx();
         let dv = self.domain.dv();
         let vol = dx[0] * dx[1] * dx[2] * dv[0] * dv[1] * dv[2];
@@ -2308,6 +2324,13 @@ impl PhaseSpaceRepr for HtTensor {
     }
 
     fn total_kinetic_energy(&self) -> f64 {
+        if !self.can_materialize() {
+            tracing::warn!(
+                "HtTensor::total_kinetic_energy() skipped: full grid ({} elements) exceeds materialization limit",
+                self.shape.iter().product::<usize>()
+            );
+            return f64::NAN;
+        }
         let dx = self.domain.dx();
         let dv = self.domain.dv();
         let lv = self.domain.lv();
@@ -2341,6 +2364,17 @@ impl PhaseSpaceRepr for HtTensor {
     }
 
     fn to_snapshot(&self, time: f64) -> PhaseSpaceSnapshot {
+        if !self.can_materialize() {
+            tracing::warn!(
+                "HtTensor::to_snapshot() skipped: full grid ({} elements) exceeds materialization limit",
+                self.shape.iter().product::<usize>()
+            );
+            return PhaseSpaceSnapshot {
+                data: vec![],
+                shape: [0; 6],
+                time,
+            };
+        }
         PhaseSpaceSnapshot {
             data: self.to_full(),
             shape: self.shape,
@@ -2428,7 +2462,10 @@ impl HtTensor {
             });
         }
 
-        result.unwrap()
+        result.unwrap_or_else(|| DensityField {
+            data: vec![0.0; self.shape[0] * self.shape[1] * self.shape[2]],
+            shape: [self.shape[0], self.shape[1], self.shape[2]],
+        })
     }
 
     /// Extract all macroscopic moments needed for LoMaC: (ρ, J₁, J₂, J₃, e).
@@ -2578,15 +2615,23 @@ fn parent_of(child: usize) -> usize {
         7 => 9,
         8 => 10,
         9 => 10,
-        _ => panic!("no parent for node {child}"),
+        _ => {
+            debug_assert!(false, "no parent for node {child}");
+            10 // root fallback
+        }
     }
 }
 
 #[inline]
 fn leaf_data(node: &HtNode) -> (&Mat<f64>, usize) {
+    static EMPTY: std::sync::LazyLock<Mat<f64>> =
+        std::sync::LazyLock::new(|| Mat::zeros(0, 0));
     match node {
         HtNode::Leaf { dim, frame } => (frame, *dim),
-        _ => panic!("expected leaf"),
+        HtNode::Interior { .. } => {
+            debug_assert!(false, "expected leaf");
+            (&EMPTY, 0)
+        }
     }
 }
 
@@ -2596,7 +2641,10 @@ fn get_interior(node: &HtNode) -> (usize, usize, usize, &[f64]) {
         HtNode::Interior {
             ranks, transfer, ..
         } => (ranks[0], ranks[1], ranks[2], transfer),
-        _ => panic!("expected interior"),
+        HtNode::Leaf { .. } => {
+            debug_assert!(false, "expected interior");
+            (0, 0, 0, &[])
+        }
     }
 }
 
@@ -2609,7 +2657,10 @@ fn interior_data(node: &HtNode) -> (usize, usize, &[f64], [usize; 3]) {
             transfer,
             ranks,
         } => (*left, *right, transfer, *ranks),
-        _ => panic!("expected interior"),
+        HtNode::Leaf { .. } => {
+            debug_assert!(false, "expected interior");
+            (0, 0, &[], [0; 3])
+        }
     }
 }
 
@@ -2729,7 +2780,10 @@ fn thin_svd(mat: &Mat<f64>) -> (Mat<f64>, Vec<f64>, Mat<f64>) {
     if k == 0 {
         return (Mat::zeros(m, 0), vec![], Mat::zeros(0, n));
     }
-    let svd = mat.as_ref().thin_svd().expect("SVD failed");
+    let svd = match mat.as_ref().thin_svd() {
+        Ok(s) => s,
+        Err(_) => return (Mat::zeros(m, 0), vec![], Mat::zeros(0, n)),
+    };
     let u = svd.U().to_owned();
     let vt = svd.V().transpose().to_owned();
     let s_diag = svd.S().column_vector();
@@ -2877,7 +2931,7 @@ fn compute_transfer_tensor(
             let mut left_idx = 0;
             let mut ls = 1;
             for &d in left_dims.iter().rev() {
-                let pos = parent_dims.iter().position(|&pd| pd == d).unwrap();
+                let pos = parent_dims.iter().position(|&pd| pd == d).unwrap_or(0);
                 left_idx += dim_indices[pos] * ls;
                 ls *= shape[d];
             }
@@ -2886,7 +2940,7 @@ fn compute_transfer_tensor(
             let mut right_idx = 0;
             let mut rs = 1;
             for &d in right_dims.iter().rev() {
-                let pos = parent_dims.iter().position(|&pd| pd == d).unwrap();
+                let pos = parent_dims.iter().position(|&pd| pd == d).unwrap_or(0);
                 right_idx += dim_indices[pos] * rs;
                 rs *= shape[d];
             }

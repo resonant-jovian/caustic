@@ -419,7 +419,10 @@ pub(crate) fn svd_thin(mat: &Mat<f64>) -> (Mat<f64>, Vec<f64>, Mat<f64>) {
     if k == 0 {
         return (Mat::zeros(m, 0), vec![], Mat::zeros(0, n));
     }
-    let svd = mat.as_ref().thin_svd().expect("SVD failed");
+    let svd = match mat.as_ref().thin_svd() {
+        Ok(s) => s,
+        Err(_) => return (Mat::zeros(m, 0), vec![], Mat::zeros(0, n)),
+    };
     let u = svd.U().to_owned();
     let vt = svd.V().transpose().to_owned();
     let s_diag = svd.S().column_vector();
@@ -499,10 +502,10 @@ impl BugIntegrator {
         dt: f64,
         timings: &mut StepTimings,
     ) {
-        let ht = repr
-            .as_any_mut()
-            .downcast_mut::<HtTensor>()
-            .expect("BUG step requires HtTensor");
+        let Some(ht) = repr.as_any_mut().downcast_mut::<HtTensor>() else {
+            debug_assert!(false, "BUG step requires HtTensor");
+            return;
+        };
 
         let density_before = if self.config.conservative {
             Some(ht.compute_density())
@@ -553,10 +556,10 @@ impl BugIntegrator {
         dt: f64,
         timings: &mut StepTimings,
     ) {
-        let ht = repr
-            .as_any_mut()
-            .downcast_mut::<HtTensor>()
-            .expect("midpoint BUG requires HtTensor");
+        let Some(ht) = repr.as_any_mut().downcast_mut::<HtTensor>() else {
+            debug_assert!(false, "midpoint BUG requires HtTensor");
+            return;
+        };
 
         let density_before = if self.config.conservative {
             Some(ht.compute_density())

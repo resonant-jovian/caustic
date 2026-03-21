@@ -1,22 +1,13 @@
-#![allow(non_ascii_idents)]
-#![allow(non_snake_case)]
-#![allow(dead_code)]
-#![allow(unused_variables)]
-#![allow(unused_imports)]
-
 // Feature-gated global allocators
 #[cfg(feature = "jemalloc")]
-#[allow(unsafe_code)]
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[cfg(feature = "mimalloc-alloc")]
-#[allow(unsafe_code)]
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[cfg(feature = "dhat-heap")]
-#[allow(unsafe_code)]
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
@@ -52,7 +43,6 @@ pub use tooling::core::init::stability::DiskStabilityIC;
 pub use tooling::core::init::tidal::TidalIC;
 pub use tooling::core::output::exit::standard::ExitEvaluator;
 pub use tooling::core::output::phasespace::{PhaseSpaceDiagnostics, field_energy_spectrum};
-#[allow(deprecated)]
 pub use tooling::core::poisson::fft::{FftIsolated, FftPoisson};
 pub use tooling::core::poisson::ht_poisson::HtPoisson;
 pub use tooling::core::poisson::multigrid::Multigrid;

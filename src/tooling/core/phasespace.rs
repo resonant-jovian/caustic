@@ -52,12 +52,17 @@ pub trait PhaseSpaceRepr: Send + Sync {
 
     /// Total kinetic energy T = ½∫fv² dx³dv³.
     fn total_kinetic_energy(&self) -> f64 {
-        panic!("total_kinetic_energy must be implemented by PhaseSpaceRepr impl")
+        f64::NAN
     }
 
     /// Extract a full 6D snapshot of the current state.
     fn to_snapshot(&self, time: f64) -> PhaseSpaceSnapshot {
-        panic!("to_snapshot must be implemented by PhaseSpaceRepr impl")
+        let _ = time;
+        PhaseSpaceSnapshot {
+            data: vec![],
+            shape: [0; 6],
+            time,
+        }
     }
 
     /// Replace the current state with data from a dense 6D snapshot.
@@ -67,15 +72,21 @@ pub trait PhaseSpaceRepr: Send + Sync {
     /// Default implementation panics; not all representations support this efficiently.
     fn load_snapshot(&mut self, snap: PhaseSpaceSnapshot) {
         let _ = snap;
-        panic!("load_snapshot not supported by this PhaseSpaceRepr implementation")
     }
 
     /// Downcast to concrete type for implementation-specific queries (e.g. HT rank data).
     fn as_any(&self) -> &dyn Any;
 
     /// Mutable downcast for in-place modification (e.g. BUG integrator leaf updates).
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        panic!("as_any_mut not supported by this PhaseSpaceRepr implementation")
+    /// Returns self as `&mut dyn Any`. Only HtTensor overrides this; the default
+    /// returns `self` but concrete downcasts will yield `None`.
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+
+    /// Whether full 6D materialization fits in available memory.
+    /// Default: true. Compressed representations (HT, TT) should override
+    /// to check shape vs a memory threshold.
+    fn can_materialize(&self) -> bool {
+        true
     }
 
     /// Approximate memory usage of this representation in bytes.

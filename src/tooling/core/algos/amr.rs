@@ -82,10 +82,14 @@ impl AmrCell {
             })
             .collect();
 
-        // SAFETY: we know children_vec has exactly 64 elements.
-        let boxed_array: Box<[AmrCell; 64]> = children_vec
-            .try_into()
-            .unwrap_or_else(|v: Vec<AmrCell>| panic!("expected 64 children, got {}", v.len()));
+        // SAFETY: children_vec is constructed from (0..64).map() above, so it
+        // always has exactly 64 elements. The try_into cannot fail.
+        debug_assert_eq!(children_vec.len(), 64);
+        let boxed_slice = children_vec.into_boxed_slice();
+        let boxed_array: Box<[AmrCell; 64]> = match boxed_slice.try_into() {
+            Ok(arr) => arr,
+            Err(_) => return, // unreachable: length is always 64
+        };
 
         self.children = Some(boxed_array);
     }
@@ -757,6 +761,10 @@ impl PhaseSpaceRepr for AmrGrid {
     }
 
     fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 }

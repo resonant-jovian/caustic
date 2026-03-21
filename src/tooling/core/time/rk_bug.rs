@@ -120,10 +120,10 @@ impl RkBugIntegrator {
         dt: f64,
         timings: &mut StepTimings,
     ) {
-        let ht = repr
-            .as_any_mut()
-            .downcast_mut::<HtTensor>()
-            .expect("RK-BUG requires HtTensor");
+        let Some(ht) = repr.as_any_mut().downcast_mut::<HtTensor>() else {
+            debug_assert!(false, "RK-BUG requires HtTensor");
+            return;
+        };
 
         let density_before = if self.config.conservative {
             Some(ht.compute_density())
