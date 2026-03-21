@@ -1,4 +1,4 @@
-//! Isolated equilibrium initial conditions: Plummer, King, Hernquist, NFW.
+//! Isolated equilibrium initial conditions: Plummer, King, Hernquist, Isochrone, NFW.
 //! All specified as f(E) or f(E,L) — integrals of motion.
 
 use super::super::types::PhaseSpaceSnapshot;
@@ -408,6 +408,119 @@ impl IsolatedEquilibrium for HernquistIC {
 
     fn potential(&self, r: f64) -> f64 {
         -self.g_f64 * self.mass_f64 / (r + self.scale_radius_f64)
+    }
+}
+
+/// Henon isochrone model: Phi(r) = -GM / (sqrt(b^2 + r^2) + b).
+/// Analytic DF f(E) from Henon (1960) / Binney & Tremaine eq. 4.48.
+/// The isochrone is the only non-trivial spherical potential for which
+/// all orbits can be solved in closed form (hence the name).
+pub struct IsochroneIC {
+    pub mass: Decimal,
+    pub scale_radius: Decimal, // b parameter
+    pub g: Decimal,
+    // Cached f64 values for hot-path computation
+    mass_f64: f64,
+    scale_radius_f64: f64,
+    g_f64: f64,
+}
+
+impl IsochroneIC {
+    /// Create an Isochrone IC from f64 parameters (backward-compatible).
+    pub fn new(mass: f64, scale_radius: f64, g: f64) -> Self {
+        Self {
+            mass: Decimal::from_f64_retain(mass).unwrap_or(Decimal::ZERO),
+            scale_radius: Decimal::from_f64_retain(scale_radius).unwrap_or(Decimal::ZERO),
+            g: Decimal::from_f64_retain(g).unwrap_or(Decimal::ZERO),
+            mass_f64: mass,
+            scale_radius_f64: scale_radius,
+            g_f64: g,
+        }
+    }
+
+    /// Create an Isochrone IC from Decimal parameters (exact config).
+    pub fn new_decimal(mass: Decimal, scale_radius: Decimal, g: Decimal) -> Self {
+        Self {
+            mass_f64: mass.to_f64().unwrap_or(0.0),
+            scale_radius_f64: scale_radius.to_f64().unwrap_or(0.0),
+            g_f64: g.to_f64().unwrap_or(0.0),
+            mass,
+            scale_radius,
+            g,
+        }
+    }
+}
+
+impl IsolatedEquilibrium for IsochroneIC {
+    fn distribution_function(&self, energy: f64, _angular_momentum: f64) -> f64 {
+        if energy >= 0.0 {
+            return 0.0;
+        }
+        use std::f64::consts::PI;
+        let m = self.mass_f64;
+        let b = self.scale_radius_f64;
+        let g = self.g_f64;
+        let gm = g * m;
+
+        // Dimensionless energy: e_tilde = -E*b/(G*M), in (0, 1) for bound orbits.
+        let e_tilde = -energy * b / gm;
+        if e_tilde <= 0.0 || e_tilde >= 1.0 {
+            return 0.0;
+        }
+
+        // Binney & Tremaine (2008), eq. 4.48 (Henon isochrone DF):
+        //
+        // f(E) = M / [2^(7/2) * (2*pi)^3 * (G*M*b)^(3/2)]
+        //      * sqrt(e_tilde) / (1 - e_tilde)^4
+        //      * [ 27 - 66*e_tilde + 320*e_tilde^2 - 240*e_tilde^3 + 64*e_tilde^4
+        //          + 3*(16*e_tilde^2 + 28*e_tilde - 9)
+        //            * arcsin(sqrt(e_tilde)) / sqrt(e_tilde * (1 - e_tilde)) ]
+
+        let e2 = e_tilde * e_tilde;
+        let e3 = e2 * e_tilde;
+        let e4 = e3 * e_tilde;
+        let one_minus_e = 1.0 - e_tilde;
+
+        // Polynomial part
+        let poly = 27.0 - 66.0 * e_tilde + 320.0 * e2 - 240.0 * e3 + 64.0 * e4;
+
+        // Arcsin part: 3*(16*e^2 + 28*e - 9) * arcsin(sqrt(e)) / sqrt(e*(1-e))
+        let sqrt_e = e_tilde.sqrt();
+        let sqrt_e_one_minus_e = (e_tilde * one_minus_e).sqrt();
+        let arcsin_coeff = 3.0 * (16.0 * e2 + 28.0 * e_tilde - 9.0);
+        let arcsin_term = arcsin_coeff * sqrt_e.asin() / sqrt_e_one_minus_e;
+
+        let bracket = poly + arcsin_term;
+
+        // Prefactor: M / [2^(7/2) * (2*pi)^3 * (G*M*b)^(3/2)]
+        let two_7_2 = 2.0_f64.powf(3.5); // 2^(7/2) = 8*sqrt(2)
+        let two_pi_cubed = (2.0 * PI).powi(3);
+        let gmb_3_2 = (gm * b).powf(1.5);
+        let prefactor = m / (two_7_2 * two_pi_cubed * gmb_3_2);
+
+        let f = prefactor * sqrt_e / one_minus_e.powi(4) * bracket;
+        f.max(0.0)
+    }
+
+    fn density_profile(&self, r: f64) -> f64 {
+        use std::f64::consts::PI;
+        let m = self.mass_f64;
+        let b = self.scale_radius_f64;
+        let r2 = r * r;
+        let a = (b * b + r2).sqrt(); // a = sqrt(b^2 + r^2)
+        let ba = b + a; // b + a
+
+        // Binney & Tremaine eq. 2.46:
+        // rho(r) = M*b / (4*pi) * (3*(b+a)*a^2 - r^2*(b+3*a)) / (a^3 * (b+a)^3)
+        let numer = 3.0 * ba * a * a - r2 * (b + 3.0 * a);
+        let denom = a.powi(3) * ba.powi(3);
+        m * b / (4.0 * PI) * numer / denom
+    }
+
+    fn potential(&self, r: f64) -> f64 {
+        let b = self.scale_radius_f64;
+        let a = (b * b + r * r).sqrt();
+        -self.g_f64 * self.mass_f64 / (a + b)
     }
 }
 

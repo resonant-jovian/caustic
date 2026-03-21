@@ -9,5 +9,6 @@ pub(crate) mod spherical;
 pub(crate) mod spherical_1d;
 pub(crate) mod tensor_poisson;
 pub(crate) mod tree;
+pub(crate) mod range_separated;
 pub(crate) mod utils;
 pub(crate) mod vgf;

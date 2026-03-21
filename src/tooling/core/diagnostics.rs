@@ -30,6 +30,19 @@ pub struct GlobalDiagnostics {
     /// Casimir C₂ measured after LoMaC projection (None if LoMaC inactive).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub casimir_c2_post_lomac: Option<f64>,
+    /// L2 norm of the near-field correction applied during Poisson solve (None if not applicable).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub near_field_correction_magnitude: Option<f64>,
+    /// Coarse-grained entropy S_bar = -Sum f_bar ln(f_bar) dV (None if not computed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coarse_grained_entropy: Option<f64>,
+    /// Per-step symplecticity error estimated from Casimir C₂ drift.
+    ///
+    /// For a symplectic integrator the Casimir invariants are exactly conserved
+    /// (absent truncation). This field stores |ΔC₂/C₂| for the most recent step,
+    /// or `None` if no previous step exists yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symplecticity_error: Option<f64>,
 }
 
 /// Accumulates time series of `GlobalDiagnostics`.
@@ -74,6 +87,16 @@ impl Diagnostics {
         } else {
             0.0
         };
+        let symplecticity_error = if let Some(prev) = self.history.last() {
+            let prev_c2 = prev.casimir_c2;
+            if prev_c2.abs() > 1e-30 {
+                Some(((c2 - prev_c2) / prev_c2).abs())
+            } else {
+                Some(0.0)
+            }
+        } else {
+            None
+        };
         let diag = GlobalDiagnostics {
             time,
             total_energy: e,
@@ -87,6 +110,9 @@ impl Diagnostics {
             mass_in_box: m,
             casimir_c2_pre_lomac: None,
             casimir_c2_post_lomac: None,
+            near_field_correction_magnitude: None,
+            coarse_grained_entropy: None,
+            symplecticity_error,
         };
         self.history.push(diag);
         diag
@@ -345,6 +371,117 @@ pub fn convergence_table<F: Fn(usize, usize) -> f64>(
         .collect()
 }
 
+/// Compute coarse-grained entropy by binning f on a coarser grid.
+///
+/// Given a phase-space representation, evaluate on a grid coarsened by
+/// `factor` in each dimension, then compute S_bar = -Sum f_bar ln(f_bar) * dV.
+/// The difference S_bar - S (fine-grained entropy) measures phase-space mixing.
+pub fn coarse_grained_entropy(
+    fine_data: &[f64],
+    shape: [usize; 6],
+    factor: usize,
+    dv6: f64, // phase-space volume element dx^3 dv^3
+) -> f64 {
+    if factor <= 1 {
+        // No coarsening -- just return fine-grained entropy
+        return -fine_data
+            .iter()
+            .filter(|&&f| f > 0.0)
+            .map(|&f| f * f.ln() * dv6)
+            .sum::<f64>();
+    }
+
+    let coarse_shape: Vec<usize> = shape.iter().map(|&s| (s / factor).max(1)).collect();
+    let coarse_total: usize = coarse_shape.iter().product();
+    let mut coarse = vec![0.0f64; coarse_total];
+    let mut counts = vec![0u32; coarse_total];
+
+    // Bin fine grid into coarse grid
+    for i0 in 0..shape[0] {
+        let c0 = (i0 / factor).min(coarse_shape[0] - 1);
+        for i1 in 0..shape[1] {
+            let c1 = (i1 / factor).min(coarse_shape[1] - 1);
+            for i2 in 0..shape[2] {
+                let c2 = (i2 / factor).min(coarse_shape[2] - 1);
+                for i3 in 0..shape[3] {
+                    let c3 = (i3 / factor).min(coarse_shape[3] - 1);
+                    for i4 in 0..shape[4] {
+                        let c4 = (i4 / factor).min(coarse_shape[4] - 1);
+                        for i5 in 0..shape[5] {
+                            let c5 = (i5 / factor).min(coarse_shape[5] - 1);
+                            let fine_idx = i0
+                                * shape[1]
+                                * shape[2]
+                                * shape[3]
+                                * shape[4]
+                                * shape[5]
+                                + i1 * shape[2] * shape[3] * shape[4] * shape[5]
+                                + i2 * shape[3] * shape[4] * shape[5]
+                                + i3 * shape[4] * shape[5]
+                                + i4 * shape[5]
+                                + i5;
+                            let coarse_idx = c0
+                                * coarse_shape[1]
+                                * coarse_shape[2]
+                                * coarse_shape[3]
+                                * coarse_shape[4]
+                                * coarse_shape[5]
+                                + c1
+                                    * coarse_shape[2]
+                                    * coarse_shape[3]
+                                    * coarse_shape[4]
+                                    * coarse_shape[5]
+                                + c2 * coarse_shape[3] * coarse_shape[4] * coarse_shape[5]
+                                + c3 * coarse_shape[4] * coarse_shape[5]
+                                + c4 * coarse_shape[5]
+                                + c5;
+                            coarse[coarse_idx] += fine_data[fine_idx];
+                            counts[coarse_idx] += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Average (divide accumulated sum by count)
+    for (c, &cnt) in coarse.iter_mut().zip(counts.iter()) {
+        if cnt > 0 {
+            *c /= cnt as f64;
+        }
+    }
+
+    // Coarse-grained volume element
+    let coarse_dv6 = dv6 * (factor as f64).powi(6);
+
+    -coarse
+        .iter()
+        .filter(|&&f| f > 0.0)
+        .map(|&f| f * f.ln() * coarse_dv6)
+        .sum::<f64>()
+}
+
+/// Estimate symplecticity error from consecutive Casimir C₂ values.
+///
+/// For a symplectic integrator, all Casimir invariants are exactly conserved
+/// (in the absence of truncation). The per-step C₂ drift is a direct proxy
+/// for symplecticity violation.
+///
+/// Returns |ΔC₂/C₂| for the most recent step, or 0.0 if history is too short.
+pub fn casimir_symplecticity_proxy(history: &[GlobalDiagnostics]) -> f64 {
+    if history.len() < 2 {
+        return 0.0;
+    }
+    let prev = &history[history.len() - 2];
+    let curr = &history[history.len() - 1];
+    let c2_prev = prev.casimir_c2;
+    let c2_curr = curr.casimir_c2;
+    if c2_prev.abs() < 1e-30 {
+        return 0.0;
+    }
+    ((c2_curr - c2_prev) / c2_prev).abs()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -458,6 +595,9 @@ mod tests {
             mass_in_box: 10.0,
             casimir_c2_pre_lomac: None,
             casimir_c2_post_lomac: None,
+            near_field_correction_magnitude: None,
+            coarse_grained_entropy: None,
+            symplecticity_error: None,
         });
         diags.history.push(GlobalDiagnostics {
             time: 1.0,
@@ -472,6 +612,9 @@ mod tests {
             mass_in_box: 10.0,
             casimir_c2_pre_lomac: None,
             casimir_c2_post_lomac: None,
+            near_field_correction_magnitude: None,
+            coarse_grained_entropy: None,
+            symplecticity_error: None,
         });
         let summary = diags.conservation_summary();
         assert!(
@@ -481,5 +624,130 @@ mod tests {
         );
         assert!(summary.max_mass_drift < 1e-14);
         assert!(summary.max_casimir_drift < 1e-14);
+    }
+
+    #[test]
+    fn test_symplecticity_proxy_zero_for_first_step() {
+        // With no history, the proxy returns 0.0
+        let empty: Vec<GlobalDiagnostics> = vec![];
+        assert_eq!(casimir_symplecticity_proxy(&empty), 0.0);
+
+        // With a single entry, the proxy also returns 0.0
+        let single = vec![GlobalDiagnostics {
+            time: 0.0,
+            total_energy: -1.0,
+            kinetic_energy: 0.5,
+            potential_energy: -1.5,
+            virial_ratio: 0.667,
+            total_momentum: [0.0; 3],
+            total_angular_momentum: [0.0; 3],
+            casimir_c2: 42.0,
+            entropy: 1.0,
+            mass_in_box: 1.0,
+            casimir_c2_pre_lomac: None,
+            casimir_c2_post_lomac: None,
+            near_field_correction_magnitude: None,
+            coarse_grained_entropy: None,
+            symplecticity_error: None,
+        }];
+        assert_eq!(casimir_symplecticity_proxy(&single), 0.0);
+
+        // Also verify that compute_with_density sets symplecticity_error = None
+        // on the very first step (no prior history).
+        // We cannot call compute_with_density here without a PhaseSpaceRepr,
+        // but we verify it indirectly: construct a single-entry GlobalDiagnostics
+        // with symplecticity_error = None and confirm it serializes without that key.
+        let json = serde_json::to_string(&single[0]).unwrap();
+        assert!(
+            !json.contains("symplecticity_error"),
+            "symplecticity_error should be skipped when None"
+        );
+    }
+
+    #[test]
+    fn test_symplecticity_proxy_measures_drift() {
+        // Two steps where C₂ drifts by 1%
+        let history = vec![
+            GlobalDiagnostics {
+                time: 0.0,
+                total_energy: -1.0,
+                kinetic_energy: 0.5,
+                potential_energy: -1.5,
+                virial_ratio: 0.667,
+                total_momentum: [0.0; 3],
+                total_angular_momentum: [0.0; 3],
+                casimir_c2: 100.0,
+                entropy: 1.0,
+                mass_in_box: 1.0,
+                casimir_c2_pre_lomac: None,
+                casimir_c2_post_lomac: None,
+                near_field_correction_magnitude: None,
+                coarse_grained_entropy: None,
+                symplecticity_error: None,
+            },
+            GlobalDiagnostics {
+                time: 0.1,
+                total_energy: -1.0,
+                kinetic_energy: 0.5,
+                potential_energy: -1.5,
+                virial_ratio: 0.667,
+                total_momentum: [0.0; 3],
+                total_angular_momentum: [0.0; 3],
+                casimir_c2: 101.0, // 1% drift
+                entropy: 1.0,
+                mass_in_box: 1.0,
+                casimir_c2_pre_lomac: None,
+                casimir_c2_post_lomac: None,
+                near_field_correction_magnitude: None,
+                coarse_grained_entropy: None,
+                symplecticity_error: Some(0.01),
+            },
+        ];
+        let proxy = casimir_symplecticity_proxy(&history);
+        assert!(
+            (proxy - 0.01).abs() < 1e-12,
+            "Expected symplecticity proxy ~0.01, got {proxy}"
+        );
+        assert!(proxy > 0.0, "Proxy should be positive for drifting C₂");
+        assert!(proxy.is_finite(), "Proxy should be finite");
+
+        // Verify zero drift gives zero proxy
+        let no_drift = vec![
+            GlobalDiagnostics {
+                time: 0.0,
+                total_energy: -1.0,
+                kinetic_energy: 0.5,
+                potential_energy: -1.5,
+                virial_ratio: 0.667,
+                total_momentum: [0.0; 3],
+                total_angular_momentum: [0.0; 3],
+                casimir_c2: 100.0,
+                entropy: 1.0,
+                mass_in_box: 1.0,
+                casimir_c2_pre_lomac: None,
+                casimir_c2_post_lomac: None,
+                near_field_correction_magnitude: None,
+                coarse_grained_entropy: None,
+                symplecticity_error: None,
+            },
+            GlobalDiagnostics {
+                time: 0.1,
+                total_energy: -1.0,
+                kinetic_energy: 0.5,
+                potential_energy: -1.5,
+                virial_ratio: 0.667,
+                total_momentum: [0.0; 3],
+                total_angular_momentum: [0.0; 3],
+                casimir_c2: 100.0, // no drift
+                entropy: 1.0,
+                mass_in_box: 1.0,
+                casimir_c2_pre_lomac: None,
+                casimir_c2_post_lomac: None,
+                near_field_correction_magnitude: None,
+                coarse_grained_entropy: None,
+                symplecticity_error: Some(0.0),
+            },
+        ];
+        assert_eq!(casimir_symplecticity_proxy(&no_drift), 0.0);
     }
 }

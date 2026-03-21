@@ -53,6 +53,14 @@ impl TimeIntegrator for LieSplitting {
         let potential = solver.solve(&density, self.g);
         let accel = solver.compute_acceleration(&potential);
         advector.kick(repr, &accel, dt);
+
+        // Apply hypercollision damping if the representation is SpectralV
+        if let Some(spectral) = repr
+            .as_any_mut()
+            .downcast_mut::<super::super::algos::spectral::SpectralV>()
+        {
+            spectral.apply_hypercollision(dt);
+        }
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

@@ -23,8 +23,11 @@ use super::super::{
     types::*,
 };
 use super::aca::{BlackBoxMatrix, FnMatrix, Xorshift64, aca_partial_pivot};
+use super::uniform::VelocityFilterConfig;
 use faer::Mat;
 use rayon::prelude::*;
+use rustfft::FftPlanner;
+use rustfft::num_complex::Complex64;
 use std::any::Any;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -80,7 +83,6 @@ pub enum InterpolationMode {
 }
 
 /// Hierarchical Tucker tensor for 6D phase space.
-#[derive(Clone)]
 pub struct HtTensor {
     pub nodes: Vec<HtNode>,
     pub shape: [usize; 6],
@@ -93,6 +95,29 @@ pub struct HtTensor {
     pub interpolation_mode: InterpolationMode,
     /// Shared progress state for intra-phase reporting to the TUI.
     progress: Option<Arc<super::super::progress::StepProgress>>,
+    /// Whether to enforce positivity after each advection step.
+    pub positivity_limiter: bool,
+    /// Velocity-space exponential filter configuration for filamentation control.
+    pub velocity_filter: Option<VelocityFilterConfig>,
+    /// Count of negative values clamped by the positivity limiter.
+    positivity_violations: AtomicU64,
+}
+
+impl Clone for HtTensor {
+    fn clone(&self) -> Self {
+        HtTensor {
+            nodes: self.nodes.clone(),
+            shape: self.shape,
+            domain: self.domain.clone(),
+            tolerance: self.tolerance,
+            max_rank: self.max_rank,
+            interpolation_mode: self.interpolation_mode,
+            progress: self.progress.clone(),
+            positivity_limiter: self.positivity_limiter,
+            velocity_filter: self.velocity_filter,
+            positivity_violations: AtomicU64::new(0),
+        }
+    }
 }
 
 // ─── Construction ───────────────────────────────────────────────────────────
@@ -184,6 +209,9 @@ impl HtTensor {
             max_rank,
             interpolation_mode: InterpolationMode::SparsePolynomial,
             progress: None,
+            positivity_limiter: false,
+            velocity_filter: None,
+            positivity_violations: AtomicU64::new(0),
         }
     }
 
@@ -294,6 +322,9 @@ impl HtTensor {
             max_rank: max_leaf_rank,
             interpolation_mode: InterpolationMode::SparsePolynomial,
             progress: None,
+            positivity_limiter: false,
+            velocity_filter: None,
+            positivity_violations: AtomicU64::new(0),
         }
     }
 
@@ -405,6 +436,73 @@ impl HtTensor {
             }
             _ => unreachable!(),
         }
+    }
+
+    /// Enable or disable the Zhang-Shu positivity-preserving limiter.
+    ///
+    /// When enabled, negative values introduced by HT recompression during advection
+    /// are clamped to zero and the tensor is rescaled to preserve total mass.
+    pub fn with_positivity_limiter(mut self, enabled: bool) -> Self {
+        self.positivity_limiter = enabled;
+        self
+    }
+
+    /// Enable velocity-space exponential filtering after each velocity advection step.
+    pub fn with_velocity_filter(mut self, config: VelocityFilterConfig) -> Self {
+        self.velocity_filter = Some(config);
+        self
+    }
+
+    /// Apply an exponential filter in velocity space to the HT leaf frames.
+    ///
+    /// Leaves 3, 4, 5 correspond to v1, v2, v3. For each velocity leaf, every
+    /// column of the leaf frame U_mu (a basis vector of length n_mu) is filtered
+    /// in Fourier space using `exp(-(k/k_cutoff)^(2*order))`. This preserves the
+    /// HT structure without rank increase.
+    pub fn apply_velocity_filter(&mut self) {
+        let config = match self.velocity_filter {
+            Some(c) => c,
+            None => return,
+        };
+        let _span = tracing::info_span!("ht_apply_velocity_filter").entered();
+
+        // Velocity leaves are nodes 3, 4, 5 (v1, v2, v3).
+        for leaf_idx in 3..=5 {
+            let n_mu = self.shape[leaf_idx];
+            let kernel = build_exp_filter_kernel_ht(n_mu, config.cutoff_fraction, config.order);
+
+            if let HtNode::Leaf { ref mut frame, .. } = self.nodes[leaf_idx] {
+                let k_mu = frame.ncols();
+                let mut planner = FftPlanner::new();
+                let fwd = planner.plan_fft_forward(n_mu);
+                let inv = planner.plan_fft_inverse(n_mu);
+                let inv_n = 1.0 / n_mu as f64;
+
+                let mut buf = vec![Complex64::new(0.0, 0.0); n_mu];
+
+                for col in 0..k_mu {
+                    // Extract column to complex buffer
+                    for i in 0..n_mu {
+                        buf[i] = Complex64::new(frame[(i, col)], 0.0);
+                    }
+                    fwd.process(&mut buf);
+                    // Apply filter
+                    for (c, &k) in buf.iter_mut().zip(kernel.iter()) {
+                        *c *= k;
+                    }
+                    inv.process(&mut buf);
+                    // Write back (normalize by 1/N)
+                    for i in 0..n_mu {
+                        frame[(i, col)] = buf[i].re * inv_n;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Number of negative values clamped by the positivity limiter so far.
+    pub fn positivity_violations(&self) -> u64 {
+        self.positivity_violations.load(Ordering::Relaxed)
     }
 
     /// Black-box construction via HTACA (Ballani & Grasedyck 2013).
@@ -941,6 +1039,9 @@ impl HtTensor {
             max_rank,
             interpolation_mode: InterpolationMode::SparsePolynomial,
             progress: None,
+            positivity_limiter: false,
+            velocity_filter: None,
+            positivity_violations: AtomicU64::new(0),
         };
 
         // Post-construction HSVD truncation (SLAR §3.2): re-compress the assembled
@@ -1513,6 +1614,9 @@ impl HtTensor {
             max_rank: self.max_rank.max(other.max_rank),
             interpolation_mode: self.interpolation_mode,
             progress: self.progress.clone(),
+            positivity_limiter: self.positivity_limiter,
+            velocity_filter: self.velocity_filter,
+            positivity_violations: AtomicU64::new(0),
         }
     }
 
@@ -1524,6 +1628,58 @@ impl HtTensor {
         {
             for v in transfer.iter_mut() {
                 *v *= alpha;
+            }
+        }
+    }
+
+    /// Enforce positivity: clamp negative values to zero and rescale to preserve total mass.
+    ///
+    /// If the tensor is small enough to materialize (< 2 GB), this reconstructs the full
+    /// array, applies the Zhang-Shu limiter, counts negatives, and re-compresses into HT
+    /// format. For larger tensors, fiber-based sampling is used to count violations and
+    /// a warning is logged.
+    pub fn enforce_positivity(&mut self) {
+        let total_elements: usize = self.shape.iter().product();
+        let bytes = total_elements * 8;
+
+        if bytes < MAX_MATERIALIZE_BYTES {
+            // Full materialization path
+            let mass_before = self.total_mass();
+            let mut data = self.to_full();
+
+            // Count negatives before clamping
+            let negatives: u64 = data.iter().filter(|&&v| v < 0.0).count() as u64;
+            if negatives > 0 {
+                self.positivity_violations
+                    .fetch_add(negatives, Ordering::Relaxed);
+
+                super::wpfc::zhang_shu_limiter(&mut data, mass_before);
+
+                // Rebuild HT from corrected data
+                let rebuilt = HtTensor::from_full(&data, self.shape, &self.domain, self.tolerance);
+                self.nodes = rebuilt.nodes;
+                // shape, domain, tolerance unchanged
+            }
+        } else {
+            // Fiber-based sampling path: evaluate along the main diagonal
+            let n_samples = self.shape[0].min(self.shape[1]).min(self.shape[2])
+                .min(self.shape[3]).min(self.shape[4]).min(self.shape[5]);
+            let mut neg_count: u64 = 0;
+            for i in 0..n_samples {
+                let val = self.evaluate([i, i, i, i, i, i]);
+                if val < 0.0 {
+                    neg_count += 1;
+                }
+            }
+            if neg_count > 0 {
+                self.positivity_violations
+                    .fetch_add(neg_count, Ordering::Relaxed);
+                tracing::warn!(
+                    "HtTensor too large to materialize ({} bytes); fiber sampling found {} negative values out of {} samples",
+                    bytes,
+                    neg_count,
+                    n_samples,
+                );
             }
         }
     }
@@ -1849,6 +2005,22 @@ fn sparse_polynomial_interpolate_ht(
     result
 }
 
+/// Build the exponential filter kernel for a 1D FFT of length `n` (HT variant).
+///
+/// Identical to the kernel in `uniform.rs` but defined locally to avoid
+/// coupling the HT module to UniformGrid6D internals.
+fn build_exp_filter_kernel_ht(n: usize, cutoff_fraction: f64, order: usize) -> Vec<f64> {
+    let half = n as f64 / 2.0;
+    let exp = (2 * order) as i32;
+    (0..n)
+        .map(|m| {
+            let sym = if m <= n / 2 { m } else { n - m };
+            let k_norm = sym as f64 / half;
+            (-(k_norm / cutoff_fraction).powi(exp)).exp()
+        })
+        .collect()
+}
+
 // ─── PhaseSpaceRepr ─────────────────────────────────────────────────────────
 
 impl PhaseSpaceRepr for HtTensor {
@@ -2030,6 +2202,10 @@ impl PhaseSpaceRepr for HtTensor {
 
         *self = new_ht;
         self.progress = saved_progress;
+
+        if self.positivity_limiter {
+            self.enforce_positivity();
+        }
     }
 
     fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
@@ -2122,8 +2298,18 @@ impl PhaseSpaceRepr for HtTensor {
             None,
         );
 
+        let saved_filter = self.velocity_filter;
+        let saved_positivity = self.positivity_limiter;
         *self = new_ht;
         self.progress = saved_progress;
+        self.velocity_filter = saved_filter;
+        self.positivity_limiter = saved_positivity;
+
+        if self.positivity_limiter {
+            self.enforce_positivity();
+        }
+
+        self.apply_velocity_filter();
     }
 
     fn moment(&self, position: &[f64; 3], order: usize) -> Tensor {
@@ -3996,6 +4182,244 @@ mod tests {
         assert!(
             err < 0.5,
             "Sparse poly error {err} too large for quadratic (expected {expected}, got {result})"
+        );
+    }
+
+    // ─── Positivity limiter tests ───────────────────────────────────────
+
+    #[test]
+    fn test_positivity_disabled_by_default() {
+        let domain = test_domain(8);
+        let ht = HtTensor::new(&domain, 4);
+        assert!(!ht.positivity_limiter, "positivity_limiter should be false by default");
+        assert_eq!(ht.positivity_violations(), 0);
+    }
+
+    #[test]
+    fn test_positivity_limiter_preserves_mass() {
+        let n = 8usize;
+        let domain = test_domain(n as i128);
+        let shape = [n; 6];
+
+        // Build a Plummer-like IC: f(x,v) = exp(-r_x^2 - r_v^2)
+        let dx = domain.dx();
+        let dv = domain.dv();
+        let lx = domain.lx();
+        let lv = domain.lv();
+        let total = n.pow(6);
+        let mut data = vec![0.0f64; total];
+        for i0 in 0..n {
+            for i1 in 0..n {
+                for i2 in 0..n {
+                    for i3 in 0..n {
+                        for i4 in 0..n {
+                            for i5 in 0..n {
+                                let x0 = -lx[0] + (i0 as f64 + 0.5) * dx[0];
+                                let x1 = -lx[1] + (i1 as f64 + 0.5) * dx[1];
+                                let x2 = -lx[2] + (i2 as f64 + 0.5) * dx[2];
+                                let v0 = -lv[0] + (i3 as f64 + 0.5) * dv[0];
+                                let v1 = -lv[1] + (i4 as f64 + 0.5) * dv[1];
+                                let v2 = -lv[2] + (i5 as f64 + 0.5) * dv[2];
+                                let r2 = x0 * x0 + x1 * x1 + x2 * x2
+                                    + v0 * v0 + v1 * v1 + v2 * v2;
+                                let idx = flat_index(&shape, [i0, i1, i2, i3, i4, i5]);
+                                data[idx] = (-r2).exp();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Build at high accuracy first, then truncate aggressively to introduce negatives
+        let ht_full = HtTensor::from_full(&data, shape, &domain, 1e-14);
+        let mass_original = ht_full.total_mass();
+
+        // Aggressively truncate to rank 1 to introduce artifacts (including negatives)
+        let low_rank_data = ht_full.to_full();
+        let mut ht_low = HtTensor::from_full(&low_rank_data, shape, &domain, 0.5);
+        ht_low.positivity_limiter = true;
+
+        let mass_before = ht_low.total_mass();
+        ht_low.enforce_positivity();
+        let mass_after = ht_low.total_mass();
+
+        // Mass should be preserved to reasonable tolerance (HT recompression introduces
+        // some error, but zhang_shu_limiter preserves the sum of the full array)
+        let rel_err = ((mass_after - mass_before) / mass_before.abs().max(1e-30)).abs();
+        assert!(
+            rel_err < 0.1,
+            "Mass not preserved: before={mass_before}, after={mass_after}, rel_err={rel_err}"
+        );
+        assert!(mass_original > 0.0, "Original mass should be positive");
+    }
+
+    #[test]
+    fn test_positivity_violations_counted() {
+        let n = 8usize;
+        let domain = test_domain(n as i128);
+        let shape = [n; 6];
+        let total = n.pow(6);
+
+        // Create data with intentional negative values
+        let dx = domain.dx();
+        let dv = domain.dv();
+        let lx = domain.lx();
+        let lv = domain.lv();
+        let mut data = vec![0.0f64; total];
+        for i0 in 0..n {
+            for i1 in 0..n {
+                for i2 in 0..n {
+                    for i3 in 0..n {
+                        for i4 in 0..n {
+                            for i5 in 0..n {
+                                let x0 = -lx[0] + (i0 as f64 + 0.5) * dx[0];
+                                let x1 = -lx[1] + (i1 as f64 + 0.5) * dx[1];
+                                let x2 = -lx[2] + (i2 as f64 + 0.5) * dx[2];
+                                let v0 = -lv[0] + (i3 as f64 + 0.5) * dv[0];
+                                let v1 = -lv[1] + (i4 as f64 + 0.5) * dv[1];
+                                let v2 = -lv[2] + (i5 as f64 + 0.5) * dv[2];
+                                let r2 = x0 * x0 + x1 * x1 + x2 * x2
+                                    + v0 * v0 + v1 * v1 + v2 * v2;
+                                // Use a function that oscillates: positive near center,
+                                // negative further out
+                                let idx = flat_index(&shape, [i0, i1, i2, i3, i4, i5]);
+                                data[idx] = (1.0 - 2.0 * r2) * (-r2).exp();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Verify that data has negative values
+        let neg_count_raw = data.iter().filter(|&&v| v < 0.0).count();
+        assert!(neg_count_raw > 0, "Test data should have negative values");
+
+        // Build HT with tight tolerance to preserve negatives
+        let mut ht = HtTensor::from_full(&data, shape, &domain, 1e-14);
+        ht.positivity_limiter = true;
+        assert_eq!(ht.positivity_violations(), 0);
+
+        ht.enforce_positivity();
+        assert!(
+            ht.positivity_violations() > 0,
+            "Should have counted positivity violations"
+        );
+
+        // Note: HT recompression via from_full after clipping may re-introduce
+        // negatives due to Gibbs-like ringing from the hard discontinuity at zero.
+        // The primary value of the HT positivity limiter is diagnostic (counting
+        // violations). For strict positivity enforcement, use UniformGrid6D which
+        // can clip without recompression artifacts.
+    }
+
+    #[test]
+    fn test_ht_velocity_filter_preserves_structure() {
+        // Build a smooth Gaussian HT tensor, filter it, and verify total_mass
+        // is preserved (the filter preserves the DC component exactly).
+        let n = 8usize;
+        let domain = test_domain(n as i128);
+        let shape = [n; 6];
+        let total = n.pow(6);
+        let sigma = 0.3;
+
+        let mut data = vec![0.0f64; total];
+        for i0 in 0..n {
+            for i1 in 0..n {
+                for i2 in 0..n {
+                    for i3 in 0..n {
+                        for i4 in 0..n {
+                            for i5 in 0..n {
+                                let coords: Vec<f64> = [i0, i1, i2, i3, i4, i5]
+                                    .iter()
+                                    .map(|&i| (i as f64 + 0.5) / n as f64 - 0.5)
+                                    .collect();
+                                let r2: f64 = coords.iter().map(|c| c * c).sum();
+                                let idx = flat_index(&shape, [i0, i1, i2, i3, i4, i5]);
+                                data[idx] = (-r2 / (2.0 * sigma * sigma)).exp();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut ht = HtTensor::from_full(&data, shape, &domain, 1e-10);
+        let mass_before = ht.total_mass();
+
+        // Apply velocity filter
+        ht.velocity_filter = Some(VelocityFilterConfig {
+            cutoff_fraction: 0.8,
+            order: 2,
+        });
+        ht.apply_velocity_filter();
+
+        let mass_after = ht.total_mass();
+        let rel_diff = ((mass_after - mass_before) / mass_before).abs();
+        assert!(
+            rel_diff < 0.05,
+            "Total mass should be approximately preserved, relative diff = {rel_diff}"
+        );
+
+        // Verify HT structure: all nodes still have valid ranks
+        for d in 0..6 {
+            assert!(ht.rank_at(d) > 0, "Leaf {d} rank should be positive");
+        }
+    }
+
+    #[test]
+    fn test_ht_velocity_filter_damps_high_modes() {
+        // Build an HT tensor with high-frequency velocity content, apply the
+        // filter, and verify the high-frequency content is reduced.
+        let n = 8usize;
+        let domain = test_domain(n as i128);
+        let shape = [n; 6];
+        let total = n.pow(6);
+
+        // f = 1 + 0.5 * cos(pi * iv3) which is the Nyquist mode in v3.
+        // Leaves 3,4,5 = v1,v2,v3 — the filter on leaf 5 should damp this.
+        let mut data = vec![0.0f64; total];
+        for i0 in 0..n {
+            for i1 in 0..n {
+                for i2 in 0..n {
+                    for i3 in 0..n {
+                        for i4 in 0..n {
+                            for i5 in 0..n {
+                                let phase = std::f64::consts::PI * i5 as f64;
+                                let idx = flat_index(&shape, [i0, i1, i2, i3, i4, i5]);
+                                data[idx] = 1.0 + 0.5 * phase.cos();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let ht_orig = HtTensor::from_full(&data, shape, &domain, 1e-10);
+
+        let mut ht_filtered = ht_orig.clone();
+        ht_filtered.velocity_filter = Some(VelocityFilterConfig {
+            cutoff_fraction: 0.5,
+            order: 4,
+        });
+        ht_filtered.apply_velocity_filter();
+
+        // Measure the change by evaluating at specific points.
+        // The high-frequency component alternates sign: at i5=0 the signal is
+        // 1+0.5=1.5, at i5=1 it's 1-0.5=0.5. After filtering, these should
+        // be closer together (the oscillation is damped).
+        let val_orig_0 = ht_orig.evaluate([0, 0, 0, 0, 0, 0]);
+        let val_orig_1 = ht_orig.evaluate([0, 0, 0, 0, 0, 1]);
+        let contrast_orig = (val_orig_0 - val_orig_1).abs();
+
+        let val_filt_0 = ht_filtered.evaluate([0, 0, 0, 0, 0, 0]);
+        let val_filt_1 = ht_filtered.evaluate([0, 0, 0, 0, 0, 1]);
+        let contrast_filt = (val_filt_0 - val_filt_1).abs();
+
+        assert!(
+            contrast_filt < contrast_orig * 0.5,
+            "High-frequency oscillation should be damped, orig contrast={contrast_orig}, filtered={contrast_filt}"
         );
     }
 }

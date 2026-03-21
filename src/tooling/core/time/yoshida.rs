@@ -84,6 +84,14 @@ impl TimeIntegrator for YoshidaSplitting {
             timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
         }
 
+        // Apply hypercollision damping after kick 1
+        if let Some(spectral) = repr
+            .as_any_mut()
+            .downcast_mut::<super::super::algos::spectral::SpectralV>()
+        {
+            spectral.apply_hypercollision(YOSHIDA_W1 * dt);
+        }
+
         // Substep 3: drift (w1+w0)·dt/2
         if let Some(ref p) = self.progress {
             p.set_phase(StepPhase::YoshidaDrift2);
@@ -113,6 +121,14 @@ impl TimeIntegrator for YoshidaSplitting {
             timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
         }
 
+        // Apply hypercollision damping after kick 2
+        if let Some(spectral) = repr
+            .as_any_mut()
+            .downcast_mut::<super::super::algos::spectral::SpectralV>()
+        {
+            spectral.apply_hypercollision(YOSHIDA_W0 * dt);
+        }
+
         // Substep 5: drift (w0+w1)·dt/2
         if let Some(ref p) = self.progress {
             p.set_phase(StepPhase::YoshidaDrift3);
@@ -140,6 +156,14 @@ impl TimeIntegrator for YoshidaSplitting {
             let t0 = Instant::now();
             advector.kick(repr, &accel, YOSHIDA_W1 * dt);
             timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        }
+
+        // Apply hypercollision damping after kick 3
+        if let Some(spectral) = repr
+            .as_any_mut()
+            .downcast_mut::<super::super::algos::spectral::SpectralV>()
+        {
+            spectral.apply_hypercollision(YOSHIDA_W1 * dt);
         }
 
         // Substep 7: drift w1·dt/2
