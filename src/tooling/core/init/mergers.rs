@@ -4,6 +4,7 @@
 use super::super::types::PhaseSpaceSnapshot;
 use super::domain::Domain;
 use super::isolated::IsolatedEquilibrium;
+use rayon::prelude::*;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 
@@ -132,66 +133,70 @@ impl MergerIC {
             p.set_intra_progress(0, nx1 as u64);
         }
 
-        for ix1 in 0..nx1 {
-            let x1 = -lx[0] + (ix1 as f64 + 0.5) * dx[0];
-            for ix2 in 0..nx2 {
-                let x2 = -lx[1] + (ix2 as f64 + 0.5) * dx[1];
-                for ix3 in 0..nx3 {
-                    let x3 = -lx[2] + (ix3 as f64 + 0.5) * dx[2];
-                    let base = ix1 * s_x1 + ix2 * s_x2 + ix3 * s_x3;
+        data.par_chunks_mut(s_x1)
+            .enumerate()
+            .for_each(|(ix1, chunk)| {
+                let x1 = -lx[0] + (ix1 as f64 + 0.5) * dx[0];
+                for ix2 in 0..nx2 {
+                    let x2 = -lx[1] + (ix2 as f64 + 0.5) * dx[1];
+                    for ix3 in 0..nx3 {
+                        let x3 = -lx[2] + (ix3 as f64 + 0.5) * dx[2];
+                        let base = ix2 * s_x2 + ix3 * s_x3;
 
-                    // Radius from body 1 centre
-                    let dx1 = x1 - x1_offset[0];
-                    let dy1 = x2 - x1_offset[1];
-                    let dz1 = x3 - x1_offset[2];
-                    let r1 = (dx1 * dx1 + dy1 * dy1 + dz1 * dz1).sqrt();
-                    let phi1 = self.body1.potential(r1);
+                        // Radius from body 1 centre
+                        let dx1 = x1 - x1_offset[0];
+                        let dy1 = x2 - x1_offset[1];
+                        let dz1 = x3 - x1_offset[2];
+                        let r1 = (dx1 * dx1 + dy1 * dy1 + dz1 * dz1).sqrt();
+                        let phi1 = self.body1.potential(r1);
 
-                    // Radius from body 2 centre
-                    let dx2 = x1 - x2_offset[0];
-                    let dy2 = x2 - x2_offset[1];
-                    let dz2 = x3 - x2_offset[2];
-                    let r2 = (dx2 * dx2 + dy2 * dy2 + dz2 * dz2).sqrt();
-                    let phi2 = self.body2.potential(r2);
+                        // Radius from body 2 centre
+                        let dx2 = x1 - x2_offset[0];
+                        let dy2 = x2 - x2_offset[1];
+                        let dz2 = x3 - x2_offset[2];
+                        let r2 = (dx2 * dx2 + dy2 * dy2 + dz2 * dz2).sqrt();
+                        let phi2 = self.body2.potential(r2);
 
-                    for iv1 in 0..nv1 {
-                        let v1 = -lv[0] + (iv1 as f64 + 0.5) * dv[0];
-                        for iv2 in 0..nv2 {
-                            let v2 = -lv[1] + (iv2 as f64 + 0.5) * dv[1];
-                            for iv3 in 0..nv3 {
-                                let v3 = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
-                                let idx = base + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3;
+                        for iv1 in 0..nv1 {
+                            let v1 = -lv[0] + (iv1 as f64 + 0.5) * dv[0];
+                            for iv2 in 0..nv2 {
+                                let v2 = -lv[1] + (iv2 as f64 + 0.5) * dv[1];
+                                for iv3 in 0..nv3 {
+                                    let v3 = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
+                                    let idx = base + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3;
 
-                                // f₁(x−x₁, v−v₁): energy in body 1's rest frame
-                                let dv1_1 = v1 - v1_offset[0];
-                                let dv1_2 = v2 - v1_offset[1];
-                                let dv1_3 = v3 - v1_offset[2];
-                                let e1 =
-                                    0.5 * (dv1_1 * dv1_1 + dv1_2 * dv1_2 + dv1_3 * dv1_3) + phi1;
-                                let f1 = self.body1.distribution_function(e1, 0.0).max(0.0);
+                                    // f₁(x−x₁, v−v₁): energy in body 1's rest frame
+                                    let dv1_1 = v1 - v1_offset[0];
+                                    let dv1_2 = v2 - v1_offset[1];
+                                    let dv1_3 = v3 - v1_offset[2];
+                                    let e1 = 0.5
+                                        * (dv1_1 * dv1_1 + dv1_2 * dv1_2 + dv1_3 * dv1_3)
+                                        + phi1;
+                                    let f1 = self.body1.distribution_function(e1, 0.0).max(0.0);
 
-                                // f₂(x−x₂, v−v₂): energy in body 2's rest frame
-                                let dv2_1 = v1 - v2_offset[0];
-                                let dv2_2 = v2 - v2_offset[1];
-                                let dv2_3 = v3 - v2_offset[2];
-                                let e2 =
-                                    0.5 * (dv2_1 * dv2_1 + dv2_2 * dv2_2 + dv2_3 * dv2_3) + phi2;
-                                let f2 = self.body2.distribution_function(e2, 0.0).max(0.0);
+                                    // f₂(x−x₂, v−v₂): energy in body 2's rest frame
+                                    let dv2_1 = v1 - v2_offset[0];
+                                    let dv2_2 = v2 - v2_offset[1];
+                                    let dv2_3 = v3 - v2_offset[2];
+                                    let e2 = 0.5
+                                        * (dv2_1 * dv2_1 + dv2_2 * dv2_2 + dv2_3 * dv2_3)
+                                        + phi2;
+                                    let f2 = self.body2.distribution_function(e2, 0.0).max(0.0);
 
-                                data[idx] = f1 + f2;
+                                    chunk[idx] = f1 + f2;
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            if let Some(p) = progress {
-                let c = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                if c.is_multiple_of(report_interval) {
-                    p.set_intra_progress(c, nx1 as u64);
+                if let Some(p) = progress {
+                    let c = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if c.is_multiple_of(report_interval) {
+                        p.set_intra_progress(c, nx1 as u64);
+                    }
                 }
-            }
-        }
+            });
 
         PhaseSpaceSnapshot {
             data,

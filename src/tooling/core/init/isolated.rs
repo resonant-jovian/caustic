@@ -8,7 +8,7 @@ use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 
 /// Trait for isolated equilibrium models specified as a distribution function.
-pub trait IsolatedEquilibrium {
+pub trait IsolatedEquilibrium: Send + Sync {
     /// Distribution function f(E, L). E = specific energy, L = specific angular momentum.
     fn distribution_function(&self, energy: f64, angular_momentum: f64) -> f64;
     /// Density profile ρ(r) in real space.

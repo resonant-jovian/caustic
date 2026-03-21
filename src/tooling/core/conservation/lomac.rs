@@ -22,6 +22,8 @@
 
 use std::sync::Arc;
 
+use rayon::prelude::*;
+
 use super::conservative_svd::{conservative_truncation, extract_moments};
 use super::kfvs::KfvsSolver;
 use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
@@ -159,7 +161,7 @@ impl LoMaC {
 
         // Track Casimir C₂ before projection
         let dv3 = self.dv[0] * self.dv[1] * self.dv[2];
-        let c2_pre: f64 = f_truncated.iter().map(|&f| f * f).sum::<f64>() * dv3;
+        let c2_pre: f64 = f_truncated.par_iter().map(|&f| f * f).sum::<f64>() * dv3;
 
         let result = conservative_truncation(
             f_truncated,
@@ -171,7 +173,7 @@ impl LoMaC {
         );
 
         // Track Casimir C₂ after projection
-        let c2_post: f64 = result.iter().map(|&f| f * f).sum::<f64>() * dv3;
+        let c2_post: f64 = result.par_iter().map(|&f| f * f).sum::<f64>() * dv3;
         self.casimir_drift_history.push((c2_pre, c2_post));
 
         if let Some(ref p) = self.progress {
@@ -271,44 +273,41 @@ impl LoMaC {
         self.advance_macroscopic(dt, acceleration);
         self.delta_f_step_count += 1;
 
-        let f_ref = match self.f_ref.clone() {
+        let f_ref = match self.f_ref.as_deref() {
             Some(r) => r,
             None => return self.project(f),
         };
 
-        let n = f.len();
-        let n_spatial: usize = self.spatial_shape.iter().product();
         let n_vel: usize = self.velocity_shape.iter().product();
         let dv3 = self.dv[0] * self.dv[1] * self.dv[2];
 
         // Compute delta_f = f - f_ref
-        let mut delta_f: Vec<f64> = Vec::with_capacity(n);
-        for i in 0..n {
-            delta_f.push(f[i] - f_ref[i]);
-        }
+        let mut delta_f: Vec<f64> = f.par_iter().zip(f_ref.par_iter())
+            .map(|(&fi, &fri)| fi - fri).collect();
 
         // Per-cell soft thresholding: zero out small delta_f contributions
         // relative to the cell's delta_f norm. This controls noise growth
         // without a full SVD (which is O(N^3) for the dense case).
-        for si in 0..n_spatial {
-            let base = si * n_vel;
-            let cell = &delta_f[base..base + n_vel];
+        delta_f.par_chunks_mut(n_vel).for_each(|cell| {
             let norm_sq: f64 = cell.iter().map(|x| x * x).sum::<f64>() * dv3;
             let threshold = 1e-10 * norm_sq.sqrt();
             if threshold > 0.0 {
-                for val in delta_f[base..base + n_vel].iter_mut() {
+                for val in cell.iter_mut() {
                     if val.abs() < threshold {
                         *val = 0.0;
                     }
                 }
             }
-        }
+        });
 
         // Reconstruct: f = f_ref + truncated(delta_f)
-        let mut reconstructed: Vec<f64> = Vec::with_capacity(n);
-        for i in 0..n {
-            reconstructed.push(f_ref[i] + delta_f[i]);
-        }
+        let reconstructed: Vec<f64> = f_ref.par_iter().zip(delta_f.par_iter())
+            .map(|(&fri, &dfi)| fri + dfi).collect();
+
+        // Pre-compute norms BEFORE self.project() so the f_ref borrow ends by NLL
+        let delta_norm: f64 = delta_f.par_iter().map(|x| x * x).sum::<f64>();
+        let ref_norm: f64 = f_ref.par_iter().map(|x| x * x).sum::<f64>();
+        // f_ref borrow ends here (last use)
 
         // Apply moment projection for exact conservation
         let result = self.project(&reconstructed);
@@ -321,9 +320,7 @@ impl LoMaC {
         {
             self.update_f_ref(&result);
         } else if self.delta_f_refresh_threshold > 0.0 {
-            // Check norm ratio
-            let delta_norm: f64 = delta_f.iter().map(|x| x * x).sum::<f64>();
-            let ref_norm: f64 = f_ref.iter().map(|x| x * x).sum::<f64>();
+            // Check norm ratio (using pre-computed norms)
             if ref_norm > 0.0 && (delta_norm / ref_norm).sqrt() > self.delta_f_refresh_threshold {
                 self.update_f_ref(&result);
             }

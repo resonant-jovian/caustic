@@ -313,25 +313,40 @@ impl KfvsSolver {
     /// Total mass (sum of ρ * dx³).
     pub fn total_mass(&self) -> f64 {
         let dv = self.dx[0] * self.dx[1] * self.dx[2];
-        self.state.iter().map(|s| s.density).sum::<f64>() * dv
+        self.state.par_iter().map(|s| s.density).sum::<f64>() * dv
     }
 
     /// Total momentum (sum of J * dx³).
     pub fn total_momentum(&self) -> [f64; 3] {
         let dv = self.dx[0] * self.dx[1] * self.dx[2];
-        let mut p = [0.0; 3];
-        for s in &self.state {
-            p[0] += s.momentum[0];
-            p[1] += s.momentum[1];
-            p[2] += s.momentum[2];
-        }
+        let p = self
+            .state
+            .par_iter()
+            .fold(
+                || [0.0f64; 3],
+                |mut acc, s| {
+                    acc[0] += s.momentum[0];
+                    acc[1] += s.momentum[1];
+                    acc[2] += s.momentum[2];
+                    acc
+                },
+            )
+            .reduce(
+                || [0.0f64; 3],
+                |mut a, b| {
+                    a[0] += b[0];
+                    a[1] += b[1];
+                    a[2] += b[2];
+                    a
+                },
+            );
         [p[0] * dv, p[1] * dv, p[2] * dv]
     }
 
     /// Total energy (sum of e * dx³).
     pub fn total_energy(&self) -> f64 {
         let dv = self.dx[0] * self.dx[1] * self.dx[2];
-        self.state.iter().map(|s| s.energy).sum::<f64>() * dv
+        self.state.par_iter().map(|s| s.energy).sum::<f64>() * dv
     }
 }
 

@@ -4,6 +4,7 @@
 use super::super::types::PhaseSpaceSnapshot;
 use super::domain::Domain;
 use super::isolated::IsolatedEquilibrium;
+use rayon::prelude::*;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 
@@ -319,151 +320,157 @@ impl DiskStabilityIC {
             p.set_intra_progress(0, nx1 as u64);
         }
 
-        for ix1 in 0..nx1 {
-            let x1 = -lx[0] + (ix1 as f64 + 0.5) * dx[0];
-            for ix2 in 0..nx2 {
-                let x2 = -lx[1] + (ix2 as f64 + 0.5) * dx[1];
+        data.par_chunks_mut(s_x1)
+            .enumerate()
+            .for_each(|(ix1, chunk)| {
+                let x1 = -lx[0] + (ix1 as f64 + 0.5) * dx[0];
+                for ix2 in 0..nx2 {
+                    let x2 = -lx[1] + (ix2 as f64 + 0.5) * dx[1];
 
-                let r_cyl = (x1 * x1 + x2 * x2).sqrt();
-                let phi_azimuthal = x2.atan2(x1);
+                    let r_cyl = (x1 * x1 + x2 * x2).sqrt();
+                    let phi_azimuthal = x2.atan2(x1);
 
-                // Perturbation factor: 1 + ε cos(m φ)
-                let pert_factor =
-                    1.0 + perturbation_amp * (perturbation_m as f64 * phi_azimuthal).cos();
+                    // Perturbation factor: 1 + ε cos(m φ)
+                    let pert_factor =
+                        1.0 + perturbation_amp * (perturbation_m as f64 * phi_azimuthal).cos();
 
-                for ix3 in 0..nx3 {
-                    let x3 = -lx[2] + (ix3 as f64 + 0.5) * dx[2];
-                    let pos = [x1, x2, x3];
+                    for ix3 in 0..nx3 {
+                        let x3 = -lx[2] + (ix3 as f64 + 0.5) * dx[2];
+                        let pos = [x1, x2, x3];
 
-                    let phi_total = self.total_potential(r_cyl, x3, pos);
+                        let phi_total = self.total_potential(r_cyl, x3, pos);
 
-                    // Vertical sech² profile: f_z(z) = sech²(z/z_0) / (2 z_0)
-                    // z_0 = σ_z / √(4πGΣ)
-                    let sigma_r_here = (self.disk_velocity_dispersion)(r_cyl);
-                    let sigma_surf_here = (self.disk_surface_density)(r_cyl);
-                    let sigma_z = sigma_r_here; // isotropic approximation
-                    let z_0 = if sigma_surf_here > 1e-30 {
-                        sigma_z / (4.0 * std::f64::consts::PI * g * sigma_surf_here).sqrt()
-                    } else {
-                        1e10 // effectively infinite scale height if no surface density
-                    };
-                    let sech_arg = x3 / z_0;
-                    let f_z = if sech_arg.abs() < 50.0 {
-                        let cosh_val = sech_arg.cosh();
-                        1.0 / (cosh_val * cosh_val * 2.0 * z_0)
-                    } else {
-                        0.0 // negligible contribution
-                    };
+                        // Vertical sech² profile: f_z(z) = sech²(z/z_0) / (2 z_0)
+                        // z_0 = σ_z / √(4πGΣ)
+                        let sigma_r_here = (self.disk_velocity_dispersion)(r_cyl);
+                        let sigma_surf_here = (self.disk_surface_density)(r_cyl);
+                        let sigma_z = sigma_r_here; // isotropic approximation
+                        let z_0 = if sigma_surf_here > 1e-30 {
+                            sigma_z
+                                / (4.0 * std::f64::consts::PI * g * sigma_surf_here).sqrt()
+                        } else {
+                            1e10 // effectively infinite scale height if no surface density
+                        };
+                        let sech_arg = x3 / z_0;
+                        let f_z = if sech_arg.abs() < 50.0 {
+                            let cosh_val = sech_arg.cosh();
+                            1.0 / (cosh_val * cosh_val * 2.0 * z_0)
+                        } else {
+                            0.0 // negligible contribution
+                        };
 
-                    if f_z < 1e-30 {
-                        // Skip velocity loops if vertical contribution is negligible
-                        continue;
-                    }
+                        if f_z < 1e-30 {
+                            // Skip velocity loops if vertical contribution is negligible
+                            continue;
+                        }
 
-                    let base = ix1 * s_x1 + ix2 * s_x2 + ix3 * s_x3;
+                        let base = ix2 * s_x2 + ix3 * s_x3;
 
-                    for iv1 in 0..nv1 {
-                        let v1 = -lv[0] + (iv1 as f64 + 0.5) * dv[0];
-                        for iv2 in 0..nv2 {
-                            let v2 = -lv[1] + (iv2 as f64 + 0.5) * dv[1];
-                            for iv3 in 0..nv3 {
-                                let v3 = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
+                        for iv1 in 0..nv1 {
+                            let v1 = -lv[0] + (iv1 as f64 + 0.5) * dv[0];
+                            for iv2 in 0..nv2 {
+                                let v2 = -lv[1] + (iv2 as f64 + 0.5) * dv[1];
+                                for iv3 in 0..nv3 {
+                                    let v3 = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
 
-                                // Angular momentum L_z = R * v_φ
-                                // v_φ = (v2*x1 - v1*x2) / R
-                                let lz = if r_cyl > 1e-30 {
-                                    v2 * x1 - v1 * x2 // = R * v_φ
-                                } else {
-                                    0.0
-                                };
+                                    // Angular momentum L_z = R * v_φ
+                                    // v_φ = (v2*x1 - v1*x2) / R
+                                    let lz = if r_cyl > 1e-30 {
+                                        v2 * x1 - v1 * x2 // = R * v_φ
+                                    } else {
+                                        0.0
+                                    };
 
-                                // Prograde disk only
-                                if lz <= 0.0 {
-                                    continue;
-                                }
+                                    // Prograde disk only
+                                    if lz <= 0.0 {
+                                        continue;
+                                    }
 
-                                // Find guiding-center radius R_c(L_z)
-                                let r_c = self.find_guiding_radius(lz, r_max);
+                                    // Find guiding-center radius R_c(L_z)
+                                    let r_c = self.find_guiding_radius(lz, r_max);
 
-                                // Properties at guiding center
-                                let vc2_rc = self.vc_squared(r_c);
-                                let vc_rc = vc2_rc.sqrt();
-                                let omega_rc = if r_c > 1e-30 {
-                                    vc_rc / r_c
-                                } else {
-                                    continue;
-                                };
+                                    // Properties at guiding center
+                                    let vc2_rc = self.vc_squared(r_c);
+                                    let vc_rc = vc2_rc.sqrt();
+                                    let omega_rc = if r_c > 1e-30 {
+                                        vc_rc / r_c
+                                    } else {
+                                        continue;
+                                    };
 
-                                let sigma_r_rc = (self.disk_velocity_dispersion)(r_c);
-                                let sigma_surf_rc = (self.disk_surface_density)(r_c);
-                                let sigma_r2_rc = sigma_r_rc * sigma_r_rc;
+                                    let sigma_r_rc = (self.disk_velocity_dispersion)(r_c);
+                                    let sigma_surf_rc = (self.disk_surface_density)(r_c);
+                                    let sigma_r2_rc = sigma_r_rc * sigma_r_rc;
 
-                                if sigma_r2_rc < 1e-30 || sigma_surf_rc < 1e-30 {
-                                    continue;
-                                }
+                                    if sigma_r2_rc < 1e-30 || sigma_surf_rc < 1e-30 {
+                                        continue;
+                                    }
 
-                                // Epicyclic frequency at R_c
-                                let eps_fd = 1e-4 * r_c.max(1e-8);
-                                let r_cp = r_c + eps_fd;
-                                let r_cm = (r_c - eps_fd).max(1e-30);
-                                let omega2_rc = omega_rc * omega_rc;
-                                let omega2_plus = self.vc_squared(r_cp) / (r_cp * r_cp);
-                                let omega2_minus = self.vc_squared(r_cm) / (r_cm * r_cm);
-                                let domega2_dr = (omega2_plus - omega2_minus) / (r_cp - r_cm);
-                                let kappa2_rc = r_c * domega2_dr + 4.0 * omega2_rc;
-                                if kappa2_rc <= 0.0 {
-                                    continue;
-                                }
-                                let kappa_rc = kappa2_rc.sqrt();
+                                    // Epicyclic frequency at R_c
+                                    let eps_fd = 1e-4 * r_c.max(1e-8);
+                                    let r_cp = r_c + eps_fd;
+                                    let r_cm = (r_c - eps_fd).max(1e-30);
+                                    let omega2_rc = omega_rc * omega_rc;
+                                    let omega2_plus = self.vc_squared(r_cp) / (r_cp * r_cp);
+                                    let omega2_minus = self.vc_squared(r_cm) / (r_cm * r_cm);
+                                    let domega2_dr =
+                                        (omega2_plus - omega2_minus) / (r_cp - r_cm);
+                                    let kappa2_rc = r_c * domega2_dr + 4.0 * omega2_rc;
+                                    if kappa2_rc <= 0.0 {
+                                        continue;
+                                    }
+                                    let kappa_rc = kappa2_rc.sqrt();
 
-                                // Circular orbit energy at R_c:
-                                // E_c = ½ v_c(R_c)² + Φ(R_c, 0)
-                                let phi_rc = self.total_potential(r_c, 0.0, [r_c, 0.0, 0.0]);
-                                let e_c = 0.5 * vc2_rc + phi_rc;
+                                    // Circular orbit energy at R_c:
+                                    // E_c = ½ v_c(R_c)² + Φ(R_c, 0)
+                                    let phi_rc =
+                                        self.total_potential(r_c, 0.0, [r_c, 0.0, 0.0]);
+                                    let e_c = 0.5 * vc2_rc + phi_rc;
 
-                                // Total energy E = ½ v² + Φ(x)
-                                let v2sq = v1 * v1 + v2 * v2 + v3 * v3;
-                                let energy = 0.5 * v2sq + phi_total;
+                                    // Total energy E = ½ v² + Φ(x)
+                                    let v2sq = v1 * v1 + v2 * v2 + v3 * v3;
+                                    let energy = 0.5 * v2sq + phi_total;
 
-                                // Shu DF: only for bound orbits near the guiding center
-                                let de = energy - e_c;
-                                if de > 0.0 {
-                                    // Unbound relative to circular orbit
-                                    continue;
-                                }
+                                    // Shu DF: only for bound orbits near the guiding center
+                                    let de = energy - e_c;
+                                    if de > 0.0 {
+                                        // Unbound relative to circular orbit
+                                        continue;
+                                    }
 
-                                // Exponential argument: -(E - E_c) / σ_R²
-                                let arg = -de / sigma_r2_rc;
-                                if arg > 500.0 {
-                                    continue; // overflow guard
-                                }
+                                    // Exponential argument: -(E - E_c) / σ_R²
+                                    let arg = -de / sigma_r2_rc;
+                                    if arg > 500.0 {
+                                        continue; // overflow guard
+                                    }
 
-                                // Shu DF (in-plane part):
-                                // f_shu = Σ(R_c) Ω(R_c) / (π κ(R_c) σ_R²(R_c))
-                                //         × exp(-(E-E_c)/σ_R²(R_c))
-                                let f_shu = sigma_surf_rc * omega_rc
-                                    / (std::f64::consts::PI * kappa_rc * sigma_r2_rc)
-                                    * arg.exp();
+                                    // Shu DF (in-plane part):
+                                    // f_shu = Σ(R_c) Ω(R_c) / (π κ(R_c) σ_R²(R_c))
+                                    //         × exp(-(E-E_c)/σ_R²(R_c))
+                                    let f_shu = sigma_surf_rc * omega_rc
+                                        / (std::f64::consts::PI * kappa_rc * sigma_r2_rc)
+                                        * arg.exp();
 
-                                // Combined: f = f_shu(E, Lz) × f_z(z) × perturbation
-                                let f_val = f_shu * f_z * pert_factor;
+                                    // Combined: f = f_shu(E, Lz) × f_z(z) × perturbation
+                                    let f_val = f_shu * f_z * pert_factor;
 
-                                if f_val > 0.0 {
-                                    data[base + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3] = f_val;
+                                    if f_val > 0.0 {
+                                        chunk[base + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3] =
+                                            f_val;
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            if let Some(p) = progress {
-                let c = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                if c.is_multiple_of(report_interval) {
-                    p.set_intra_progress(c, nx1 as u64);
+                if let Some(p) = progress {
+                    let c = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if c.is_multiple_of(report_interval) {
+                        p.set_intra_progress(c, nx1 as u64);
+                    }
                 }
-            }
-        }
+            });
 
         PhaseSpaceSnapshot {
             data,

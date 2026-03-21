@@ -3,6 +3,7 @@
 use super::super::types::PhaseSpaceSnapshot;
 use super::domain::Domain;
 use super::isolated::IsolatedEquilibrium;
+use rayon::prelude::*;
 
 /// Tidal stream IC: progenitor cluster on an orbit in an external host potential.
 pub struct TidalIC {
@@ -71,48 +72,55 @@ impl TidalIC {
             p.set_intra_progress(0, nx1 as u64);
         }
 
-        for ix1 in 0..nx1 {
-            let x1 = -lx[0] + (ix1 as f64 + 0.5) * dx[0];
-            for ix2 in 0..nx2 {
-                let x2 = -lx[1] + (ix2 as f64 + 0.5) * dx[1];
-                for ix3 in 0..nx3 {
-                    let x3 = -lx[2] + (ix3 as f64 + 0.5) * dx[2];
-                    let base = ix1 * s_x1 + ix2 * s_x2 + ix3 * s_x3;
+        data.par_chunks_mut(s_x1)
+            .enumerate()
+            .for_each(|(ix1, chunk)| {
+                let x1 = -lx[0] + (ix1 as f64 + 0.5) * dx[0];
+                for ix2 in 0..nx2 {
+                    let x2 = -lx[1] + (ix2 as f64 + 0.5) * dx[1];
+                    for ix3 in 0..nx3 {
+                        let x3 = -lx[2] + (ix3 as f64 + 0.5) * dx[2];
+                        let base = ix2 * s_x2 + ix3 * s_x3;
 
-                    // Position relative to progenitor centre
-                    let x_rel = [x1 - pos[0], x2 - pos[1], x3 - pos[2]];
-                    let r =
-                        (x_rel[0] * x_rel[0] + x_rel[1] * x_rel[1] + x_rel[2] * x_rel[2]).sqrt();
-                    let phi = self.progenitor.potential(r);
+                        // Position relative to progenitor centre
+                        let x_rel = [x1 - pos[0], x2 - pos[1], x3 - pos[2]];
+                        let r = (x_rel[0] * x_rel[0]
+                            + x_rel[1] * x_rel[1]
+                            + x_rel[2] * x_rel[2])
+                            .sqrt();
+                        let phi = self.progenitor.potential(r);
 
-                    for iv1 in 0..nv1 {
-                        let v1 = -lv[0] + (iv1 as f64 + 0.5) * dv[0];
-                        for iv2 in 0..nv2 {
-                            let v2 = -lv[1] + (iv2 as f64 + 0.5) * dv[1];
-                            for iv3 in 0..nv3 {
-                                let v3 = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
+                        for iv1 in 0..nv1 {
+                            let v1 = -lv[0] + (iv1 as f64 + 0.5) * dv[0];
+                            for iv2 in 0..nv2 {
+                                let v2 = -lv[1] + (iv2 as f64 + 0.5) * dv[1];
+                                for iv3 in 0..nv3 {
+                                    let v3 = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
 
-                                // Velocity relative to progenitor
-                                let dv1 = v1 - vel[0];
-                                let dv2 = v2 - vel[1];
-                                let dv3 = v3 - vel[2];
-                                let v2sq = dv1 * dv1 + dv2 * dv2 + dv3 * dv3;
-                                let energy = 0.5 * v2sq + phi;
-                                let f = self.progenitor.distribution_function(energy, 0.0).max(0.0);
-                                data[base + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3] = f;
+                                    // Velocity relative to progenitor
+                                    let dv1 = v1 - vel[0];
+                                    let dv2 = v2 - vel[1];
+                                    let dv3 = v3 - vel[2];
+                                    let v2sq = dv1 * dv1 + dv2 * dv2 + dv3 * dv3;
+                                    let energy = 0.5 * v2sq + phi;
+                                    let f = self
+                                        .progenitor
+                                        .distribution_function(energy, 0.0)
+                                        .max(0.0);
+                                    chunk[base + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3] = f;
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            if let Some(p) = progress {
-                let c = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                if c.is_multiple_of(report_interval) {
-                    p.set_intra_progress(c, nx1 as u64);
+                if let Some(p) = progress {
+                    let c = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if c.is_multiple_of(report_interval) {
+                        p.set_intra_progress(c, nx1 as u64);
+                    }
                 }
-            }
-        }
+            });
 
         PhaseSpaceSnapshot {
             data,
