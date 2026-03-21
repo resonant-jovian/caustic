@@ -1106,10 +1106,9 @@ impl HtTensor3D {
             Ok(svd) => {
                 let s_col = svd.S().column_vector();
                 let sv: Vec<f64> = (0..s_col.nrows()).map(|i| s_col[i]).collect();
-                let trunc_k = truncation_rank(&sv, eps).min(max_rank).max(1);
-
                 let u_full = svd.U();
                 let v_full = svd.V();
+                let trunc_k = truncation_rank(&sv, eps).min(max_rank).max(1).min(u_full.ncols());
 
                 // New leaf 0: Q₀ · U[:,0:k] · diag(√σ)
                 let leaf0_frame = match &self.nodes[0] {

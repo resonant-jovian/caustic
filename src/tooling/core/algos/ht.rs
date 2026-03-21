@@ -1321,7 +1321,11 @@ impl HtTensor {
         match node {
             HtNode::Leaf { dim, ref frame } => {
                 let (u, s, vt) = thin_svd(frame);
-                let new_rank = truncation_rank(&s, eps).max(1);
+                if u.ncols() == 0 {
+                    self.nodes[node_idx] = node;
+                    return;
+                }
+                let new_rank = truncation_rank(&s, eps).max(1).min(u.ncols());
                 if new_rank >= frame.ncols() {
                     self.nodes[node_idx] = node;
                     return;
@@ -1343,7 +1347,11 @@ impl HtTensor {
                 let [kt, kl, kr] = ranks;
                 let mat = vec_to_mat(transfer, kt, kl * kr);
                 let (u, s, vt) = thin_svd(&mat);
-                let new_rank = truncation_rank(&s, eps).max(1);
+                if u.ncols() == 0 {
+                    self.nodes[node_idx] = node;
+                    return;
+                }
+                let new_rank = truncation_rank(&s, eps).max(1).min(u.ncols());
                 if new_rank >= kt {
                     self.nodes[node_idx] = node;
                     return;
