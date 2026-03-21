@@ -37,6 +37,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub struct SpectralV {
     /// Hermite expansion coefficients: length = n_spatial * n_modes^3.
     pub coefficients: Vec<f64>,
+    /// Scratch buffer for advection (avoids per-step clone of `coefficients`).
+    scratch: Vec<f64>,
     /// Spatial grid dimensions [nx, ny, nz].
     pub spatial_shape: [usize; 3],
     /// Number of Hermite modes per velocity dimension.
@@ -71,8 +73,10 @@ impl SpectralV {
         let lv = domain.lv()[0];
         let sigma = lv / 3.0;
 
+        let total = n_spatial * n_modes3;
         SpectralV {
-            coefficients: vec![0.0; n_spatial * n_modes3],
+            coefficients: vec![0.0; total],
+            scratch: vec![0.0; total],
             spatial_shape: [nx, ny, nz],
             n_modes,
             velocity_scale: sigma,
@@ -311,6 +315,7 @@ impl SpectralV {
             });
 
         SpectralV {
+            scratch: vec![0.0; coefficients.len()],
             coefficients,
             spatial_shape: [nx, ny, nz],
             n_modes,
@@ -507,8 +512,10 @@ impl PhaseSpaceRepr for SpectralV {
         // Instead of explicit gradients, we use the equivalent semi-Lagrangian formulation:
         // shift mode n's contribution from modes n-1 and n+1 by +-sigma*dt.
 
-        // For each velocity dimension independently, apply mode coupling
-        let old_coeffs = self.coefficients.clone();
+        // For each velocity dimension independently, apply mode coupling.
+        // Swap coefficients into scratch to avoid a full clone.
+        std::mem::swap(&mut self.coefficients, &mut self.scratch);
+        let old_coeffs = &self.scratch;
 
         for dim in 0..3 {
             let n_d = self.spatial_shape[dim];
@@ -601,7 +608,7 @@ impl PhaseSpaceRepr for SpectralV {
                                         _ => m0 * n_modes * n_modes + m1 * n_modes + (m2 - 1),
                                     };
                                     spatial_gradient_1d_impl(
-                                        &old_coeffs,
+                                        old_coeffs,
                                         mi_lower,
                                         dim,
                                         ix,
@@ -623,7 +630,7 @@ impl PhaseSpaceRepr for SpectralV {
                                         _ => m0 * n_modes * n_modes + m1 * n_modes + (m2 + 1),
                                     };
                                     spatial_gradient_1d_impl(
-                                        &old_coeffs,
+                                        old_coeffs,
                                         mi_upper,
                                         dim,
                                         ix,
@@ -675,7 +682,12 @@ impl PhaseSpaceRepr for SpectralV {
         let n_modes3 = n_modes * n_modes * n_modes;
         let sigma = self.velocity_scale;
 
-        let old = self.coefficients.clone();
+        // Swap coefficients into scratch, then copy back so `self.coefficients`
+        // retains the old values for `+=` accumulation while `old` reads from scratch.
+        // Saves allocation vs clone() — both buffers are already correctly sized.
+        std::mem::swap(&mut self.coefficients, &mut self.scratch);
+        self.coefficients.copy_from_slice(&self.scratch);
+        let old = &self.scratch;
 
         // Parallelize over spatial cells — each cell's coupling is independent
         let n_spatial = nx * ny * nz;

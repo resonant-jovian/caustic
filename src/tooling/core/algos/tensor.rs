@@ -185,6 +185,26 @@ impl TensorTrain {
         tolerance: f64,
         domain: &Domain,
     ) -> Self {
+        Self::from_snapshot_owned(
+            PhaseSpaceSnapshot {
+                data: snap.data.clone(),
+                shape: snap.shape,
+                time: snap.time,
+            },
+            max_rank,
+            tolerance,
+            domain,
+        )
+    }
+
+    /// Like [`from_snapshot`](Self::from_snapshot), but takes ownership of the
+    /// snapshot data to avoid an O(N^6) clone.
+    pub fn from_snapshot_owned(
+        snap: PhaseSpaceSnapshot,
+        max_rank: usize,
+        tolerance: f64,
+        domain: &Domain,
+    ) -> Self {
         let shape = snap.shape;
         let n_total: usize = shape.iter().product();
         assert_eq!(
@@ -202,7 +222,7 @@ impl TensorTrain {
         let mut ranks = vec![1usize; 7]; // ranks[0] = 1, ranks[6] = 1
 
         // C starts as the full data reshaped to (n_0, n_1*n_2*n_3*n_4*n_5)
-        let mut c_data = snap.data.clone();
+        let mut c_data = snap.data;
         let mut r_prev = 1usize;
 
         for k in 0..5 {
@@ -847,7 +867,8 @@ impl PhaseSpaceRepr for TensorTrain {
             shape: self.shape,
             time: 0.0,
         };
-        let new_tt = TensorTrain::from_snapshot(&snap, self.max_rank, self.tolerance, &self.domain);
+        let new_tt =
+            TensorTrain::from_snapshot_owned(snap, self.max_rank, self.tolerance, &self.domain);
         self.cores = new_tt.cores;
         self.ranks = new_tt.ranks;
     }
@@ -967,7 +988,8 @@ impl PhaseSpaceRepr for TensorTrain {
             shape: self.shape,
             time: 0.0,
         };
-        let new_tt = TensorTrain::from_snapshot(&snap, self.max_rank, self.tolerance, &self.domain);
+        let new_tt =
+            TensorTrain::from_snapshot_owned(snap, self.max_rank, self.tolerance, &self.domain);
         self.cores = new_tt.cores;
         self.ranks = new_tt.ranks;
     }

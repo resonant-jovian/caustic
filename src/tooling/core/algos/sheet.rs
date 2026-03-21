@@ -238,7 +238,6 @@ impl SheetTracker {
             p.set_intra_progress(0, n_particles);
         }
 
-        let shape = self.shape;
         let particle_mass = self.particle_mass;
         let density_data = self.particles.par_iter()
             .fold(

@@ -210,7 +210,7 @@ impl PoissonSolver for HtPoisson {
         );
 
         // Step 3: FFT leaves (using cached plans)
-        let rho_hat = rho_ht.fft_leaves_with_plans(&self.leaf_fft_plans);
+        let rho_hat = rho_ht.into_fft_with_plans(&self.leaf_fft_plans);
 
         // Step 4: For each Gaussian term, scale density in Fourier space by
         // the rank-1 Green's factor, then accumulate via add.
@@ -248,7 +248,7 @@ impl PoissonSolver for HtPoisson {
         };
 
         // Step 5: IFFT leaves (using cached plans)
-        let mut phi_ht = phi_hat.ifft_leaves_with_plans(&self.leaf_ifft_plans);
+        let mut phi_ht = phi_hat.into_ifft_with_plans(&self.leaf_ifft_plans);
 
         // Step 6: Truncate to re-compress (rank may be R_G × r_ρ)
         phi_ht.truncate(self.tolerance, self.max_rank);

@@ -75,11 +75,11 @@ impl HybridRepr {
         );
 
         // Identify newly multi-stream cells
-        for si in 0..counts.data.len() {
-            if counts.data[si] > self.stream_threshold && !self.mask[si] {
-                self.mask[si] = true;
+        self.mask.par_iter_mut().zip(counts.data.par_iter()).for_each(|(m, &c)| {
+            if c > self.stream_threshold && !*m {
+                *m = true;
             }
-        }
+        });
 
         // Deposit sheet particles that sit in grid-mode cells into the 6D grid.
         // We iterate particles; for each in a grid-mode cell, CIC deposit.

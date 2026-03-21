@@ -215,15 +215,13 @@ impl HtTensor {
         ];
 
         // Compute frames for all nodes via mode unfolding + SVD
-        let mut frames: Vec<Mat<f64>> = Vec::with_capacity(NUM_NODES);
-
-        for node_idx in 0..10 {
+        let mut frames: Vec<Mat<f64>> = (0..10usize).into_par_iter().map(|node_idx| {
             let dims = dim_sets[node_idx];
             let mat = multi_mode_unfold(data, &shape, dims);
             let (u, s, _vt) = thin_svd(&mat);
             let rank = truncation_rank(&s, eps_node).max(1);
-            frames.push(u.subcols(0, rank).to_owned());
-        }
+            u.subcols(0, rank).to_owned()
+        }).collect();
 
         // Root frame: trivially [1] (1×1)
         let mut root_frame = Mat::zeros(1, 1);

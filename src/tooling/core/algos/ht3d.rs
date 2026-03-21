@@ -595,6 +595,52 @@ impl HtTensor3D {
         }
     }
 
+    /// Like [`zero_pad`](Self::zero_pad) but consumes `self`, moving
+    /// transfer tensors instead of cloning them.
+    pub fn into_zero_padded(self) -> HtTensor3D {
+        let new_shape = [self.shape[0] * 2, self.shape[1] * 2, self.shape[2] * 2];
+        let mut nodes = Vec::with_capacity(NUM_NODES_3D);
+
+        for node in self.nodes {
+            match node {
+                HtNode3D::Leaf { dim, frame } => {
+                    let n = frame.nrows();
+                    let k = frame.ncols();
+                    let new_n = n * 2;
+                    let mut new_frame = Mat::zeros(new_n, k);
+                    for r in 0..n {
+                        for c in 0..k {
+                            new_frame[(r, c)] = frame[(r, c)];
+                        }
+                    }
+                    nodes.push(HtNode3D::Leaf {
+                        dim,
+                        frame: new_frame,
+                    });
+                }
+                HtNode3D::Interior {
+                    left,
+                    right,
+                    transfer,
+                    ranks,
+                } => {
+                    nodes.push(HtNode3D::Interior {
+                        left,
+                        right,
+                        transfer,
+                        ranks,
+                    });
+                }
+            }
+        }
+
+        HtTensor3D {
+            nodes,
+            shape: new_shape,
+            dx: self.dx,
+        }
+    }
+
     /// Extract the first N entries from each leaf frame (undo zero-padding).
     pub fn extract_subgrid(&self, shape: [usize; 3]) -> HtTensor3D {
         let mut nodes = Vec::with_capacity(NUM_NODES_3D);
@@ -627,6 +673,51 @@ impl HtTensor3D {
                         right: *right,
                         transfer: transfer.clone(),
                         ranks: *ranks,
+                    });
+                }
+            }
+        }
+
+        HtTensor3D {
+            nodes,
+            shape,
+            dx: self.dx,
+        }
+    }
+
+    /// Like [`extract_subgrid`](Self::extract_subgrid) but consumes `self`,
+    /// moving transfer tensors instead of cloning them.
+    pub fn into_subgrid(self, shape: [usize; 3]) -> HtTensor3D {
+        let mut nodes = Vec::with_capacity(NUM_NODES_3D);
+
+        for node in self.nodes {
+            match node {
+                HtNode3D::Leaf { dim, frame } => {
+                    let target_n = shape[dim];
+                    let k = frame.ncols();
+                    let n = target_n.min(frame.nrows());
+                    let mut new_frame = Mat::zeros(n, k);
+                    for r in 0..n {
+                        for c in 0..k {
+                            new_frame[(r, c)] = frame[(r, c)];
+                        }
+                    }
+                    nodes.push(HtNode3D::Leaf {
+                        dim,
+                        frame: new_frame,
+                    });
+                }
+                HtNode3D::Interior {
+                    left,
+                    right,
+                    transfer,
+                    ranks,
+                } => {
+                    nodes.push(HtNode3D::Interior {
+                        left,
+                        right,
+                        transfer,
+                        ranks,
                     });
                 }
             }
@@ -1380,6 +1471,65 @@ impl HtTensor3D {
         }
     }
 
+    /// Like [`fft_leaves_with_plans`](Self::fft_leaves_with_plans) but
+    /// consumes `self`, moving transfer tensors instead of cloning them.
+    pub fn into_fft_with_plans(
+        self,
+        plans: &[std::sync::Arc<dyn rustfft::Fft<f64>>; 3],
+    ) -> HtTensor3DComplex {
+        use rustfft::num_complex::Complex64;
+
+        let mut nodes = Vec::with_capacity(NUM_NODES_3D);
+
+        for node in self.nodes {
+            match node {
+                HtNode3D::Leaf { dim, frame } => {
+                    let n = frame.nrows();
+                    let k = frame.ncols();
+                    let mut frame_re = Mat::zeros(n, k);
+                    let mut frame_im = Mat::zeros(n, k);
+                    let fft = &plans[dim];
+
+                    for col in 0..k {
+                        let mut buffer: Vec<Complex64> = (0..n)
+                            .map(|r| Complex64::new(frame[(r, col)], 0.0))
+                            .collect();
+                        fft.process(&mut buffer);
+                        for r in 0..n {
+                            frame_re[(r, col)] = buffer[r].re;
+                            frame_im[(r, col)] = buffer[r].im;
+                        }
+                    }
+
+                    nodes.push(HtNode3DComplex::Leaf {
+                        dim,
+                        frame_re,
+                        frame_im,
+                    });
+                }
+                HtNode3D::Interior {
+                    left,
+                    right,
+                    transfer,
+                    ranks,
+                } => {
+                    nodes.push(HtNode3DComplex::Interior {
+                        left,
+                        right,
+                        transfer,
+                        ranks,
+                    });
+                }
+            }
+        }
+
+        HtTensor3DComplex {
+            nodes,
+            shape: self.shape,
+            dx: self.dx,
+        }
+    }
+
     /// Construct a rank-1 HT3D tensor from three 1D vectors:
     /// T[i,j,k] = v0[i] * v1[j] * v2[k].
     pub fn from_rank1(v0: &[f64], v1: &[f64], v2: &[f64], dx: [f64; 3]) -> Self {
@@ -1519,6 +1669,64 @@ impl HtTensor3DComplex {
                         right: *right,
                         transfer: transfer.clone(),
                         ranks: *ranks,
+                    });
+                }
+            }
+        }
+
+        HtTensor3D {
+            nodes,
+            shape: self.shape,
+            dx: self.dx,
+        }
+    }
+
+    /// Like [`ifft_leaves_with_plans`](Self::ifft_leaves_with_plans) but
+    /// consumes `self`, moving transfer tensors instead of cloning them.
+    pub fn into_ifft_with_plans(
+        self,
+        plans: &[std::sync::Arc<dyn rustfft::Fft<f64>>; 3],
+    ) -> HtTensor3D {
+        use rustfft::num_complex::Complex64;
+
+        let mut nodes = Vec::with_capacity(NUM_NODES_3D);
+
+        for node in self.nodes {
+            match node {
+                HtNode3DComplex::Leaf {
+                    dim,
+                    frame_re,
+                    frame_im,
+                } => {
+                    let n = frame_re.nrows();
+                    let k = frame_re.ncols();
+                    let mut frame = Mat::zeros(n, k);
+                    let ifft = &plans[dim];
+                    let scale = 1.0 / n as f64;
+
+                    for col in 0..k {
+                        let mut buffer: Vec<Complex64> = (0..n)
+                            .map(|r| Complex64::new(frame_re[(r, col)], frame_im[(r, col)]))
+                            .collect();
+                        ifft.process(&mut buffer);
+                        for r in 0..n {
+                            frame[(r, col)] = buffer[r].re * scale;
+                        }
+                    }
+
+                    nodes.push(HtNode3D::Leaf { dim, frame });
+                }
+                HtNode3DComplex::Interior {
+                    left,
+                    right,
+                    transfer,
+                    ranks,
+                } => {
+                    nodes.push(HtNode3D::Interior {
+                        left,
+                        right,
+                        transfer,
+                        ranks,
                     });
                 }
             }
