@@ -949,8 +949,8 @@ impl HtTensor {
                 // This is expensive — approximate by sampling
                 // Use the pivots from nodes 8 and 9 to pick representative points
                 let mut sum = 0.0;
-                let n_x_samples = (shape_ref[0] * shape_ref[1] * shape_ref[2]).min(200);
-                let n_v_samples = (shape_ref[3] * shape_ref[4] * shape_ref[5]).min(200);
+                let n_x_samples = (shape_ref[0] * shape_ref[1] * shape_ref[2]).min(500);
+                let n_v_samples = (shape_ref[3] * shape_ref[4] * shape_ref[5]).min(500);
                 let x_step = n_x.max(1) / n_x_samples.max(1);
                 let v_step = n_v.max(1) / n_v_samples.max(1);
                 let x_scale = n_x as f64 / n_x_samples as f64;
