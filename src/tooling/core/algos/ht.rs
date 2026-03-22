@@ -2467,8 +2467,11 @@ impl PhaseSpaceRepr for HtTensor {
 
     fn entropy(&self) -> f64 {
         if !self.can_materialize() {
-            tracing::warn!(
-                "HtTensor::entropy() skipped: full grid ({} elements) exceeds materialization limit",
+            // Entropy S = −∫ f·ln(f) is nonlinear and cannot be computed via
+            // tree contractions; materialization is required but would exceed
+            // memory for large grids. This is an expected limitation.
+            tracing::debug!(
+                "HtTensor::entropy(): full grid ({} elements) exceeds materialization limit",
                 self.shape.iter().product::<usize>()
             );
             return f64::NAN;
@@ -2577,43 +2580,12 @@ impl PhaseSpaceRepr for HtTensor {
     }
 
     fn total_kinetic_energy(&self) -> f64 {
-        if !self.can_materialize() {
-            tracing::warn!(
-                "HtTensor::total_kinetic_energy() skipped: full grid ({} elements) exceeds materialization limit",
-                self.shape.iter().product::<usize>()
-            );
-            return f64::NAN;
-        }
+        // Use tree contractions via compute_energy_density() instead of
+        // materializing the full 6D grid (which exceeds memory for large grids).
         let dx = self.domain.dx();
-        let dv = self.domain.dv();
-        let lv = self.domain.lv();
-        let vol = dx[0] * dx[1] * dx[2] * dv[0] * dv[1] * dv[2];
-        let [_, _, _, nv1, nv2, nv3] = self.shape;
-
-        let data = self.to_full();
-        let n_vel = nv1 * nv2 * nv3;
-        let total = data.len() as u64;
-        let report_interval = (total / 100).max(1);
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, total);
-        }
-        let mut t = 0.0f64;
-        for (idx, &f) in data.iter().enumerate() {
-            let vi = idx % n_vel;
-            let iv3 = vi % nv3;
-            let iv2 = (vi / nv3) % nv2;
-            let iv1 = vi / (nv2 * nv3);
-            let vx = -lv[0] + (iv1 as f64 + 0.5) * dv[0];
-            let vy = -lv[1] + (iv2 as f64 + 0.5) * dv[1];
-            let vz = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
-            t += f * (vx * vx + vy * vy + vz * vz);
-            if let Some(ref p) = self.progress
-                && (idx as u64).is_multiple_of(report_interval)
-            {
-                p.set_intra_progress(idx as u64, total);
-            }
-        }
-        0.5 * t * vol
+        let dx3 = dx[0] * dx[1] * dx[2];
+        let energy_density = self.compute_energy_density();
+        energy_density.data.iter().sum::<f64>() * dx3
     }
 
     fn to_snapshot(&self, time: f64) -> PhaseSpaceSnapshot {
