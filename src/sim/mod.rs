@@ -165,22 +165,32 @@ impl Simulation {
                 .as_any()
                 .downcast_ref::<crate::tooling::core::algos::ht::HtTensor>()
             {
-                lomac.advance_macroscopic(dt, &acc);
-                let corrected = lomac.project_ht(ht);
-                let shape = ht.shape;
-                let corrected_snap = PhaseSpaceSnapshot {
-                    data: corrected,
-                    shape,
-                    time: self.time,
-                };
-                self.repr = Box::new(
-                    crate::tooling::core::algos::uniform::UniformGrid6D::from_snapshot(
-                        corrected_snap,
-                        self.domain.clone(),
-                    ),
-                );
-                if let Some(ref p) = self.progress {
-                    self.repr.set_progress(p.clone());
+                if ht.can_materialize() {
+                    lomac.advance_macroscopic(dt, &acc);
+                    let corrected = lomac.project_ht(ht);
+                    let shape = ht.shape;
+                    let corrected_snap = PhaseSpaceSnapshot {
+                        data: corrected,
+                        shape,
+                        time: self.time,
+                    };
+                    self.repr = Box::new(
+                        crate::tooling::core::algos::uniform::UniformGrid6D::from_snapshot(
+                            corrected_snap,
+                            self.domain.clone(),
+                        ),
+                    );
+                    if let Some(ref p) = self.progress {
+                        self.repr.set_progress(p.clone());
+                    }
+                } else {
+                    // Skip dense LoMaC projection for large HT tensors that cannot
+                    // be materialized. Advance macroscopic state for diagnostics only.
+                    tracing::warn!(
+                        "LoMaC projection skipped: HT tensor too large to materialize ({} elements)",
+                        ht.shape.iter().product::<usize>()
+                    );
+                    lomac.advance_macroscopic(dt, &acc);
                 }
             } else {
                 // Dense path (UniformGrid6D, etc.)

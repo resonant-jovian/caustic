@@ -949,8 +949,8 @@ impl HtTensor {
                 // This is expensive — approximate by sampling
                 // Use the pivots from nodes 8 and 9 to pick representative points
                 let mut sum = 0.0;
-                let n_x_samples = (shape_ref[0] * shape_ref[1] * shape_ref[2]).min(500);
-                let n_v_samples = (shape_ref[3] * shape_ref[4] * shape_ref[5]).min(500);
+                let n_x_samples = (shape_ref[0] * shape_ref[1] * shape_ref[2]).min(200);
+                let n_v_samples = (shape_ref[3] * shape_ref[4] * shape_ref[5]).min(200);
                 let x_step = n_x.max(1) / n_x_samples.max(1);
                 let v_step = n_v.max(1) / n_v_samples.max(1);
                 let x_scale = n_x as f64 / n_x_samples as f64;
@@ -1099,32 +1099,50 @@ fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64 + Sync>(
     k_right: usize,
     eps: f64,
     max_rank: usize,
-    _n_samples: usize,
-    _rng: &mut Xorshift64,
+    n_samples: usize,
+    rng: &mut Xorshift64,
 ) -> (Vec<f64>, usize) {
     let k_lr = k_left * k_right;
     let n_comp: usize = comp_dims.iter().map(|&d| shape[d]).product();
     let n_left_phys: usize = left_dims.iter().map(|&d| shape[d]).product();
     let n_right_phys: usize = right_dims.iter().map(|&d| shape[d]).product();
 
-    // Build the full projected matrix R ∈ ℝ^{k_lr × n_comp}
-    // R[(jl*kr+jr), comp] = Σ_{left_flat, right_flat}
+    // Use all complementary indices if tractable, otherwise sample randomly.
+    // Sampling n_samples random complementary multi-indices suffices because the
+    // transfer tensor has at most max_rank degrees of freedom — the same principle
+    // used for leaf frame construction (fiber sampling + QR).
+    let n_eval = n_samples.min(n_comp);
+
+    let comp_indices: Vec<Vec<usize>> = if n_eval >= n_comp {
+        // Exhaustive: enumerate all complementary indices (small grids)
+        (0..n_comp)
+            .map(|comp_flat| {
+                let mut vals = vec![0usize; comp_dims.len()];
+                let mut rem = comp_flat;
+                for ci in (0..comp_dims.len()).rev() {
+                    vals[ci] = rem % shape[comp_dims[ci]];
+                    rem /= shape[comp_dims[ci]];
+                }
+                vals
+            })
+            .collect()
+    } else {
+        // Random sampling: draw n_eval complementary multi-indices
+        (0..n_eval)
+            .map(|_| comp_dims.iter().map(|&d| rng.next_usize(shape[d])).collect())
+            .collect()
+    };
+
+    // Build projected matrix R ∈ ℝ^{k_lr × n_eval}
+    // R[(jl*kr+jr), s] = Σ_{left_flat, right_flat}
     //     left_frame[left_flat, jl] * right_frame[right_flat, jr] * f(...)
     //
-    // For efficiency, first compute F_proj ∈ ℝ^{n_left × n_right} for each comp index,
-    // then project: R[:, comp] = (U_left^T @ F_proj @ U_right) vectorized.
-    // Parallelize over comp_flat — each column of proj_mat is independent
-    let proj_cols: Vec<Vec<f64>> = (0..n_comp)
-        .into_par_iter()
-        .map(|comp_flat| {
-            // Decode comp_flat
-            let mut comp_idx = [0usize; 6];
-            let mut rem = comp_flat;
-            for ci in (0..comp_dims.len()).rev() {
-                comp_idx[ci] = rem % shape[comp_dims[ci]];
-                rem /= shape[comp_dims[ci]];
-            }
-
+    // For each complementary sample, compute F_proj ∈ ℝ^{n_left × n_right},
+    // then project: R[:, s] = vec(U_left^T @ F_proj @ U_right).
+    // Parallelize over samples — each column of proj_mat is independent.
+    let proj_cols: Vec<Vec<f64>> = comp_indices
+        .par_iter()
+        .map(|comp_vals| {
             // Build T = S @ U_right ∈ ℝ^{n_left × k_right}
             let mut t_mat = vec![0.0f64; n_left_phys * k_right];
             for left_flat in 0..n_left_phys {
@@ -1151,7 +1169,7 @@ fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64 + Sync>(
                         idx[d] = right_idx_vals[ri];
                     }
                     for (ci, &d) in comp_dims.iter().enumerate() {
-                        idx[d] = comp_idx[ci];
+                        idx[d] = comp_vals[ci];
                     }
 
                     let val = eval(idx);
@@ -1165,7 +1183,7 @@ fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64 + Sync>(
                 }
             }
 
-            // Compute R[:, comp] = vec(U_left^T @ T)
+            // Compute R[:, s] = vec(U_left^T @ T)
             let mut col = vec![0.0f64; k_lr];
             for jl in 0..k_left {
                 for jr in 0..k_right {
@@ -1181,10 +1199,10 @@ fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64 + Sync>(
         .collect();
 
     // Assemble proj_mat from parallel results
-    let mut proj_mat: Mat<f64> = Mat::zeros(k_lr, n_comp);
-    for (comp_flat, col) in proj_cols.iter().enumerate() {
+    let mut proj_mat: Mat<f64> = Mat::zeros(k_lr, n_eval);
+    for (s, col) in proj_cols.iter().enumerate() {
         for (row, &val) in col.iter().enumerate() {
-            proj_mat[(row, comp_flat)] = val;
+            proj_mat[(row, s)] = val;
         }
     }
 
