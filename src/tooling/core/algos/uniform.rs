@@ -10,11 +10,11 @@ use super::lagrangian::{sl_shift_1d, sl_shift_1d_into};
 use super::mp7::mp7_shift_1d_into;
 use super::wpfc::{AdvectionScheme, wpfc_shift_1d_into, zhang_shu_limiter};
 use rayon::prelude::*;
-use rustfft::FftPlanner;
+use rustfft::{Fft, FftPlanner};
 use rustfft::num_complex::Complex64;
+use std::sync::Arc;
 use std::any::Any;
 use std::cell::RefCell;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Velocity-space exponential filter configuration.
@@ -184,17 +184,23 @@ impl UniformGrid6D {
         let kernel_v2 = build_exp_filter_kernel(nv2, config.cutoff_fraction, config.order);
         let kernel_v3 = build_exp_filter_kernel(nv3, config.cutoff_fraction, config.order);
 
+        // Pre-compute FFT plans once (shared across all rayon threads via Arc).
+        // Previously, each filter_pencils_dim* created a new FftPlanner per call,
+        // wasting ~32K planner instantiations per advect_v for a 32³ spatial grid.
+        let mut planner = FftPlanner::<f64>::new();
+        let fwd_v1 = planner.plan_fft_forward(nv1);
+        let inv_v1 = planner.plan_fft_inverse(nv1);
+        let fwd_v2 = planner.plan_fft_forward(nv2);
+        let inv_v2 = planner.plan_fft_inverse(nv2);
+        let fwd_v3 = planner.plan_fft_forward(nv3);
+        let inv_v3 = planner.plan_fft_inverse(nv3);
+
         // Process spatial cells in parallel. Each cell owns a contiguous velocity
         // block of length n_vel that can be filtered independently.
         self.data.par_chunks_mut(n_vel).for_each(|block| {
-            // Filter along v1 (outermost velocity index): pencils of length nv1
-            filter_pencils_dim0(block, nv1, nv2, nv3, &kernel_v1);
-
-            // Filter along v2 (middle velocity index): pencils of length nv2
-            filter_pencils_dim1(block, nv1, nv2, nv3, &kernel_v2);
-
-            // Filter along v3 (innermost velocity index): pencils of length nv3
-            filter_pencils_dim2(block, nv1, nv2, nv3, &kernel_v3);
+            filter_pencils_dim0(block, nv1, nv2, nv3, &kernel_v1, &fwd_v1, &inv_v1);
+            filter_pencils_dim1(block, nv1, nv2, nv3, &kernel_v2, &fwd_v2, &inv_v2);
+            filter_pencils_dim2(block, nv1, nv2, nv3, &kernel_v3, &fwd_v3, &inv_v3);
         });
 
         // Sanity: there are n_spatial blocks
@@ -250,10 +256,15 @@ fn build_exp_filter_kernel(n: usize, cutoff_fraction: f64, order: usize) -> Vec<
 
 /// Apply 1D FFT-based exponential filter to pencils along dimension 0 (v1).
 /// Block layout: `block[iv1 * nv2 * nv3 + iv2 * nv3 + iv3]`.
-fn filter_pencils_dim0(block: &mut [f64], nv1: usize, nv2: usize, nv3: usize, kernel: &[f64]) {
-    let mut planner = FftPlanner::new();
-    let fwd = planner.plan_fft_forward(nv1);
-    let inv = planner.plan_fft_inverse(nv1);
+fn filter_pencils_dim0(
+    block: &mut [f64],
+    nv1: usize,
+    nv2: usize,
+    nv3: usize,
+    kernel: &[f64],
+    fwd: &Arc<dyn Fft<f64>>,
+    inv: &Arc<dyn Fft<f64>>,
+) {
     let mut buf = vec![Complex64::new(0.0, 0.0); nv1];
     let inv_n = 1.0 / nv1 as f64;
 
@@ -277,10 +288,15 @@ fn filter_pencils_dim0(block: &mut [f64], nv1: usize, nv2: usize, nv3: usize, ke
 }
 
 /// Apply 1D FFT-based exponential filter to pencils along dimension 1 (v2).
-fn filter_pencils_dim1(block: &mut [f64], nv1: usize, nv2: usize, nv3: usize, kernel: &[f64]) {
-    let mut planner = FftPlanner::new();
-    let fwd = planner.plan_fft_forward(nv2);
-    let inv = planner.plan_fft_inverse(nv2);
+fn filter_pencils_dim1(
+    block: &mut [f64],
+    nv1: usize,
+    nv2: usize,
+    nv3: usize,
+    kernel: &[f64],
+    fwd: &Arc<dyn Fft<f64>>,
+    inv: &Arc<dyn Fft<f64>>,
+) {
     let mut buf = vec![Complex64::new(0.0, 0.0); nv2];
     let inv_n = 1.0 / nv2 as f64;
 
@@ -302,10 +318,15 @@ fn filter_pencils_dim1(block: &mut [f64], nv1: usize, nv2: usize, nv3: usize, ke
 }
 
 /// Apply 1D FFT-based exponential filter to pencils along dimension 2 (v3).
-fn filter_pencils_dim2(block: &mut [f64], nv1: usize, nv2: usize, nv3: usize, kernel: &[f64]) {
-    let mut planner = FftPlanner::new();
-    let fwd = planner.plan_fft_forward(nv3);
-    let inv = planner.plan_fft_inverse(nv3);
+fn filter_pencils_dim2(
+    block: &mut [f64],
+    nv1: usize,
+    nv2: usize,
+    nv3: usize,
+    kernel: &[f64],
+    fwd: &Arc<dyn Fft<f64>>,
+    inv: &Arc<dyn Fft<f64>>,
+) {
     let mut buf = vec![Complex64::new(0.0, 0.0); nv3];
     let inv_n = 1.0 / nv3 as f64;
 

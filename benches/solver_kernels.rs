@@ -453,9 +453,9 @@ fn bench_kfvs_step(c: &mut Criterion) {
             s.momentum = [0.1, 0.0, 0.0];
             s.energy = 1.5;
         }
-        let acc = vec![[0.0; 3]; n];
-        group.bench_with_input(BenchmarkId::new("N", ns), &acc, |b, acc| {
-            b.iter(|| solver.step(0.01, acc));
+        let zero = vec![0.0; n];
+        group.bench_with_input(BenchmarkId::new("N", ns), &zero, |b, z| {
+            b.iter(|| solver.step(0.01, z, z, z));
         });
     }
     group.finish();

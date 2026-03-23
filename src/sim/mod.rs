@@ -147,18 +147,12 @@ impl Simulation {
         }
         if let Some(ref mut lomac) = self.lomac {
             let t0 = std::time::Instant::now();
-            let density = self.repr.compute_density();
-            let potential = self.poisson.solve(&density, self.g);
-            let accel = self.poisson.compute_acceleration(&potential);
 
-            // Build per-cell acceleration vectors for KFVS
-            let acc: Vec<[f64; 3]> = accel
-                .gx
-                .par_iter()
-                .zip(accel.gy.par_iter())
-                .zip(accel.gz.par_iter())
-                .map(|((&gx, &gy), &gz)| [gx, gy, gz])
-                .collect();
+            // Reuse end-of-step acceleration from integrator (avoids redundant
+            // compute_density + Poisson solve + compute_acceleration).
+            let gx = &products.acceleration.gx;
+            let gy = &products.acceleration.gy;
+            let gz = &products.acceleration.gz;
 
             // HtTensor path: use project_ht to avoid unnecessary dense→HT→dense round-trips
             if let Some(ht) = self
@@ -167,7 +161,7 @@ impl Simulation {
                 .downcast_ref::<crate::tooling::core::algos::ht::HtTensor>()
             {
                 if ht.can_materialize() {
-                    lomac.advance_macroscopic(dt, &acc);
+                    lomac.advance_macroscopic(dt, gx, gy, gz);
                     let corrected = lomac.project_ht(ht);
                     let shape = ht.shape;
                     let corrected_snap = PhaseSpaceSnapshot {
@@ -191,12 +185,12 @@ impl Simulation {
                         "LoMaC projection skipped: HT tensor too large to materialize ({} elements)",
                         ht.shape.iter().product::<usize>()
                     );
-                    lomac.advance_macroscopic(dt, &acc);
+                    lomac.advance_macroscopic(dt, gx, gy, gz);
                 }
             } else {
                 // Dense path (UniformGrid6D, etc.)
                 let snapshot = self.repr.to_snapshot(self.time);
-                let corrected = lomac.apply(dt, &acc, &snapshot.data);
+                let corrected = lomac.apply(dt, gx, gy, gz, &snapshot.data);
                 let corrected_snap = PhaseSpaceSnapshot {
                     data: corrected,
                     shape: snapshot.shape,
@@ -226,16 +220,19 @@ impl Simulation {
         }
         let t0 = std::time::Instant::now();
         // When LoMaC is active, the post-projection density equals the KFVS
-        // target density by construction, so skip the redundant compute_density().
-        let density = if let Some(ref lomac) = self.lomac {
-            DensityField {
+        // target density by construction — need a fresh Poisson solve for it.
+        // Without LoMaC, reuse the end-of-step products from the integrator
+        // (avoids redundant compute_density + Poisson solve).
+        let (density, potential) = if let Some(ref lomac) = self.lomac {
+            let density = DensityField {
                 data: lomac.kfvs.state.iter().map(|m| m.density).collect(),
                 shape: lomac.spatial_shape,
-            }
+            };
+            let potential = self.poisson.solve(&density, self.g);
+            (density, potential)
         } else {
-            self.repr.compute_density()
+            (products.density, products.potential)
         };
-        let potential = self.poisson.solve(&density, self.g);
         timings.density_ms += t0.elapsed().as_secs_f64() * 1000.0;
 
         let dx = self.domain.dx();

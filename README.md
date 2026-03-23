@@ -349,6 +349,57 @@ caustic = { version = "0.0.11", features = ["hdf5"] }
 - **Instrumentation**: `tracing::info_span!` on all hot methods (zero overhead without a subscriber)
 - **Profiling profile**: `[profile.profiling]` inherits release with debug symbols for `perf`/`samply`
 
+## Development script
+
+`dev.sh` provides unified commands for testing, benchmarking, and profiling.
+
+### Prerequisites
+
+Install all profiling tools to get the full feature set:
+
+```bash
+# Cargo tools
+cargo install flamegraph samply
+
+# System packages (Arch Linux)
+sudo pacman -S --needed perf valgrind heaptrack kcachegrind massif-visualizer
+
+# Optional: Tracy profiler (AUR)
+yay -S tracy
+```
+
+<details>
+<summary>Ubuntu / Debian</summary>
+
+```bash
+cargo install flamegraph samply
+sudo apt install linux-tools-common linux-tools-$(uname -r) valgrind heaptrack kcachegrind massif-visualizer
+```
+</details>
+
+Run `./dev.sh info` to check which tools are installed and which are missing.
+
+### Usage
+
+```bash
+./dev.sh test                        # run all tests (release, sequential)
+./dev.sh test --ignored              # include expensive #[ignore] tests
+./dev.sh test --all                  # test both caustic and phasma
+./dev.sh bench                       # run criterion benchmarks
+./dev.sh bench --save baseline-v1    # save named baseline
+./dev.sh profile flamegraph          # generate flamegraph SVG
+./dev.sh profile dhat                # heap profiling via dhat
+./dev.sh profile perf                # perf record + report
+./dev.sh profile samply              # samply record (browser UI)
+./dev.sh profile valgrind            # callgrind analysis
+./dev.sh profile heaptrack           # heap tracking
+./dev.sh build --profiling           # release + debug symbols
+./dev.sh info                        # show available tools
+./dev.sh help                        # full usage
+```
+
+See `./dev.sh help` for all commands and flags.
+
 ## Code quality
 
 - **`warnings = "forbid"`** — all rustc warnings are hard errors

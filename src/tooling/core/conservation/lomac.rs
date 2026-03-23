@@ -139,12 +139,15 @@ impl LoMaC {
 
     /// Step 2: Advance macroscopic state by dt using KFVS.
     ///
+    /// `gx`, `gy`, `gz` are the gravitational acceleration components at each
+    /// spatial cell (flat arrays of length nx*ny*nz).
+    ///
     /// Call this BEFORE advancing the kinetic equation.
-    pub fn advance_macroscopic(&mut self, dt: f64, acceleration: &[[f64; 3]]) {
+    pub fn advance_macroscopic(&mut self, dt: f64, gx: &[f64], gy: &[f64], gz: &[f64]) {
         if !self.active {
             return;
         }
-        self.kfvs.step(dt, acceleration);
+        self.kfvs.step(dt, gx, gy, gz);
     }
 
     /// Step 4: Project the truncated kinetic solution to restore moments.
@@ -187,11 +190,18 @@ impl LoMaC {
     /// This is the main LoMaC entry point for use after each time step:
     /// 1. Advance KFVS: (ρ,J,e)^n → (ρ,J,e)^{n+1}
     /// 2. Project: f̃^{n+1} → f^{n+1} matching (ρ,J,e)^{n+1}
-    pub fn apply(&mut self, dt: f64, acceleration: &[[f64; 3]], f_truncated: &[f64]) -> Vec<f64> {
+    pub fn apply(
+        &mut self,
+        dt: f64,
+        gx: &[f64],
+        gy: &[f64],
+        gz: &[f64],
+        f_truncated: &[f64],
+    ) -> Vec<f64> {
         if let Some(ref p) = self.progress {
             p.set_intra_progress(0, 2);
         }
-        self.advance_macroscopic(dt, acceleration);
+        self.advance_macroscopic(dt, gx, gy, gz);
         if let Some(ref p) = self.progress {
             p.set_intra_progress(1, 2);
         }
@@ -269,8 +279,15 @@ impl LoMaC {
     ///
     /// This yields lower post-truncation ranks because the smooth reference
     /// f_ref is preserved exactly and only the (small) perturbation is truncated.
-    pub fn apply_delta_f(&mut self, dt: f64, acceleration: &[[f64; 3]], f: &[f64]) -> Vec<f64> {
-        self.advance_macroscopic(dt, acceleration);
+    pub fn apply_delta_f(
+        &mut self,
+        dt: f64,
+        gx: &[f64],
+        gy: &[f64],
+        gz: &[f64],
+        f: &[f64],
+    ) -> Vec<f64> {
+        self.advance_macroscopic(dt, gx, gy, gz);
         self.delta_f_step_count += 1;
 
         let f_ref = match self.f_ref.as_deref() {
@@ -507,8 +524,8 @@ mod tests {
         let m0 = lomac.total_mass();
 
         // Advance macroscopic with zero acceleration
-        let acc = vec![[0.0; 3]; n_spatial];
-        lomac.advance_macroscopic(0.01, &acc);
+        let zero = vec![0.0; n_spatial];
+        lomac.advance_macroscopic(0.01, &zero, &zero, &zero);
 
         let m1 = lomac.total_mass();
 

@@ -195,12 +195,14 @@ impl KfvsSolver {
 
     /// Advance the macroscopic state by one time step Δt using KFVS.
     ///
-    /// `acceleration` provides the gravitational field a(x) at each cell,
-    /// stored as three flat arrays [ax, ay, az] each of length nx*ny*nz.
-    pub fn step(&mut self, dt: f64, acceleration: &[[f64; 3]]) {
+    /// `gx`, `gy`, `gz` provide the gravitational acceleration components
+    /// at each cell as separate flat arrays of length nx*ny*nz.
+    pub fn step(&mut self, dt: f64, gx: &[f64], gy: &[f64], gz: &[f64]) {
         let [nx, ny, nz] = self.shape;
         let n = nx * ny * nz;
-        assert_eq!(acceleration.len(), n);
+        assert_eq!(gx.len(), n);
+        assert_eq!(gy.len(), n);
+        assert_eq!(gz.len(), n);
 
         let dx = self.dx;
         let shape = self.shape;
@@ -267,15 +269,18 @@ impl KfvsSolver {
         // Phase 2: Apply source terms + Euler update
         self.state
             .par_iter_mut()
+            .enumerate()
             .zip(updates.par_iter())
-            .zip(acceleration.par_iter())
-            .for_each(|((s, &(dr, dm, de)), a)| {
+            .for_each(|((i, s), &(dr, dm, de))| {
                 let rho = s.density;
                 let u = s.velocity();
+                let ax = gx[i];
+                let ay = gy[i];
+                let az = gz[i];
 
                 // Source: ∂(ρu)/∂t += ρa,  ∂e/∂t += ρu·a
-                let dm_src = [rho * a[0], rho * a[1], rho * a[2]];
-                let de_src = rho * (u[0] * a[0] + u[1] * a[1] + u[2] * a[2]);
+                let dm_src = [rho * ax, rho * ay, rho * az];
+                let de_src = rho * (u[0] * ax + u[1] * ay + u[2] * az);
 
                 // Forward Euler update
                 s.density = (s.density + dt * dr).max(0.0);
@@ -500,8 +505,8 @@ mod tests {
         }
 
         let m0 = solver.total_mass();
-        let acc = vec![[0.0; 3]; n];
-        solver.step(0.01, &acc);
+        let zero = vec![0.0; n];
+        solver.step(0.01, &zero, &zero, &zero);
         let m1 = solver.total_mass();
 
         assert!(
@@ -526,8 +531,8 @@ mod tests {
         }
 
         let p0 = solver.total_momentum();
-        let acc = vec![[0.0; 3]; n];
-        solver.step(0.01, &acc);
+        let zero = vec![0.0; n];
+        solver.step(0.01, &zero, &zero, &zero);
         let p1 = solver.total_momentum();
 
         for d in 0..3 {

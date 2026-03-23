@@ -9,6 +9,8 @@
 
 use std::sync::Arc;
 
+use rayon::prelude::*;
+
 use super::super::{
     advecator::Advector,
     init::domain::Domain,
@@ -107,78 +109,66 @@ impl UnsplitIntegrator {
 
         let mut rhs = vec![0.0f64; n_total];
 
-        for ix1 in 0..nx1 {
-            for ix2 in 0..nx2 {
-                for ix3 in 0..nx3 {
-                    // Acceleration at this spatial point
-                    let si = ix1 * nx2 * nx3 + ix2 * nx3 + ix3;
-                    let gx = accel.gx[si];
-                    let gy = accel.gy[si];
-                    let gz = accel.gz[si];
+        // Parallelize over ix1 slabs. Each slab is independent: reads from
+        // the shared `data` array, writes to its own disjoint portion of `rhs`.
+        let slab_stride = strides[0];
+        rhs.par_chunks_mut(slab_stride)
+            .enumerate()
+            .for_each(|(ix1, rhs_slab)| {
+                for ix2 in 0..nx2 {
+                    for ix3 in 0..nx3 {
+                        let si = ix1 * nx2 * nx3 + ix2 * nx3 + ix3;
+                        let gx = accel.gx[si];
+                        let gy = accel.gy[si];
+                        let gz = accel.gz[si];
 
-                    for iv1 in 0..nv1 {
-                        for iv2 in 0..nv2 {
-                            for iv3 in 0..nv3 {
-                                let idx = ix1 * strides[0]
-                                    + ix2 * strides[1]
-                                    + ix3 * strides[2]
-                                    + iv1 * strides[3]
-                                    + iv2 * strides[4]
-                                    + iv3 * strides[5];
+                        for iv1 in 0..nv1 {
+                            for iv2 in 0..nv2 {
+                                for iv3 in 0..nv3 {
+                                    // Global index for reading from `data`
+                                    let idx = ix1 * strides[0]
+                                        + ix2 * strides[1]
+                                        + ix3 * strides[2]
+                                        + iv1 * strides[3]
+                                        + iv2 * strides[4]
+                                        + iv3 * strides[5];
+                                    // Local index within this ix1-slab for writing
+                                    let local = idx - ix1 * slab_stride;
 
-                                let f_here = data[idx];
+                                    let v1 = -lv[0] + (iv1 as f64 + 0.5) * dv[0];
+                                    let v2 = -lv[1] + (iv2 as f64 + 0.5) * dv[1];
+                                    let v3 = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
 
-                                // Cell-center velocity
-                                let v1 = -lv[0] + (iv1 as f64 + 0.5) * dv[0];
-                                let v2 = -lv[1] + (iv2 as f64 + 0.5) * dv[1];
-                                let v3 = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
+                                    let df_dx1 = if use_periodic_spatial {
+                                        upwind_periodic(data, idx, strides[0], ix1, nx1, dx[0], v1)
+                                    } else {
+                                        upwind_open(data, idx, strides[0], ix1, nx1, dx[0], v1)
+                                    };
+                                    let df_dx2 = if use_periodic_spatial {
+                                        upwind_periodic(data, idx, strides[1], ix2, nx2, dx[1], v2)
+                                    } else {
+                                        upwind_open(data, idx, strides[1], ix2, nx2, dx[1], v2)
+                                    };
+                                    let df_dx3 = if use_periodic_spatial {
+                                        upwind_periodic(data, idx, strides[2], ix3, nx3, dx[2], v3)
+                                    } else {
+                                        upwind_open(data, idx, strides[2], ix3, nx3, dx[2], v3)
+                                    };
+                                    let df_dv1 =
+                                        upwind_zero_bc(data, idx, strides[3], iv1, nv1, dv[0], gx);
+                                    let df_dv2 =
+                                        upwind_zero_bc(data, idx, strides[4], iv2, nv2, dv[1], gy);
+                                    let df_dv3 =
+                                        upwind_zero_bc(data, idx, strides[5], iv3, nv3, dv[2], gz);
 
-                                // --- Spatial gradients (periodic BC) ---
-
-                                // df/dx1: upwind based on v1
-                                let df_dx1 = if use_periodic_spatial {
-                                    upwind_periodic(data, idx, strides[0], ix1, nx1, dx[0], v1)
-                                } else {
-                                    upwind_open(data, idx, strides[0], ix1, nx1, dx[0], v1)
-                                };
-
-                                // df/dx2: upwind based on v2
-                                let df_dx2 = if use_periodic_spatial {
-                                    upwind_periodic(data, idx, strides[1], ix2, nx2, dx[1], v2)
-                                } else {
-                                    upwind_open(data, idx, strides[1], ix2, nx2, dx[1], v2)
-                                };
-
-                                // df/dx3: upwind based on v3
-                                let df_dx3 = if use_periodic_spatial {
-                                    upwind_periodic(data, idx, strides[2], ix3, nx3, dx[2], v3)
-                                } else {
-                                    upwind_open(data, idx, strides[2], ix3, nx3, dx[2], v3)
-                                };
-
-                                // --- Velocity gradients (zero / absorbing BC) ---
-
-                                // df/dv1: upwind based on gx
-                                let df_dv1 =
-                                    upwind_zero_bc(data, idx, strides[3], iv1, nv1, dv[0], gx);
-
-                                // df/dv2: upwind based on gy
-                                let df_dv2 =
-                                    upwind_zero_bc(data, idx, strides[4], iv2, nv2, dv[1], gy);
-
-                                // df/dv3: upwind based on gz
-                                let df_dv3 =
-                                    upwind_zero_bc(data, idx, strides[5], iv3, nv3, dv[2], gz);
-
-                                // RHS = -v . grad_x f  +  g . grad_v f
-                                rhs[idx] = -(v1 * df_dx1 + v2 * df_dx2 + v3 * df_dx3)
-                                    + (gx * df_dv1 + gy * df_dv2 + gz * df_dv3);
+                                    rhs_slab[local] = -(v1 * df_dx1 + v2 * df_dx2 + v3 * df_dx3)
+                                        + (gx * df_dv1 + gy * df_dv2 + gz * df_dv3);
+                                }
                             }
                         }
                     }
                 }
-            }
-        }
+            });
 
         rhs
     }
@@ -365,12 +355,11 @@ impl TimeIntegrator for UnsplitIntegrator {
                 let accel0 = compute_accel(&y0);
                 let k1 = self.evaluate_rhs(&y0, &accel0);
 
-                // y_stage = y0 + dt * k1
-                let y_stage: Vec<f64> = y0
-                    .iter()
-                    .zip(k1.iter())
-                    .map(|(&y, &k)| y + dt * k)
-                    .collect();
+                // Reusable stage buffer (allocated once, reused for all stages)
+                let mut y_stage = vec![0.0f64; n];
+                for i in 0..n {
+                    y_stage[i] = y0[i] + dt * k1[i];
+                }
 
                 if let Some(ref p) = self.progress {
                     p.set_phase(StepPhase::UnsplitStage2);
@@ -379,12 +368,13 @@ impl TimeIntegrator for UnsplitIntegrator {
                 let accel1 = compute_accel(&y_stage);
                 let k2 = self.evaluate_rhs(&y_stage, &accel1);
 
-                // y_{n+1} = y_n + dt/2 * (k1 + k2)
-                let y_final: Vec<f64> =
-                    (0..n).map(|i| y0[i] + 0.5 * dt * (k1[i] + k2[i])).collect();
+                // y_{n+1} = y_n + dt/2 * (k1 + k2) — reuse y_stage for final output
+                for i in 0..n {
+                    y_stage[i] = y0[i] + 0.5 * dt * (k1[i] + k2[i]);
+                }
 
                 repr.load_snapshot(PhaseSpaceSnapshot {
-                    data: y_final,
+                    data: y_stage,
                     shape: snap0.shape,
                     time: snap0.time + dt,
                 });
@@ -400,37 +390,38 @@ impl TimeIntegrator for UnsplitIntegrator {
                 let accel0 = compute_accel(&y0);
                 let k1 = self.evaluate_rhs(&y0, &accel0);
 
+                // Single reusable stage buffer for all intermediate states
+                let mut y_stage = vec![0.0f64; n];
+
                 // Stage 2: y0 + dt/2 * k1
                 if let Some(ref p) = self.progress {
                     p.set_phase(StepPhase::UnsplitStage2);
                     p.set_sub_step(1, 3);
                 }
-                let y_s2: Vec<f64> = y0
-                    .iter()
-                    .zip(k1.iter())
-                    .map(|(&y, &k)| y + 0.5 * dt * k)
-                    .collect();
-                let accel2 = compute_accel(&y_s2);
-                let k2 = self.evaluate_rhs(&y_s2, &accel2);
+                for i in 0..n {
+                    y_stage[i] = y0[i] + 0.5 * dt * k1[i];
+                }
+                let accel2 = compute_accel(&y_stage);
+                let k2 = self.evaluate_rhs(&y_stage, &accel2);
 
-                // Stage 3: y0 - dt*k1 + 2*dt*k2
+                // Stage 3: y0 - dt*k1 + 2*dt*k2 (reuse y_stage)
                 if let Some(ref p) = self.progress {
                     p.set_phase(StepPhase::UnsplitStage3);
                     p.set_sub_step(2, 3);
                 }
-                let y_s3: Vec<f64> = (0..n)
-                    .map(|i| y0[i] - dt * k1[i] + 2.0 * dt * k2[i])
-                    .collect();
-                let accel3 = compute_accel(&y_s3);
-                let k3 = self.evaluate_rhs(&y_s3, &accel3);
+                for i in 0..n {
+                    y_stage[i] = y0[i] - dt * k1[i] + 2.0 * dt * k2[i];
+                }
+                let accel3 = compute_accel(&y_stage);
+                let k3 = self.evaluate_rhs(&y_stage, &accel3);
 
-                // y_{n+1} = y_n + dt/6 * (k1 + 4*k2 + k3)
-                let y_final: Vec<f64> = (0..n)
-                    .map(|i| y0[i] + dt / 6.0 * (k1[i] + 4.0 * k2[i] + k3[i]))
-                    .collect();
+                // y_{n+1} = y_n + dt/6 * (k1 + 4*k2 + k3) — reuse y_stage
+                for i in 0..n {
+                    y_stage[i] = y0[i] + dt / 6.0 * (k1[i] + 4.0 * k2[i] + k3[i]);
+                }
 
                 repr.load_snapshot(PhaseSpaceSnapshot {
-                    data: y_final,
+                    data: y_stage,
                     shape: snap0.shape,
                     time: snap0.time + dt,
                 });
@@ -447,52 +438,50 @@ impl TimeIntegrator for UnsplitIntegrator {
                 let accel0 = compute_accel(&y0);
                 let k1 = self.evaluate_rhs(&y0, &accel0);
 
+                // Single reusable stage buffer for all intermediate states
+                let mut y_stage = vec![0.0f64; n];
+
                 // Stage 2: y0 + dt/2 * k1
                 if let Some(ref p) = self.progress {
                     p.set_phase(StepPhase::UnsplitStage2);
                     p.set_sub_step(1, 4);
                 }
-                let y_s2: Vec<f64> = y0
-                    .iter()
-                    .zip(k1.iter())
-                    .map(|(&y, &k)| y + 0.5 * dt * k)
-                    .collect();
-                let accel2 = compute_accel(&y_s2);
-                let k2 = self.evaluate_rhs(&y_s2, &accel2);
+                for i in 0..n {
+                    y_stage[i] = y0[i] + 0.5 * dt * k1[i];
+                }
+                let accel2 = compute_accel(&y_stage);
+                let k2 = self.evaluate_rhs(&y_stage, &accel2);
 
-                // Stage 3: y0 + dt/2 * k2
+                // Stage 3: y0 + dt/2 * k2 (reuse y_stage)
                 if let Some(ref p) = self.progress {
                     p.set_phase(StepPhase::UnsplitStage3);
                     p.set_sub_step(2, 4);
                 }
-                let y_s3: Vec<f64> = y0
-                    .iter()
-                    .zip(k2.iter())
-                    .map(|(&y, &k)| y + 0.5 * dt * k)
-                    .collect();
-                let accel3 = compute_accel(&y_s3);
-                let k3 = self.evaluate_rhs(&y_s3, &accel3);
+                for i in 0..n {
+                    y_stage[i] = y0[i] + 0.5 * dt * k2[i];
+                }
+                let accel3 = compute_accel(&y_stage);
+                let k3 = self.evaluate_rhs(&y_stage, &accel3);
 
-                // Stage 4: y0 + dt * k3
+                // Stage 4: y0 + dt * k3 (reuse y_stage)
                 if let Some(ref p) = self.progress {
                     p.set_phase(StepPhase::UnsplitStage4);
                     p.set_sub_step(3, 4);
                 }
-                let y_s4: Vec<f64> = y0
-                    .iter()
-                    .zip(k3.iter())
-                    .map(|(&y, &k)| y + dt * k)
-                    .collect();
-                let accel4 = compute_accel(&y_s4);
-                let k4 = self.evaluate_rhs(&y_s4, &accel4);
+                for i in 0..n {
+                    y_stage[i] = y0[i] + dt * k3[i];
+                }
+                let accel4 = compute_accel(&y_stage);
+                let k4 = self.evaluate_rhs(&y_stage, &accel4);
 
-                // y_{n+1} = y_n + dt/6 * (k1 + 2*k2 + 2*k3 + k4)
-                let y_final: Vec<f64> = (0..n)
-                    .map(|i| y0[i] + dt / 6.0 * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]))
-                    .collect();
+                // y_{n+1} = y_n + dt/6 * (k1 + 2*k2 + 2*k3 + k4) — reuse y_stage
+                for i in 0..n {
+                    y_stage[i] =
+                        y0[i] + dt / 6.0 * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]);
+                }
 
                 repr.load_snapshot(PhaseSpaceSnapshot {
-                    data: y_final,
+                    data: y_stage,
                     shape: snap0.shape,
                     time: snap0.time + dt,
                 });

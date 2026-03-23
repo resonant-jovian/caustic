@@ -77,9 +77,13 @@ impl Diagnostics {
         dx3: f64,
     ) -> GlobalDiagnostics {
         let w = Self::potential_energy(density, potential, dx3);
-        let ((t, c2), (s, m)) = rayon::join(
+        // Derive total mass from the pre-computed density field (O(N³) sum)
+        // instead of calling repr.total_mass() which rescans the full 6D
+        // distribution at O(N⁶).
+        let m = density.data.par_iter().sum::<f64>() * dx3;
+        let ((t, c2), s) = rayon::join(
             || rayon::join(|| Self::kinetic_energy(repr), || repr.casimir_c2()),
-            || rayon::join(|| repr.entropy(), || repr.total_mass()),
+            || repr.entropy(),
         );
         let e = t + w;
         let vir = if w.abs() > 1e-30 {
