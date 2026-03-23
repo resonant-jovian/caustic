@@ -141,8 +141,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 caustic evolves the 6D distribution function f(x, v, t) under the coupled Vlasov–Poisson system:
 
 ```
-∂f/∂t + v · ∇ₓf − ∇ₓΦ · ∇ᵥf = 0       (Vlasov equation)
-ρ(x,t) = ∫ f(x,v,t) dv³                 (density coupling)
+∂f/∂t + v · ∇ₓf − ∇ₓΦ · ∇ᵥf = 0        (Vlasov equation)
+ρ(x,t) = ∫ f(x,v,t) dv³                (density coupling)
 ∇²Φ(x,t) = 4πGρ(x,t)                   (Poisson equation)
 ```
 
@@ -519,6 +519,7 @@ caustic = { version = "0.0.12", features = ["hdf5"] }
 Unified development script for testing, benchmarking, and profiling:
 
 ```bash
+./dev.sh doctor                      # check prerequisites, show install commands
 ./dev.sh test                        # run all tests (release, sequential)
 ./dev.sh test --ignored              # include expensive #[ignore] tests
 ./dev.sh test --all                  # test both caustic and phasma
@@ -555,7 +556,7 @@ cargo install flamegraph samply
 sudo apt install linux-tools-common linux-tools-$(uname -r) valgrind heaptrack kcachegrind massif-visualizer
 ```
 
-Run `./dev.sh info` to check which tools are installed.
+Run `./dev.sh doctor` to check which tools are installed and get install commands for missing ones.
 
 </details>
 
