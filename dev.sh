@@ -72,6 +72,25 @@ require_cmd() {
     fi
 }
 
+require_perf_paranoid() {
+    local paranoid_file="/proc/sys/kernel/perf_event_paranoid"
+    [[ -f "$paranoid_file" ]] || return 0
+    local level
+    level=$(< "$paranoid_file")
+    if (( level > 1 )); then
+        warn "perf_event_paranoid is $level (needs ≤ 1 for non-root profiling)"
+        log "run: echo 1 | sudo tee $paranoid_file"
+        read -rp "  fix now? [Y/n] " ans
+        if [[ "${ans:-y}" =~ ^[Yy]$ ]]; then
+            echo 1 | sudo tee "$paranoid_file" > /dev/null
+            ok "perf_event_paranoid set to 1"
+        else
+            err "cannot profile without perf_event_paranoid ≤ 1"
+            exit 1
+        fi
+    fi
+}
+
 timestamp() { date +%Y-%m-%d_%H-%M-%S; }
 
 ensure_dir() { mkdir -p "$1"; }
@@ -318,6 +337,7 @@ profile_build() {
 profile_perf() {
     local outdir="$1"; shift
     require_cmd perf "sudo pacman -S perf  (or linux-tools on Ubuntu)"
+    require_perf_paranoid
 
     profile_build profiling
     pick_profile_target
@@ -335,6 +355,7 @@ profile_perf() {
 profile_flamegraph() {
     local outdir="$1"; shift
     require_cmd cargo-flamegraph "cargo install flamegraph"
+    require_perf_paranoid
 
     profile_build profiling
     pick_profile_target
@@ -355,6 +376,7 @@ profile_flamegraph() {
 
 profile_samply() {
     require_cmd samply "cargo install samply"
+    require_perf_paranoid
 
     profile_build profiling
     pick_profile_target
