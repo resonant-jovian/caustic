@@ -421,6 +421,94 @@ impl IOManager {
         })
     }
 
+    /// Save a snapshot in yt-compatible HDF5 format.
+    ///
+    /// Writes HDF5 with groups following yt's generic format:
+    /// - /simulation_parameters: time, domain edges, dimensions
+    /// - /field_data/density: 3D density field
+    /// - /field_data/potential: 3D potential field (if provided)
+    /// - /units: length, time, mass, velocity units
+    #[cfg(feature = "hdf5")]
+    pub fn save_snapshot_yt(
+        &self,
+        density: &super::types::DensityField,
+        potential: Option<&super::types::PotentialField>,
+        time: f64,
+        g: f64,
+        filename: &str,
+    ) -> anyhow::Result<()> {
+        use hdf5_metno as hdf5;
+
+        std::fs::create_dir_all(&self.output_dir)?;
+        let path = self.output_dir.join(filename);
+        let file = hdf5::File::create(path)?;
+        let [nx, ny, nz] = density.shape;
+
+        // Simulation parameters
+        let params = file.create_group("simulation_parameters")?;
+        params
+            .new_attr::<f64>()
+            .create("time")?
+            .write_scalar(&time)?;
+        params
+            .new_attr::<[f64; 3]>()
+            .create("domain_left_edge")?
+            .write_scalar(&[-1.0, -1.0, -1.0])?;
+        params
+            .new_attr::<[f64; 3]>()
+            .create("domain_right_edge")?
+            .write_scalar(&[1.0, 1.0, 1.0])?;
+        params
+            .new_attr::<[u64; 3]>()
+            .create("domain_dimensions")?
+            .write_scalar(&[nx as u64, ny as u64, nz as u64])?;
+        params
+            .new_attr::<i32>()
+            .create("cosmological_simulation")?
+            .write_scalar(&0)?;
+        params
+            .new_attr::<f64>()
+            .create("gravitational_constant")?
+            .write_scalar(&g)?;
+
+        // Field data
+        let fields = file.create_group("field_data")?;
+        fields
+            .new_dataset::<f64>()
+            .shape([nx, ny, nz])
+            .create("density")?
+            .write_raw(&density.data)?;
+
+        if let Some(pot) = potential {
+            fields
+                .new_dataset::<f64>()
+                .shape([nx, ny, nz])
+                .create("potential")?
+                .write_raw(&pot.data)?;
+        }
+
+        // Units (dimensionless by default)
+        let units = file.create_group("units")?;
+        units
+            .new_attr::<f64>()
+            .create("length_unit")?
+            .write_scalar(&1.0)?;
+        units
+            .new_attr::<f64>()
+            .create("time_unit")?
+            .write_scalar(&1.0)?;
+        units
+            .new_attr::<f64>()
+            .create("mass_unit")?
+            .write_scalar(&1.0)?;
+        units
+            .new_attr::<f64>()
+            .create("velocity_unit")?
+            .write_scalar(&1.0)?;
+
+        Ok(())
+    }
+
     /// Save a full checkpoint (snapshot binary + diagnostics history as JSON).
     pub fn save_checkpoint(
         &self,
@@ -439,5 +527,88 @@ impl IOManager {
         file.write_all(json.as_bytes())?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_roundtrip_binary() {
+        let tmp = std::env::temp_dir().join("caustic_io_test_roundtrip");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let io = IOManager::new(tmp.to_str().unwrap(), OutputFormat::Binary);
+        let snap = PhaseSpaceSnapshot {
+            data: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            shape: [2, 2, 2, 1, 1, 1],
+            time: 0.5,
+        };
+        io.save_snapshot(&snap, "test.bin").unwrap();
+        let loaded = io.load_snapshot("test.bin").unwrap();
+        assert_eq!(loaded.shape, snap.shape);
+        assert!((loaded.time - 0.5).abs() < 1e-14);
+        assert_eq!(loaded.data.len(), snap.data.len());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(feature = "hdf5")]
+    #[test]
+    fn save_snapshot_yt_creates_groups() {
+        use super::super::types::{DensityField, PotentialField};
+        use hdf5_metno as hdf5;
+
+        let tmp = std::env::temp_dir().join("caustic_io_test_yt");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let io = IOManager::new(tmp.to_str().unwrap(), OutputFormat::Hdf5);
+
+        let nx = 4;
+        let density = DensityField {
+            data: vec![1.0; nx * nx * nx],
+            shape: [nx, nx, nx],
+        };
+        let potential = PotentialField {
+            data: vec![-0.5; nx * nx * nx],
+            shape: [nx, nx, nx],
+        };
+
+        io.save_snapshot_yt(&density, Some(&potential), 1.5, 1.0, "snap_yt.h5")
+            .unwrap();
+
+        let path = tmp.join("snap_yt.h5");
+        assert!(path.exists(), "yt HDF5 file should exist");
+
+        // Re-open and verify structure
+        let file = hdf5::File::open(&path).unwrap();
+
+        // Check groups exist
+        assert!(file.group("simulation_parameters").is_ok());
+        assert!(file.group("field_data").is_ok());
+        assert!(file.group("units").is_ok());
+
+        // Check simulation_parameters attributes
+        let params = file.group("simulation_parameters").unwrap();
+        let time: f64 = params.attr("time").unwrap().read_scalar().unwrap();
+        assert!((time - 1.5).abs() < 1e-14, "time should be 1.5");
+
+        let g_val: f64 = params
+            .attr("gravitational_constant")
+            .unwrap()
+            .read_scalar()
+            .unwrap();
+        assert!((g_val - 1.0).abs() < 1e-14, "G should be 1.0");
+
+        // Check field datasets
+        let fields = file.group("field_data").unwrap();
+        assert!(fields.dataset("density").is_ok());
+        assert!(fields.dataset("potential").is_ok());
+
+        // Check units attributes
+        let units = file.group("units").unwrap();
+        let length: f64 = units.attr("length_unit").unwrap().read_scalar().unwrap();
+        assert!((length - 1.0).abs() < 1e-14);
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

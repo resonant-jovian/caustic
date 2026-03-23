@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use rayon::prelude::*;
 use rust_decimal::Decimal;
 
 use crate::tooling::core::{
@@ -62,15 +63,13 @@ impl Simulation {
     pub fn run(&mut self) -> anyhow::Result<ExitPackage> {
         loop {
             if let Some(reason) = self.step()? {
-                let snapshot = if self.repr.can_materialize() {
-                    self.repr.to_snapshot(self.time)
-                } else {
+                let snapshot = self.repr.to_snapshot(self.time).unwrap_or_else(|| {
                     PhaseSpaceSnapshot {
                         data: vec![],
                         shape: [0; 6],
                         time: self.time,
                     }
-                };
+                });
                 let history = self.diagnostics.history.clone();
                 let wall_secs = self.start_time.elapsed().as_secs_f64();
                 return Ok(ExitPackage::assemble(
@@ -117,8 +116,9 @@ impl Simulation {
             dt = (t_final - self.time).max(0.0);
         }
 
-        self.integrator
-            .advance(&mut *self.repr, &*self.poisson, &*self.advector, dt);
+        let products =
+            self.integrator
+                .advance(&mut *self.repr, &*self.poisson, &*self.advector, dt)?;
 
         // Capture integrator sub-step timings (drift, poisson, kick)
         let mut timings = self
@@ -145,18 +145,12 @@ impl Simulation {
         }
         if let Some(ref mut lomac) = self.lomac {
             let t0 = std::time::Instant::now();
-            let density = self.repr.compute_density();
-            let potential = self.poisson.solve(&density, self.g);
-            let accel = self.poisson.compute_acceleration(&potential);
 
-            // Build per-cell acceleration vectors for KFVS
-            let acc: Vec<[f64; 3]> = accel
-                .gx
-                .iter()
-                .zip(accel.gy.iter())
-                .zip(accel.gz.iter())
-                .map(|((&gx, &gy), &gz)| [gx, gy, gz])
-                .collect();
+            // Reuse end-of-step acceleration from integrator (avoids redundant
+            // compute_density + Poisson solve + compute_acceleration).
+            let gx = &products.acceleration.gx;
+            let gy = &products.acceleration.gy;
+            let gz = &products.acceleration.gz;
 
             // HtTensor path: use project_ht to avoid unnecessary dense→HT→dense round-trips
             if let Some(ht) = self
@@ -164,27 +158,39 @@ impl Simulation {
                 .as_any()
                 .downcast_ref::<crate::tooling::core::algos::ht::HtTensor>()
             {
-                lomac.advance_macroscopic(dt, &acc);
-                let corrected = lomac.project_ht(ht);
-                let shape = ht.shape;
-                let corrected_snap = PhaseSpaceSnapshot {
-                    data: corrected,
-                    shape,
-                    time: self.time,
-                };
-                self.repr = Box::new(
-                    crate::tooling::core::algos::uniform::UniformGrid6D::from_snapshot(
-                        corrected_snap,
-                        self.domain.clone(),
-                    ),
-                );
-                if let Some(ref p) = self.progress {
-                    self.repr.set_progress(p.clone());
+                if ht.can_materialize() {
+                    lomac.advance_macroscopic(dt, gx, gy, gz);
+                    let corrected = lomac.project_ht(ht);
+                    let shape = ht.shape;
+                    let corrected_snap = PhaseSpaceSnapshot {
+                        data: corrected,
+                        shape,
+                        time: self.time,
+                    };
+                    self.repr = Box::new(
+                        crate::tooling::core::algos::uniform::UniformGrid6D::from_snapshot(
+                            corrected_snap,
+                            self.domain.clone(),
+                        ),
+                    );
+                    if let Some(ref p) = self.progress {
+                        self.repr.set_progress(p.clone());
+                    }
+                } else {
+                    // Skip dense LoMaC projection for large HT tensors that cannot
+                    // be materialized. Advance macroscopic state for diagnostics only.
+                    tracing::warn!(
+                        "LoMaC projection skipped: HT tensor too large to materialize ({} elements)",
+                        ht.shape.iter().product::<usize>()
+                    );
+                    lomac.advance_macroscopic(dt, gx, gy, gz);
                 }
             } else {
                 // Dense path (UniformGrid6D, etc.)
-                let snapshot = self.repr.to_snapshot(self.time);
-                let corrected = lomac.apply(dt, &acc, &snapshot.data);
+                let snapshot = self.repr.to_snapshot(self.time).ok_or_else(|| {
+                    anyhow::anyhow!("LoMaC dense path requires to_snapshot support")
+                })?;
+                let corrected = lomac.apply(dt, gx, gy, gz, &snapshot.data);
                 let corrected_snap = PhaseSpaceSnapshot {
                     data: corrected,
                     shape: snapshot.shape,
@@ -214,23 +220,32 @@ impl Simulation {
         }
         let t0 = std::time::Instant::now();
         // When LoMaC is active, the post-projection density equals the KFVS
-        // target density by construction, so skip the redundant compute_density().
-        let density = if let Some(ref lomac) = self.lomac {
-            DensityField {
+        // target density by construction — need a fresh Poisson solve for it.
+        // Without LoMaC, reuse the end-of-step products from the integrator
+        // (avoids redundant compute_density + Poisson solve).
+        let (density, potential) = if let Some(ref lomac) = self.lomac {
+            let density = DensityField {
                 data: lomac.kfvs.state.iter().map(|m| m.density).collect(),
                 shape: lomac.spatial_shape,
-            }
+            };
+            let potential = self.poisson.solve(&density, self.g);
+            (density, potential)
         } else {
-            self.repr.compute_density()
+            (products.density, products.potential)
         };
-        let potential = self.poisson.solve(&density, self.g);
         timings.density_ms += t0.elapsed().as_secs_f64() * 1000.0;
 
         let dx = self.domain.dx();
         let dx3 = dx[0] * dx[1] * dx[2];
 
         // Cache ρ_max for next step's dt computation (avoids redundant compute_density)
-        self.cached_rho_max = Some(density.data.iter().cloned().fold(0.0_f64, f64::max));
+        self.cached_rho_max = Some(
+            density
+                .data
+                .par_iter()
+                .cloned()
+                .reduce(|| 0.0_f64, f64::max),
+        );
 
         if let Some(ref p) = self.progress {
             let sub = p.read().sub_step;
@@ -506,7 +521,9 @@ impl SimulationBuilder {
             {
                 lom.initialize_from_ht(ht);
             } else {
-                let snapshot = repr.to_snapshot(0.0);
+                let snapshot = repr.to_snapshot(0.0).ok_or_else(|| {
+                    anyhow::anyhow!("LoMaC initialization requires to_snapshot support")
+                })?;
                 lom.initialize_from_kinetic(&snapshot.data);
             }
             Some(lom)

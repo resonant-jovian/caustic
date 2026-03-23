@@ -3,6 +3,7 @@
 
 use super::super::{init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
 use super::{sheet::SheetTracker, uniform::UniformGrid6D};
+use rayon::prelude::*;
 use std::any::Any;
 
 /// Hybrid representation combining SheetTracker and UniformGrid6D.
@@ -74,11 +75,14 @@ impl HybridRepr {
         );
 
         // Identify newly multi-stream cells
-        for si in 0..counts.data.len() {
-            if counts.data[si] > self.stream_threshold && !self.mask[si] {
-                self.mask[si] = true;
-            }
-        }
+        self.mask
+            .par_iter_mut()
+            .zip(counts.data.par_iter())
+            .for_each(|(m, &c)| {
+                if c > self.stream_threshold && !*m {
+                    *m = true;
+                }
+            });
 
         // Deposit sheet particles that sit in grid-mode cells into the 6D grid.
         // We iterate particles; for each in a grid-mode cell, CIC deposit.
@@ -241,9 +245,9 @@ impl PhaseSpaceRepr for HybridRepr {
 
         let data: Vec<f64> = self
             .mask
-            .iter()
-            .zip(grid_density.data.iter())
-            .zip(sheet_density.data.iter())
+            .par_iter()
+            .zip(grid_density.data.par_iter())
+            .zip(sheet_density.data.par_iter())
             .map(|((&use_grid, &gd), &sd)| if use_grid { gd } else { sd })
             .collect();
 
@@ -284,14 +288,19 @@ impl PhaseSpaceRepr for HybridRepr {
         let dx = self.domain.dx();
         let cell_vol = dx[0] * dx[1] * dx[2];
 
-        let mut total = 0.0;
-        for i in 0..self.mask.len() {
-            if self.mask[i] {
-                total += grid_density.data[i] * cell_vol;
-            } else {
-                total += sheet_density.data[i] * cell_vol;
-            }
-        }
+        let total: f64 = self
+            .mask
+            .par_iter()
+            .zip(grid_density.data.par_iter())
+            .zip(sheet_density.data.par_iter())
+            .map(|((&use_grid, &gd), &sd)| {
+                if use_grid {
+                    gd * cell_vol
+                } else {
+                    sd * cell_vol
+                }
+            })
+            .sum();
         total
     }
 
@@ -322,7 +331,7 @@ impl PhaseSpaceRepr for HybridRepr {
         let n = nx * ny * nz;
 
         // Stream counts come from the sheet regardless of mask state
-        let data = sheet_streams.data.clone();
+        let data = sheet_streams.data;
 
         StreamCountField {
             data,
@@ -337,7 +346,7 @@ impl PhaseSpaceRepr for HybridRepr {
         }
     }
 
-    fn total_kinetic_energy(&self) -> f64 {
+    fn total_kinetic_energy(&self) -> Option<f64> {
         // Sheet particles carry kinetic energy in all regions.
         // Grid cells carry kinetic energy only in grid-mode regions.
         // Since sheet particles are everywhere but only contribute in sheet-mode cells,

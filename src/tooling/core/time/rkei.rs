@@ -17,12 +17,13 @@ use std::sync::Arc;
 
 use super::super::{
     advecator::Advector,
-    integrator::TimeIntegrator,
+    integrator::{StepProducts, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
     progress::{StepPhase, StepProgress},
     solver::PoissonSolver,
     types::*,
 };
+use crate::CausticError;
 use rayon::prelude::*;
 
 /// RKEI: 3rd-order unsplit Runge-Kutta time integrator.
@@ -47,8 +48,10 @@ impl TimeIntegrator for RkeiIntegrator {
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    ) {
+    ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("rkei_advance").entered();
+
+        let snap_err = || CausticError::Solver("RKEI integrator requires to_snapshot support".into());
 
         if let Some(ref p) = self.progress {
             p.start_step();
@@ -57,7 +60,7 @@ impl TimeIntegrator for RkeiIntegrator {
         }
 
         // Save f^n as a snapshot for convex combination
-        let f_n = repr.to_snapshot(0.0);
+        let f_n = repr.to_snapshot(0.0).ok_or_else(snap_err)?;
 
         // ── Stage 1: f^(1) = advect(f^n, g^n, Δt) ──
         {
@@ -77,7 +80,7 @@ impl TimeIntegrator for RkeiIntegrator {
             p.set_phase(StepPhase::RkeiStage2);
             p.set_sub_step(1, 3);
         }
-        let f_1 = repr.to_snapshot(0.0);
+        let _f_1 = repr.to_snapshot(0.0).ok_or_else(snap_err)?;
         {
             let _s = tracing::info_span!("rkei_stage_2").entered();
             let density = repr.compute_density();
@@ -91,7 +94,7 @@ impl TimeIntegrator for RkeiIntegrator {
 
         // Convex combination: f^(2) = ¾ f^n + ¼ repr
         {
-            let adv_snap = repr.to_snapshot(0.0);
+            let adv_snap = repr.to_snapshot(0.0).ok_or_else(snap_err)?;
             let combined: Vec<f64> = f_n
                 .data
                 .par_iter()
@@ -124,7 +127,7 @@ impl TimeIntegrator for RkeiIntegrator {
 
         // Convex combination: f^{n+1} = ⅓ f^n + ⅔ repr
         {
-            let adv_snap = repr.to_snapshot(0.0);
+            let adv_snap = repr.to_snapshot(0.0).ok_or_else(snap_err)?;
             let combined: Vec<f64> = f_n
                 .data
                 .par_iter()
@@ -137,6 +140,11 @@ impl TimeIntegrator for RkeiIntegrator {
                 time: 0.0,
             });
         }
+
+        let density = repr.compute_density();
+        let potential = solver.solve(&density, self.g);
+        let acceleration = solver.compute_acceleration(&potential);
+        Ok(StepProducts { density, potential, acceleration })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
@@ -186,7 +194,7 @@ mod tests {
         let advector = SemiLagrangian::new();
         let mut integrator = RkeiIntegrator::new(1.0);
 
-        integrator.advance(&mut grid, &poisson, &advector, 0.01);
+        integrator.advance(&mut grid, &poisson, &advector, 0.01).unwrap();
 
         // Should not contain NaN
         assert!(

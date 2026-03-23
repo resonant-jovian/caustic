@@ -2,6 +2,7 @@
 
 use super::super::types::PhaseSpaceSnapshot;
 use super::domain::Domain;
+use rayon::prelude::*;
 
 /// User-provided callable: f(x, v) → f64. Evaluated on every grid point at startup.
 pub struct CustomIC {
@@ -50,35 +51,37 @@ impl CustomIC {
             p.set_intra_progress(0, nx1 as u64);
         }
 
-        for ix1 in 0..nx1 {
-            let x1 = -lx[0] + (ix1 as f64 + 0.5) * dx[0];
-            for ix2 in 0..nx2 {
-                let x2 = -lx[1] + (ix2 as f64 + 0.5) * dx[1];
-                for ix3 in 0..nx3 {
-                    let x3 = -lx[2] + (ix3 as f64 + 0.5) * dx[2];
-                    let base = ix1 * s_x1 + ix2 * s_x2 + ix3 * s_x3;
+        data.par_chunks_mut(s_x1)
+            .enumerate()
+            .for_each(|(ix1, chunk)| {
+                let x1 = -lx[0] + (ix1 as f64 + 0.5) * dx[0];
+                for ix2 in 0..nx2 {
+                    let x2 = -lx[1] + (ix2 as f64 + 0.5) * dx[1];
+                    for ix3 in 0..nx3 {
+                        let x3 = -lx[2] + (ix3 as f64 + 0.5) * dx[2];
+                        let base = ix2 * s_x2 + ix3 * s_x3;
 
-                    for iv1 in 0..nv1 {
-                        let v1 = -lv[0] + (iv1 as f64 + 0.5) * dv[0];
-                        for iv2 in 0..nv2 {
-                            let v2 = -lv[1] + (iv2 as f64 + 0.5) * dv[1];
-                            for iv3 in 0..nv3 {
-                                let v3 = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
-                                let f = (self.func)([x1, x2, x3], [v1, v2, v3]);
-                                data[base + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3] = f.max(0.0);
+                        for iv1 in 0..nv1 {
+                            let v1 = -lv[0] + (iv1 as f64 + 0.5) * dv[0];
+                            for iv2 in 0..nv2 {
+                                let v2 = -lv[1] + (iv2 as f64 + 0.5) * dv[1];
+                                for iv3 in 0..nv3 {
+                                    let v3 = -lv[2] + (iv3 as f64 + 0.5) * dv[2];
+                                    let f = (self.func)([x1, x2, x3], [v1, v2, v3]);
+                                    chunk[base + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3] = f.max(0.0);
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            if let Some(p) = progress {
-                let c = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                if c.is_multiple_of(report_interval) {
-                    p.set_intra_progress(c, nx1 as u64);
+                if let Some(p) = progress {
+                    let c = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if c.is_multiple_of(report_interval) {
+                        p.set_intra_progress(c, nx1 as u64);
+                    }
                 }
-            }
-        }
+            });
 
         PhaseSpaceSnapshot {
             data,

@@ -6,12 +6,13 @@ use std::time::Instant;
 
 use super::super::{
     advecator::Advector,
-    integrator::{StepTimings, TimeIntegrator},
+    integrator::{StepProducts, StepTimings, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
     progress::{StepPhase, StepProgress},
     solver::PoissonSolver,
     types::*,
 };
+use crate::CausticError;
 
 /// Yoshida coefficient w1 = 1 / (2 − 2^(1/3)).
 const YOSHIDA_W1: f64 = 1.3512071919596578;
@@ -43,7 +44,7 @@ impl TimeIntegrator for YoshidaSplitting {
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    ) {
+    ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("yoshida_advance").entered();
         let mut timings = StepTimings::default();
 
@@ -84,6 +85,14 @@ impl TimeIntegrator for YoshidaSplitting {
             timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
         }
 
+        // Apply hypercollision damping after kick 1
+        if let Some(spectral) = repr
+            .as_any_mut()
+            .downcast_mut::<super::super::algos::spectral::SpectralV>()
+        {
+            spectral.apply_hypercollision(YOSHIDA_W1 * dt);
+        }
+
         // Substep 3: drift (w1+w0)·dt/2
         if let Some(ref p) = self.progress {
             p.set_phase(StepPhase::YoshidaDrift2);
@@ -111,6 +120,14 @@ impl TimeIntegrator for YoshidaSplitting {
             let t0 = Instant::now();
             advector.kick(repr, &accel, YOSHIDA_W0 * dt);
             timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        }
+
+        // Apply hypercollision damping after kick 2
+        if let Some(spectral) = repr
+            .as_any_mut()
+            .downcast_mut::<super::super::algos::spectral::SpectralV>()
+        {
+            spectral.apply_hypercollision(YOSHIDA_W0 * dt);
         }
 
         // Substep 5: drift (w0+w1)·dt/2
@@ -142,6 +159,14 @@ impl TimeIntegrator for YoshidaSplitting {
             timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
         }
 
+        // Apply hypercollision damping after kick 3
+        if let Some(spectral) = repr
+            .as_any_mut()
+            .downcast_mut::<super::super::algos::spectral::SpectralV>()
+        {
+            spectral.apply_hypercollision(YOSHIDA_W1 * dt);
+        }
+
         // Substep 7: drift w1·dt/2
         if let Some(ref p) = self.progress {
             p.set_phase(StepPhase::YoshidaDrift4);
@@ -154,7 +179,16 @@ impl TimeIntegrator for YoshidaSplitting {
             timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
         }
 
+        // Compute end-of-step products for caller reuse
+        let t0 = Instant::now();
+        let density = repr.compute_density();
+        let potential = solver.solve(&density, self.g);
+        let acceleration = solver.compute_acceleration(&potential);
+        timings.density_ms += t0.elapsed().as_secs_f64() * 1000.0;
+
         self.last_timings = timings;
+
+        Ok(StepProducts { density, potential, acceleration })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

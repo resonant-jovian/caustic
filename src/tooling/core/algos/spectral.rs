@@ -37,6 +37,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub struct SpectralV {
     /// Hermite expansion coefficients: length = n_spatial * n_modes^3.
     pub coefficients: Vec<f64>,
+    /// Scratch buffer for advection (avoids per-step clone of `coefficients`).
+    scratch: Vec<f64>,
     /// Spatial grid dimensions [nx, ny, nz].
     pub spatial_shape: [usize; 3],
     /// Number of Hermite modes per velocity dimension.
@@ -55,6 +57,13 @@ pub struct SpectralV {
     pub hypercollision_nu: f64,
     /// Order of the hypercollision operator (typically 2 or 3).
     pub hypercollision_order: usize,
+    /// Whether to enforce positivity of f after each advection sub-step.
+    /// When enabled, negative values from Gibbs-like oscillations are clipped
+    /// and the Hermite coefficients are re-projected from the clipped values.
+    positivity_limiter: bool,
+    /// Counter for the total number of velocity-space quadrature points
+    /// where f was found negative and clipped to zero.
+    positivity_violations: AtomicU64,
 }
 
 impl SpectralV {
@@ -71,8 +80,10 @@ impl SpectralV {
         let lv = domain.lv()[0];
         let sigma = lv / 3.0;
 
+        let total = n_spatial * n_modes3;
         SpectralV {
-            coefficients: vec![0.0; n_spatial * n_modes3],
+            coefficients: vec![0.0; total],
+            scratch: vec![0.0; total],
             spatial_shape: [nx, ny, nz],
             n_modes,
             velocity_scale: sigma,
@@ -81,6 +92,8 @@ impl SpectralV {
             adaptive_rescale: false,
             hypercollision_nu: 0.0,
             hypercollision_order: 2,
+            positivity_limiter: false,
+            positivity_violations: AtomicU64::new(0),
         }
     }
 
@@ -99,7 +112,6 @@ impl SpectralV {
 
         let ratio = old_alpha / new_alpha;
         let n = self.n_modes;
-        let n_spatial: usize = self.spatial_shape.iter().product();
         let n_modes3 = n * n * n;
 
         // For each spatial cell, transform 1D Hermite coefficients along each
@@ -110,19 +122,18 @@ impl SpectralV {
         //   a_n_new ≈ ratio^n * a_n_old * sqrt(ratio)
         // This is exact for n=0,1 and accurate when ratio ≈ 1.
         let sqrt_ratio = ratio.sqrt();
-        for si in 0..n_spatial {
-            let base = si * n_modes3;
+        self.coefficients.par_chunks_mut(n_modes3).for_each(|cell| {
             for m0 in 0..n {
                 for m1 in 0..n {
                     for m2 in 0..n {
-                        let idx = base + m0 * n * n + m1 * n + m2;
+                        let idx = m0 * n * n + m1 * n + m2;
                         let total_order = m0 + m1 + m2;
                         let scale = ratio.powi(total_order as i32) * sqrt_ratio.powi(3);
-                        self.coefficients[idx] *= scale;
+                        cell[idx] *= scale;
                     }
                 }
             }
-        }
+        });
 
         self.velocity_scale = new_alpha;
     }
@@ -131,29 +142,31 @@ impl SpectralV {
     ///
     /// alpha_opt = sqrt(2 * <v²> / (2*N_modes + 1))
     pub fn optimal_velocity_scale(&self) -> f64 {
-        let n_spatial: usize = self.spatial_shape.iter().product();
         let n = self.n_modes;
         let n_modes3 = n * n * n;
 
         // <v²> ≈ sum of a_{100}² + a_{010}² + a_{001}² contributions
         // For the zeroth-order approximation, use the diagonal modes
-        let mut v2_sum = 0.0f64;
-        let mut mass_sum = 0.0f64;
         let sigma = self.velocity_scale;
 
-        for si in 0..n_spatial {
-            let base = si * n_modes3;
-            let a000 = self.coefficients[base];
-            mass_sum += a000 * a000;
-
-            // Second moment contribution from mode (1,0,0), (0,1,0), (0,0,1)
-            if n > 1 {
-                let a100 = self.coefficients[base + n * n];
-                let a010 = self.coefficients[base + n];
-                let a001 = self.coefficients[base + 1];
-                v2_sum += sigma * sigma * (a100 * a100 + a010 * a010 + a001 * a001);
-            }
-        }
+        let (v2_sum, mass_sum) = self
+            .coefficients
+            .par_chunks(n_modes3)
+            .fold(
+                || (0.0f64, 0.0f64),
+                |(mut v2, mut mass), cell| {
+                    let a000 = cell[0];
+                    mass += a000 * a000;
+                    if n > 1 {
+                        let a100 = cell[n * n];
+                        let a010 = cell[n];
+                        let a001 = cell[1];
+                        v2 += sigma * sigma * (a100 * a100 + a010 * a010 + a001 * a001);
+                    }
+                    (v2, mass)
+                },
+            )
+            .reduce(|| (0.0, 0.0), |(v2a, ma), (v2b, mb)| (v2a + v2b, ma + mb));
 
         if mass_sum > 1e-30 {
             let v2_avg = v2_sum / mass_sum;
@@ -176,23 +189,180 @@ impl SpectralV {
         let nu = self.hypercollision_nu;
         let p = self.hypercollision_order;
         let n = self.n_modes;
-        let n_spatial: usize = self.spatial_shape.iter().product();
         let n_modes3 = n * n * n;
 
-        for si in 0..n_spatial {
-            let base = si * n_modes3;
-            for m0 in 0..n {
-                let d0 = (m0 as f64).powi(2 * p as i32);
-                for m1 in 0..n {
-                    let d01 = d0 + (m1 as f64).powi(2 * p as i32);
-                    for m2 in 0..n {
-                        let d012 = d01 + (m2 as f64).powi(2 * p as i32);
-                        let factor = (-nu * dt * d012).exp();
-                        self.coefficients[base + m0 * n * n + m1 * n + m2] *= factor;
-                    }
+        // Precompute exp factors once (n^3 entries) to avoid redundant exp() per spatial cell
+        let mut exp_table = vec![0.0f64; n_modes3];
+        for m0 in 0..n {
+            let d0 = (m0 as f64).powi(2 * p as i32);
+            for m1 in 0..n {
+                let d01 = d0 + (m1 as f64).powi(2 * p as i32);
+                for m2 in 0..n {
+                    let d012 = d01 + (m2 as f64).powi(2 * p as i32);
+                    exp_table[m0 * n * n + m1 * n + m2] = (-nu * dt * d012).exp();
                 }
             }
         }
+
+        self.coefficients.par_chunks_mut(n_modes3).for_each(|cell| {
+            for idx in 0..n_modes3 {
+                cell[idx] *= exp_table[idx];
+            }
+        });
+    }
+
+    /// Enable or disable the positivity limiter via builder pattern.
+    ///
+    /// When enabled, after each `advect_x` and `advect_v` call the distribution
+    /// function is evaluated on a velocity quadrature grid, negative values are
+    /// clipped to zero, and the Hermite coefficients are re-projected from the
+    /// clipped values (using the orthonormality of Hermite functions so the
+    /// Gram matrix is identity).
+    pub fn with_positivity_limiter(mut self, enabled: bool) -> Self {
+        self.positivity_limiter = enabled;
+        self
+    }
+
+    /// Return the cumulative number of quadrature points where f was found
+    /// negative and clipped to zero by the positivity limiter.
+    pub fn positivity_violations(&self) -> u64 {
+        self.positivity_violations.load(Ordering::Relaxed)
+    }
+
+    /// Enforce positivity of f by evaluating on a velocity quadrature grid,
+    /// clipping negatives, and re-projecting onto the Hermite basis.
+    ///
+    /// For each spatial cell:
+    ///   1. Evaluate f at n_modes^3 quadrature points in velocity space
+    ///   2. Clip any negative values to zero
+    ///   3. Re-compute Hermite coefficients as inner products (Gram matrix is
+    ///      identity for orthonormal Hermite functions)
+    ///   4. Increment violation counter by the number of clipped points
+    ///
+    /// Uses rayon for parallelism over spatial cells.
+    pub fn enforce_positivity(&mut self) {
+        let n_modes = self.n_modes;
+        let n_modes3 = n_modes * n_modes * n_modes;
+        let sigma = self.velocity_scale;
+        let lv = self.lv();
+
+        // Use at least 4*n_modes quadrature points per velocity dimension
+        // for accurate re-projection (oversampling avoids aliasing of the
+        // clipped function back into high modes).
+        let nq = (4 * n_modes).max(8);
+        let nq3 = nq * nq * nq;
+        let dv_q = [
+            2.0 * lv[0] / nq as f64,
+            2.0 * lv[1] / nq as f64,
+            2.0 * lv[2] / nq as f64,
+        ];
+
+        // Precompute Hermite function values at quadrature points for each dimension
+        // psi_tables[dim][mode][quad_point]
+        let psi_tables: Vec<Vec<Vec<f64>>> = (0..3)
+            .map(|dim| {
+                (0..n_modes)
+                    .map(|m| {
+                        (0..nq)
+                            .map(|iq| {
+                                let v = -lv[dim] + (iq as f64 + 0.5) * dv_q[dim];
+                                let u = v / sigma;
+                                Self::hermite_function(m, u)
+                            })
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect();
+
+        let dv_over_sigma3 = dv_q[0] * dv_q[1] * dv_q[2] / (sigma * sigma * sigma);
+        let sigma3 = sigma * sigma * sigma;
+
+        let total_violations = AtomicU64::new(0);
+
+        // Iterate clip-and-project up to max_iter times per cell to converge.
+        // Each pass reduces the residual negatives from Gibbs ringing.
+        let max_iter = 3;
+
+        self.coefficients.par_chunks_mut(n_modes3).for_each(|cell| {
+            for _iter in 0..max_iter {
+                // Step 1: Evaluate f at all quadrature points
+                let mut f_vals = vec![0.0f64; nq3];
+                let mut any_negative = false;
+
+                for iq0 in 0..nq {
+                    for iq1 in 0..nq {
+                        for iq2 in 0..nq {
+                            let qi = iq0 * nq * nq + iq1 * nq + iq2;
+                            let mut f_val = 0.0;
+                            for m0 in 0..n_modes {
+                                let p0 = psi_tables[0][m0][iq0];
+                                for m1 in 0..n_modes {
+                                    let p01 = p0 * psi_tables[1][m1][iq1];
+                                    for (m2, psi_m2) in
+                                        psi_tables[2].iter().enumerate().take(n_modes)
+                                    {
+                                        let mi = m0 * n_modes * n_modes + m1 * n_modes + m2;
+                                        f_val += cell[mi] * p01 * psi_m2[iq2];
+                                    }
+                                }
+                            }
+                            // Include the sigma^3 factor from reconstruction
+                            f_val *= sigma3;
+                            f_vals[qi] = f_val;
+                            if f_val < 0.0 {
+                                any_negative = true;
+                            }
+                        }
+                    }
+                }
+
+                if !any_negative {
+                    break;
+                }
+
+                // Step 2: Clip negatives and count violations
+                let mut violations = 0u64;
+                for val in f_vals.iter_mut() {
+                    if *val < 0.0 {
+                        *val = 0.0;
+                        violations += 1;
+                    }
+                }
+                total_violations.fetch_add(violations, Ordering::Relaxed);
+
+                // Step 3: Re-project clipped values onto Hermite basis
+                // Since the Hermite functions are orthonormal, the Gram matrix is identity.
+                // a_{m0,m1,m2} = integral f(v) * psi_{m0}(v0/s) * psi_{m1}(v1/s) * psi_{m2}(v2/s) dv^3 / sigma^3
+                // Approximated by quadrature sum:
+                for m0 in 0..n_modes {
+                    for m1 in 0..n_modes {
+                        for m2 in 0..n_modes {
+                            let mi = m0 * n_modes * n_modes + m1 * n_modes + m2;
+                            let mut sum = 0.0;
+                            for iq0 in 0..nq {
+                                let p0 = psi_tables[0][m0][iq0];
+                                for iq1 in 0..nq {
+                                    let p01 = p0 * psi_tables[1][m1][iq1];
+                                    for (iq2, psi_q2) in
+                                        psi_tables[2][m2].iter().enumerate().take(nq)
+                                    {
+                                        let qi = iq0 * nq * nq + iq1 * nq + iq2;
+                                        // f_vals already includes sigma^3; divide it
+                                        // back out for the projection formula
+                                        sum += (f_vals[qi] / sigma3) * p01 * psi_q2;
+                                    }
+                                }
+                            }
+                            cell[mi] = sum * dv_over_sigma3;
+                        }
+                    }
+                }
+            }
+        });
+
+        self.positivity_violations
+            .fetch_add(total_violations.load(Ordering::Relaxed), Ordering::Relaxed);
     }
 
     /// Evaluate the raw (unnormalized) physicist's Hermite polynomial H_n(x).
@@ -310,6 +480,7 @@ impl SpectralV {
             });
 
         SpectralV {
+            scratch: vec![0.0; coefficients.len()],
             coefficients,
             spatial_shape: [nx, ny, nz],
             n_modes,
@@ -319,6 +490,8 @@ impl SpectralV {
             adaptive_rescale: false,
             hypercollision_nu: 0.0,
             hypercollision_order: 2,
+            positivity_limiter: false,
+            positivity_violations: AtomicU64::new(0),
         }
     }
 
@@ -506,8 +679,10 @@ impl PhaseSpaceRepr for SpectralV {
         // Instead of explicit gradients, we use the equivalent semi-Lagrangian formulation:
         // shift mode n's contribution from modes n-1 and n+1 by +-sigma*dt.
 
-        // For each velocity dimension independently, apply mode coupling
-        let old_coeffs = self.coefficients.clone();
+        // For each velocity dimension independently, apply mode coupling.
+        // Swap coefficients into scratch to avoid a full clone.
+        std::mem::swap(&mut self.coefficients, &mut self.scratch);
+        let old_coeffs = &self.scratch;
 
         for dim in 0..3 {
             let n_d = self.spatial_shape[dim];
@@ -600,7 +775,7 @@ impl PhaseSpaceRepr for SpectralV {
                                         _ => m0 * n_modes * n_modes + m1 * n_modes + (m2 - 1),
                                     };
                                     spatial_gradient_1d_impl(
-                                        &old_coeffs,
+                                        old_coeffs,
                                         mi_lower,
                                         dim,
                                         ix,
@@ -622,7 +797,7 @@ impl PhaseSpaceRepr for SpectralV {
                                         _ => m0 * n_modes * n_modes + m1 * n_modes + (m2 + 1),
                                     };
                                     spatial_gradient_1d_impl(
-                                        &old_coeffs,
+                                        old_coeffs,
                                         mi_upper,
                                         dim,
                                         ix,
@@ -657,6 +832,11 @@ impl PhaseSpaceRepr for SpectralV {
             // Move results for next dimension pass (avoids clone)
             self.coefficients = new_coeffs;
         }
+
+        // Apply positivity limiter if enabled
+        if self.positivity_limiter {
+            self.enforce_positivity();
+        }
     }
 
     /// Velocity kick: acceleration couples adjacent Hermite modes.
@@ -674,7 +854,12 @@ impl PhaseSpaceRepr for SpectralV {
         let n_modes3 = n_modes * n_modes * n_modes;
         let sigma = self.velocity_scale;
 
-        let old = self.coefficients.clone();
+        // Swap coefficients into scratch, then copy back so `self.coefficients`
+        // retains the old values for `+=` accumulation while `old` reads from scratch.
+        // Saves allocation vs clone() — both buffers are already correctly sized.
+        std::mem::swap(&mut self.coefficients, &mut self.scratch);
+        self.coefficients.copy_from_slice(&self.scratch);
+        let old = &self.scratch;
 
         // Parallelize over spatial cells — each cell's coupling is independent
         let n_spatial = nx * ny * nz;
@@ -744,6 +929,11 @@ impl PhaseSpaceRepr for SpectralV {
                     }
                 }
             });
+
+        // Apply positivity limiter if enabled
+        if self.positivity_limiter {
+            self.enforce_positivity();
+        }
     }
 
     /// Compute velocity moment at a given spatial position.
@@ -1048,7 +1238,7 @@ impl PhaseSpaceRepr for SpectralV {
     ///
     /// So integral v_d^2 * psi_{m_d}(u_d) * psi_0(u_other) du^3 is nonzero only for
     /// specific mode indices. For simplicity, we compute via quadrature.
-    fn total_kinetic_energy(&self) -> f64 {
+    fn total_kinetic_energy(&self) -> Option<f64> {
         let dx = self.domain.dx();
         let dx3 = dx[0] * dx[1] * dx[2];
         let lv = self.lv();
@@ -1094,11 +1284,11 @@ impl PhaseSpaceRepr for SpectralV {
                 local_ke
             })
             .sum();
-        0.5 * ke * dx3 * dv3
+        Some(0.5 * ke * dx3 * dv3)
     }
 
     /// Reconstruct the full 6D phase-space snapshot from Hermite coefficients.
-    fn to_snapshot(&self, time: f64) -> PhaseSpaceSnapshot {
+    fn to_snapshot(&self, time: f64) -> Option<PhaseSpaceSnapshot> {
         let [nx, ny, nz] = self.spatial_shape;
         let nv1 = self.domain.velocity_res.v1 as usize;
         let nv2 = self.domain.velocity_res.v2 as usize;
@@ -1135,11 +1325,11 @@ impl PhaseSpaceRepr for SpectralV {
             }
         }
 
-        PhaseSpaceSnapshot {
+        Some(PhaseSpaceSnapshot {
             data,
             shape: [nx, ny, nz, nv1, nv2, nv3],
             time,
-        }
+        })
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -1535,7 +1725,7 @@ mod tests {
     fn spectral_to_snapshot_shape() {
         let domain = test_domain(4);
         let spec = SpectralV::new(domain.clone(), 3);
-        let snap = spec.to_snapshot(0.0);
+        let snap = spec.to_snapshot(0.0).unwrap();
         assert_eq!(snap.shape, [4, 4, 4, 4, 4, 4]);
         assert_eq!(snap.data.len(), 4usize.pow(6));
     }
@@ -1582,6 +1772,167 @@ mod tests {
         assert!(
             spec.coefficients.iter().all(|x| x.is_finite()),
             "Coefficients should remain finite after advect_x"
+        );
+    }
+
+    #[test]
+    fn test_spectral_positivity_clips_negatives() {
+        // Create a SpectralV with coefficients that produce negative f values,
+        // then verify that enforce_positivity clips them.
+        let domain = test_domain(4);
+        let n_modes = 3;
+        let mut spec = SpectralV::new(domain.clone(), n_modes).with_positivity_limiter(true);
+        let n_modes3 = n_modes * n_modes * n_modes;
+
+        // Set coefficients that will produce negatives: a strong positive zeroth
+        // mode plus a significant high-mode coefficient causes oscillation.
+        for si in 0..(4 * 4 * 4) {
+            let base = si * n_modes3;
+            spec.coefficients[base] = 1.0; // a_{0,0,0}
+            // Put amplitude in a high mode to create Gibbs-like oscillations
+            let high_mode =
+                (n_modes - 1) * n_modes * n_modes + (n_modes - 1) * n_modes + (n_modes - 1);
+            spec.coefficients[base + high_mode] = 2.0;
+        }
+
+        // Verify there are initially negative reconstructed values
+        let sigma = spec.velocity_scale;
+        let lv = spec.lv();
+        // Use the same quadrature grid as enforce_positivity
+        let nq = (4 * n_modes).max(8);
+        let dv_q = 2.0 * lv[0] / nq as f64;
+        let mut has_negative = false;
+        for iq0 in 0..nq {
+            for iq1 in 0..nq {
+                for iq2 in 0..nq {
+                    let v = [
+                        -lv[0] + (iq0 as f64 + 0.5) * dv_q,
+                        -lv[1] + (iq1 as f64 + 0.5) * dv_q,
+                        -lv[2] + (iq2 as f64 + 0.5) * dv_q,
+                    ];
+                    let f = spec.reconstruct_at(0, v);
+                    if f < 0.0 {
+                        has_negative = true;
+                    }
+                }
+            }
+        }
+        assert!(
+            has_negative,
+            "Test setup error: should have negative f values before clipping"
+        );
+
+        // Now enforce positivity
+        spec.enforce_positivity();
+
+        // After enforcement, violations should be non-zero
+        assert!(
+            spec.positivity_violations() > 0,
+            "Should have counted positivity violations"
+        );
+
+        // Verify that the worst-case negative value is much smaller than before.
+        // Due to Gibbs phenomenon in spectral re-projection, the clipped function
+        // cannot be exactly non-negative everywhere, but the magnitude of negatives
+        // should be greatly reduced.
+        let mut worst_negative_before = 0.0f64;
+        let mut worst_negative_after = 0.0f64;
+        let check_nq = 16; // finer grid for checking
+        let check_dv = 2.0 * lv[0] / check_nq as f64;
+
+        // Re-create the "before" state for comparison
+        let mut spec_before = SpectralV::new(domain.clone(), n_modes);
+        for si in 0..(4 * 4 * 4) {
+            let base = si * n_modes3;
+            spec_before.coefficients[base] = 1.0;
+            let high_mode =
+                (n_modes - 1) * n_modes * n_modes + (n_modes - 1) * n_modes + (n_modes - 1);
+            spec_before.coefficients[base + high_mode] = 2.0;
+        }
+
+        for iq0 in 0..check_nq {
+            for iq1 in 0..check_nq {
+                for iq2 in 0..check_nq {
+                    let v = [
+                        -lv[0] + (iq0 as f64 + 0.5) * check_dv,
+                        -lv[1] + (iq1 as f64 + 0.5) * check_dv,
+                        -lv[2] + (iq2 as f64 + 0.5) * check_dv,
+                    ];
+                    let f_before = spec_before.reconstruct_at(0, v);
+                    let f_after = spec.reconstruct_at(0, v);
+                    if f_before < worst_negative_before {
+                        worst_negative_before = f_before;
+                    }
+                    if f_after < worst_negative_after {
+                        worst_negative_after = f_after;
+                    }
+                }
+            }
+        }
+        assert!(
+            worst_negative_before < -0.1,
+            "Test setup: should have significant negatives before, got {}",
+            worst_negative_before
+        );
+        // After enforcement, the worst negative should be much smaller in magnitude.
+        // With iterated clip-and-project on a finite Hermite basis, exact positivity
+        // is not achievable but the negatives should be significantly reduced.
+        assert!(
+            worst_negative_after.abs() < worst_negative_before.abs() * 0.2,
+            "Positivity enforcement should reduce negative magnitude by at least 5x: before={}, after={}",
+            worst_negative_before,
+            worst_negative_after
+        );
+    }
+
+    #[test]
+    fn test_spectral_positivity_disabled_by_default() {
+        // Verify that positivity limiter is disabled by default and that
+        // the builder pattern works correctly.
+        let domain = test_domain(4);
+        let spec_default = SpectralV::new(domain.clone(), 3);
+        assert_eq!(
+            spec_default.positivity_violations(),
+            0,
+            "Violations should be 0 for a fresh instance"
+        );
+
+        // With limiter disabled (default), advection should NOT clip
+        let n_modes = 3;
+        let n_modes3 = n_modes * n_modes * n_modes;
+        let mut spec = SpectralV::new(domain.clone(), n_modes);
+        // Set coefficients that produce negatives
+        for si in 0..(4 * 4 * 4) {
+            let base = si * n_modes3;
+            spec.coefficients[base] = 1.0;
+            let high_mode =
+                (n_modes - 1) * n_modes * n_modes + (n_modes - 1) * n_modes + (n_modes - 1);
+            spec.coefficients[base + high_mode] = 2.0;
+        }
+
+        // Perform a velocity kick — with positivity disabled, violations stay 0
+        let n_sp = 4 * 4 * 4;
+        let accel = AccelerationField {
+            gx: vec![0.1; n_sp],
+            gy: vec![0.0; n_sp],
+            gz: vec![0.0; n_sp],
+            shape: [4, 4, 4],
+        };
+        spec.advect_v(&accel, 0.01);
+        assert_eq!(
+            spec.positivity_violations(),
+            0,
+            "Violations should remain 0 when positivity limiter is disabled"
+        );
+
+        // Now create one with limiter enabled via builder
+        let spec_enabled = SpectralV::new(domain.clone(), 3).with_positivity_limiter(true);
+        // Just verify the builder worked — the limiter is on
+        // (We test actual clipping in test_spectral_positivity_clips_negatives)
+        assert_eq!(
+            spec_enabled.positivity_violations(),
+            0,
+            "Fresh enabled instance should start with 0 violations"
         );
     }
 }

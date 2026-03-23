@@ -31,12 +31,13 @@ use super::super::{
     advecator::Advector,
     algos::ht::HtTensor,
     algos::lagrangian::sl_shift_1d_into,
-    integrator::{StepTimings, TimeIntegrator},
+    integrator::{StepProducts, StepTimings, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
     progress::{StepPhase, StepProgress},
     solver::PoissonSolver,
     types::*,
 };
+use crate::CausticError;
 
 /// Configuration for the BUG integrator.
 pub struct BugConfig {
@@ -177,7 +178,13 @@ pub(crate) fn k_step_leaf(
     // SVD truncate to target rank
     let target_rank = (k + n_aug).min(max_rank).min(q_aug.ncols());
     let (u, sv, _vt) = svd_thin(&r_aug);
-    let rank = truncation_rank(&sv, tolerance).max(1).min(target_rank);
+    if u.ncols() == 0 {
+        return (q_aug, r_aug.subcols(0, k).to_owned());
+    }
+    let rank = truncation_rank(&sv, tolerance)
+        .max(1)
+        .min(target_rank)
+        .min(u.ncols());
 
     // Truncated basis: Q_trunc = Q_aug @ U[:, :rank]
     let u_trunc = u.subcols(0, rank);
@@ -645,7 +652,7 @@ impl TimeIntegrator for BugIntegrator {
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    ) {
+    ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("bug_advance").entered();
         let mut timings = StepTimings::default();
 
@@ -670,7 +677,16 @@ impl TimeIntegrator for BugIntegrator {
             p.set_sub_step(3, 4);
         }
 
+        // Compute end-of-step products for caller reuse
+        let t0 = Instant::now();
+        let density = repr.compute_density();
+        let potential = solver.solve(&density, self.g);
+        let acceleration = solver.compute_acceleration(&potential);
+        timings.density_ms += t0.elapsed().as_secs_f64() * 1000.0;
+
         self.last_timings = timings;
+
+        Ok(StepProducts { density, potential, acceleration })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

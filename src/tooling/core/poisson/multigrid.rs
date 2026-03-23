@@ -102,18 +102,30 @@ fn smooth_red_black(
     // Pre-compute (flat, ix, iy, iz) tuples for each parity to avoid
     // repeated integer division (ix = flat / (ny*nz), ~13 cycles) inside
     // the parallel closure.
-    let mut red_indices: Vec<(usize, usize, usize, usize)> = Vec::new();
-    let mut black_indices: Vec<(usize, usize, usize, usize)> = Vec::new();
-    for flat in 0..n_total {
-        let ix = flat / (ny * nz);
-        let iy = (flat / nz) % ny;
-        let iz = flat % nz;
-        if (ix + iy + iz) % 2 == 0 {
-            red_indices.push((flat, ix, iy, iz));
-        } else {
-            black_indices.push((flat, ix, iy, iz));
-        }
-    }
+    let (red_indices, black_indices): (Vec<_>, Vec<_>) = (0..n_total)
+        .into_par_iter()
+        .fold(
+            || (Vec::new(), Vec::new()),
+            |(mut red, mut black), flat| {
+                let ix = flat / (ny * nz);
+                let iy = (flat / nz) % ny;
+                let iz = flat % nz;
+                if (ix + iy + iz) % 2 == 0 {
+                    red.push((flat, ix, iy, iz));
+                } else {
+                    black.push((flat, ix, iy, iz));
+                }
+                (red, black)
+            },
+        )
+        .reduce(
+            || (Vec::new(), Vec::new()),
+            |(mut r1, mut b1), (r2, b2)| {
+                r1.extend(r2);
+                b1.extend(b2);
+                (r1, b1)
+            },
+        );
     let parity_sets = [&red_indices, &black_indices];
 
     for _sweep in 0..n_sweeps {

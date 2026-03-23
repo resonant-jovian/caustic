@@ -6,7 +6,9 @@ use super::super::{
     phasespace::PhaseSpaceRepr,
     types::*,
 };
+use rayon::prelude::*;
 use std::any::Any;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// One AMR cell in 6D phase space. Leaf cells store a value of f;
 /// non-leaf cells have 64 children (one per sub-octant in 6D).
@@ -407,43 +409,52 @@ impl PhaseSpaceRepr for AmrGrid {
         let dx = self.domain.dx();
         let lx = self.lx();
         let n_spatial = nx[0] * nx[1] * nx[2];
-        let mut rho = vec![0.0f64; n_spatial];
 
         // Spatial cell volume for normalization.
         let dx3 = dx[0] * dx[1] * dx[2];
 
         let leaves = self.root.collect_leaves();
-        for leaf in &leaves {
-            if leaf.value.abs() < 1e-300 {
-                continue;
-            }
+        let rho = leaves
+            .par_iter()
+            .filter(|leaf| leaf.value.abs() >= 1e-300)
+            .fold(
+                || vec![0.0f64; n_spatial],
+                |mut local_rho, leaf| {
+                    // Determine which spatial cell(s) this leaf overlaps.
+                    // For simplicity, deposit into the nearest spatial cell based on center.
+                    let x = [leaf.center[0], leaf.center[1], leaf.center[2]];
 
-            // Determine which spatial cell(s) this leaf overlaps.
-            // For simplicity, deposit into the nearest spatial cell based on center.
-            let x = [leaf.center[0], leaf.center[1], leaf.center[2]];
+                    // Find the spatial grid cell.
+                    let ix = ((x[0] + lx[0]) / dx[0])
+                        .floor()
+                        .clamp(0.0, (nx[0] - 1) as f64) as usize;
+                    let iy = ((x[1] + lx[1]) / dx[1])
+                        .floor()
+                        .clamp(0.0, (nx[1] - 1) as f64) as usize;
+                    let iz = ((x[2] + lx[2]) / dx[2])
+                        .floor()
+                        .clamp(0.0, (nx[2] - 1) as f64) as usize;
 
-            // Find the spatial grid cell.
-            let ix = ((x[0] + lx[0]) / dx[0])
-                .floor()
-                .clamp(0.0, (nx[0] - 1) as f64) as usize;
-            let iy = ((x[1] + lx[1]) / dx[1])
-                .floor()
-                .clamp(0.0, (nx[1] - 1) as f64) as usize;
-            let iz = ((x[2] + lx[2]) / dx[2])
-                .floor()
-                .clamp(0.0, (nx[2] - 1) as f64) as usize;
-
-            // Contribution: f * dv^3_cell (the velocity sub-volume of this leaf cell).
-            // We also need to account for the fact that the leaf's spatial sub-volume
-            // may be smaller than dx3. The density contribution is:
-            //   rho_cell += f * (leaf_velocity_volume) * (leaf_spatial_volume / dx3)
-            // where the spatial volume ratio accounts for the fraction of the spatial
-            // cell covered by this leaf.
-            let leaf_spatial_vol = leaf.size[0] * leaf.size[1] * leaf.size[2];
-            let contribution = leaf.value * leaf.velocity_volume() * leaf_spatial_vol / dx3;
-            let flat = ix * nx[1] * nx[2] + iy * nx[2] + iz;
-            rho[flat] += contribution;
-        }
+                    // Contribution: f * dv^3_cell (the velocity sub-volume of this leaf cell).
+                    // We also need to account for the fact that the leaf's spatial sub-volume
+                    // may be smaller than dx3. The density contribution is:
+                    //   rho_cell += f * (leaf_velocity_volume) * (leaf_spatial_volume / dx3)
+                    // where the spatial volume ratio accounts for the fraction of the spatial
+                    // cell covered by this leaf.
+                    let leaf_spatial_vol = leaf.size[0] * leaf.size[1] * leaf.size[2];
+                    let contribution = leaf.value * leaf.velocity_volume() * leaf_spatial_vol / dx3;
+                    let flat = ix * nx[1] * nx[2] + iy * nx[2] + iz;
+                    local_rho[flat] += contribution;
+                    local_rho
+                },
+            )
+            .reduce(
+                || vec![0.0f64; n_spatial],
+                |mut a, b| {
+                    a.iter_mut().zip(b.iter()).for_each(|(x, y)| *x += *y);
+                    a
+                },
+            );
 
         DensityField {
             data: rho,
@@ -459,7 +470,7 @@ impl PhaseSpaceRepr for AmrGrid {
         let lx = self.lx();
 
         let leaves = self.root.collect_leaves_mut();
-        for leaf in leaves {
+        leaves.into_par_iter().for_each(|leaf| {
             // Drift: x_new = x_old + v * dt
             leaf.center[0] += leaf.center[3] * dt;
             leaf.center[1] += leaf.center[4] * dt;
@@ -472,7 +483,7 @@ impl PhaseSpaceRepr for AmrGrid {
                     leaf.center[d] = ((leaf.center[d] + l) % period + period) % period - l;
                 }
             }
-        }
+        });
     }
 
     /// Kick sub-step: shift leaf cell centers in velocity coordinates by a(x) * dt.
@@ -490,7 +501,7 @@ impl PhaseSpaceRepr for AmrGrid {
         let shape = &acceleration.shape;
 
         let leaves = self.root.collect_leaves_mut();
-        for leaf in leaves {
+        leaves.into_par_iter().for_each(|leaf| {
             let pos = [leaf.center[0], leaf.center[1], leaf.center[2]];
 
             // Nearest-grid-point acceleration lookup (fast path).
@@ -508,7 +519,7 @@ impl PhaseSpaceRepr for AmrGrid {
             leaf.center[3] += gx[flat] * dt;
             leaf.center[4] += gy[flat] * dt;
             leaf.center[5] += gz[flat] * dt;
-        }
+        });
     }
 
     /// Compute velocity moment of order n at the given spatial position.
@@ -599,7 +610,7 @@ impl PhaseSpaceRepr for AmrGrid {
     fn total_mass(&self) -> f64 {
         self.root
             .collect_leaves()
-            .iter()
+            .par_iter()
             .map(|leaf| leaf.value * leaf.cell_volume())
             .sum()
     }
@@ -608,7 +619,7 @@ impl PhaseSpaceRepr for AmrGrid {
     fn casimir_c2(&self) -> f64 {
         self.root
             .collect_leaves()
-            .iter()
+            .par_iter()
             .map(|leaf| leaf.value * leaf.value * leaf.cell_volume())
             .sum()
     }
@@ -617,7 +628,7 @@ impl PhaseSpaceRepr for AmrGrid {
     fn entropy(&self) -> f64 {
         self.root
             .collect_leaves()
-            .iter()
+            .par_iter()
             .filter(|leaf| leaf.value > 0.0)
             .map(|leaf| -leaf.value * leaf.value.ln() * leaf.cell_volume())
             .sum()
@@ -631,25 +642,35 @@ impl PhaseSpaceRepr for AmrGrid {
         let dx = self.domain.dx();
         let lx = self.lx();
         let n_spatial = nx[0] * nx[1] * nx[2];
-        let mut counts = vec![0u32; n_spatial];
 
         let leaves = self.root.collect_leaves();
-        for leaf in &leaves {
-            if leaf.value.abs() < 1e-30 {
-                continue;
-            }
-            let ix = ((leaf.center[0] + lx[0]) / dx[0])
-                .floor()
-                .clamp(0.0, (nx[0] - 1) as f64) as usize;
-            let iy = ((leaf.center[1] + lx[1]) / dx[1])
-                .floor()
-                .clamp(0.0, (nx[1] - 1) as f64) as usize;
-            let iz = ((leaf.center[2] + lx[2]) / dx[2])
-                .floor()
-                .clamp(0.0, (nx[2] - 1) as f64) as usize;
-            let flat = ix * nx[1] * nx[2] + iy * nx[2] + iz;
-            counts[flat] += 1;
-        }
+        let counts = leaves
+            .par_iter()
+            .filter(|leaf| leaf.value.abs() >= 1e-30)
+            .fold(
+                || vec![0u32; n_spatial],
+                |mut local, leaf| {
+                    let ix = ((leaf.center[0] + lx[0]) / dx[0])
+                        .floor()
+                        .clamp(0.0, (nx[0] - 1) as f64) as usize;
+                    let iy = ((leaf.center[1] + lx[1]) / dx[1])
+                        .floor()
+                        .clamp(0.0, (nx[1] - 1) as f64) as usize;
+                    let iz = ((leaf.center[2] + lx[2]) / dx[2])
+                        .floor()
+                        .clamp(0.0, (nx[2] - 1) as f64) as usize;
+                    let flat = ix * nx[1] * nx[2] + iy * nx[2] + iz;
+                    local[flat] += 1;
+                    local
+                },
+            )
+            .reduce(
+                || vec![0u32; n_spatial],
+                |mut a, b| {
+                    a.iter_mut().zip(b.iter()).for_each(|(x, y)| *x += *y);
+                    a
+                },
+            );
 
         StreamCountField {
             data: counts,
@@ -686,10 +707,10 @@ impl PhaseSpaceRepr for AmrGrid {
     }
 
     /// Total kinetic energy T = (1/2) integral of f * v^2 dx^3 dv^3.
-    fn total_kinetic_energy(&self) -> f64 {
+    fn total_kinetic_energy(&self) -> Option<f64> {
         let leaves = self.root.collect_leaves();
         let t: f64 = leaves
-            .iter()
+            .par_iter()
             .map(|leaf| {
                 let v2 = leaf.center[3] * leaf.center[3]
                     + leaf.center[4] * leaf.center[4]
@@ -697,11 +718,11 @@ impl PhaseSpaceRepr for AmrGrid {
                 leaf.value * v2 * leaf.cell_volume()
             })
             .sum();
-        0.5 * t
+        Some(0.5 * t)
     }
 
     /// Extract a full 6D snapshot by depositing leaf values onto a uniform grid.
-    fn to_snapshot(&self, time: f64) -> PhaseSpaceSnapshot {
+    fn to_snapshot(&self, time: f64) -> Option<PhaseSpaceSnapshot> {
         let nx = self.nx();
         let nv = self.nv();
         let dx = self.domain.dx();
@@ -710,7 +731,7 @@ impl PhaseSpaceRepr for AmrGrid {
         let lv = self.lv();
 
         let total = nx[0] * nx[1] * nx[2] * nv[0] * nv[1] * nv[2];
-        let mut data = vec![0.0f64; total];
+        let atomic_data: Vec<AtomicU64> = (0..total).map(|_| AtomicU64::new(0u64)).collect();
 
         let s_v3 = 1usize;
         let s_v2 = nv[2];
@@ -719,45 +740,64 @@ impl PhaseSpaceRepr for AmrGrid {
         let s_x2 = nx[2] * s_x3;
         let s_x1 = nx[1] * s_x2;
 
+        let uniform_vol = dx[0] * dx[1] * dx[2] * dv[0] * dv[1] * dv[2];
+
         let leaves = self.root.collect_leaves();
-        for leaf in &leaves {
-            if leaf.value.abs() < 1e-300 {
-                continue;
-            }
+        leaves
+            .par_iter()
+            .filter(|leaf| leaf.value.abs() >= 1e-300)
+            .for_each(|leaf| {
+                // Map leaf center to 6D grid indices.
+                let ix = ((leaf.center[0] + lx[0]) / dx[0])
+                    .floor()
+                    .clamp(0.0, (nx[0] - 1) as f64) as usize;
+                let iy = ((leaf.center[1] + lx[1]) / dx[1])
+                    .floor()
+                    .clamp(0.0, (nx[1] - 1) as f64) as usize;
+                let iz = ((leaf.center[2] + lx[2]) / dx[2])
+                    .floor()
+                    .clamp(0.0, (nx[2] - 1) as f64) as usize;
+                let iv1 = ((leaf.center[3] + lv[0]) / dv[0])
+                    .floor()
+                    .clamp(0.0, (nv[0] - 1) as f64) as usize;
+                let iv2 = ((leaf.center[4] + lv[1]) / dv[1])
+                    .floor()
+                    .clamp(0.0, (nv[1] - 1) as f64) as usize;
+                let iv3 = ((leaf.center[5] + lv[2]) / dv[2])
+                    .floor()
+                    .clamp(0.0, (nv[2] - 1) as f64) as usize;
 
-            // Map leaf center to 6D grid indices.
-            let ix = ((leaf.center[0] + lx[0]) / dx[0])
-                .floor()
-                .clamp(0.0, (nx[0] - 1) as f64) as usize;
-            let iy = ((leaf.center[1] + lx[1]) / dx[1])
-                .floor()
-                .clamp(0.0, (nx[1] - 1) as f64) as usize;
-            let iz = ((leaf.center[2] + lx[2]) / dx[2])
-                .floor()
-                .clamp(0.0, (nx[2] - 1) as f64) as usize;
-            let iv1 = ((leaf.center[3] + lv[0]) / dv[0])
-                .floor()
-                .clamp(0.0, (nv[0] - 1) as f64) as usize;
-            let iv2 = ((leaf.center[4] + lv[1]) / dv[1])
-                .floor()
-                .clamp(0.0, (nv[1] - 1) as f64) as usize;
-            let iv3 = ((leaf.center[5] + lv[2]) / dv[2])
-                .floor()
-                .clamp(0.0, (nv[2] - 1) as f64) as usize;
+                let flat = ix * s_x1 + iy * s_x2 + iz * s_x3 + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3;
+                // Accumulate — multiple AMR leaves may map to the same uniform cell.
+                // Weight by the ratio of the leaf's 6D volume to the uniform cell volume.
+                let weight = leaf.cell_volume() / uniform_vol;
+                let val = leaf.value * weight;
+                let atom = &atomic_data[flat];
+                let mut old = atom.load(Ordering::Relaxed);
+                loop {
+                    let new = f64::from_bits(old) + val;
+                    match atom.compare_exchange_weak(
+                        old,
+                        new.to_bits(),
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    ) {
+                        Ok(_) => break,
+                        Err(x) => old = x,
+                    }
+                }
+            });
 
-            let flat = ix * s_x1 + iy * s_x2 + iz * s_x3 + iv1 * s_v1 + iv2 * s_v2 + iv3 * s_v3;
-            // Accumulate — multiple AMR leaves may map to the same uniform cell.
-            // Weight by the ratio of the leaf's 6D volume to the uniform cell volume.
-            let uniform_vol = dx[0] * dx[1] * dx[2] * dv[0] * dv[1] * dv[2];
-            let weight = leaf.cell_volume() / uniform_vol;
-            data[flat] += leaf.value * weight;
-        }
+        let data: Vec<f64> = atomic_data
+            .into_iter()
+            .map(|a| f64::from_bits(a.into_inner()))
+            .collect();
 
-        PhaseSpaceSnapshot {
+        Some(PhaseSpaceSnapshot {
             data,
             shape: [nx[0], nx[1], nx[2], nv[0], nv[1], nv[2]],
             time,
-        }
+        })
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -983,7 +1023,7 @@ mod tests {
         // Don't refine. The root cell has center at velocity = (0,0,0),
         // so v^2 = 0 and T = 0.
         amr.root.value = 1.0;
-        let t = amr.total_kinetic_energy();
+        let t = amr.total_kinetic_energy().unwrap();
         assert!(
             t.abs() < 1e-12,
             "Kinetic energy should be zero for v=0 center, got {t}"
@@ -1064,7 +1104,7 @@ mod tests {
         let mut amr = AmrGrid::new(domain, 100.0, 1);
         amr.root.value = 2.5;
 
-        let snap = amr.to_snapshot(0.0);
+        let snap = amr.to_snapshot(0.0).unwrap();
         assert_eq!(snap.shape, [4, 4, 4, 4, 4, 4]);
         // The root cell covers the entire domain, so all uniform cells should get
         // some contribution.

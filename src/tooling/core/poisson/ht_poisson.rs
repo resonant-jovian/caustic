@@ -64,6 +64,10 @@ pub struct HtPoisson {
     leaf_fft_plans: [Arc<dyn rustfft::Fft<f64>>; 3],
     /// Cached inverse FFT plans for leaf frames.
     leaf_ifft_plans: [Arc<dyn rustfft::Fft<f64>>; 3],
+    /// Whether near-field correction is applied during solve.
+    near_field_enabled: bool,
+    /// L2 norm of last near-field correction (stored as f64 bits for atomic access).
+    last_near_field_l2: AtomicU64,
     /// Shared progress state for intra-phase reporting.
     progress: Option<Arc<super::super::progress::StepProgress>>,
 }
@@ -148,6 +152,8 @@ impl HtPoisson {
             prefactor,
             near_field_integral,
             near_field_integral_2,
+            near_field_enabled: true,
+            last_near_field_l2: AtomicU64::new(0u64),
             leaf_fft_plans,
             leaf_ifft_plans,
             progress: None,
@@ -173,6 +179,19 @@ impl HtPoisson {
     pub fn last_rank_info(&self) -> Option<(Vec<usize>, Vec<usize>)> {
         // Stored by solve if instrumentation is added later
         None
+    }
+
+    /// Enable or disable the near-field correction (builder pattern).
+    pub fn with_near_field_enabled(mut self, enabled: bool) -> Self {
+        self.near_field_enabled = enabled;
+        self
+    }
+
+    /// Return the L2 norm of the most recent near-field correction.
+    ///
+    /// Returns 0.0 if no solve has been performed yet or if the correction is disabled.
+    pub fn last_near_field_magnitude(&self) -> f64 {
+        f64::from_bits(self.last_near_field_l2.load(Ordering::Relaxed))
     }
 }
 
@@ -210,7 +229,7 @@ impl PoissonSolver for HtPoisson {
         );
 
         // Step 3: FFT leaves (using cached plans)
-        let rho_hat = rho_ht.fft_leaves_with_plans(&self.leaf_fft_plans);
+        let rho_hat = rho_ht.into_fft_with_plans(&self.leaf_fft_plans);
 
         // Step 4: For each Gaussian term, scale density in Fourier space by
         // the rank-1 Green's factor, then accumulate via add.
@@ -248,7 +267,7 @@ impl PoissonSolver for HtPoisson {
         };
 
         // Step 5: IFFT leaves (using cached plans)
-        let mut phi_ht = phi_hat.ifft_leaves_with_plans(&self.leaf_ifft_plans);
+        let mut phi_ht = phi_hat.into_ifft_with_plans(&self.leaf_ifft_plans);
 
         // Step 6: Truncate to re-compress (rank may be R_G × r_ρ)
         phi_ht.truncate(self.tolerance, self.max_rank);
@@ -259,26 +278,44 @@ impl PoissonSolver for HtPoisson {
         data.par_iter_mut().for_each(|v| *v *= scale);
 
         // Step 8: Apply near-field corrections (Exl, Mauser & Zhang, JCP 2016)
-        // 0th-order: Φ_corr(x) = -G/(4π) · ρ(x) · I₀ · dx³
-        if self.near_field_integral.abs() > 1e-30 {
-            let nf_scale = -g / (4.0 * std::f64::consts::PI) * self.near_field_integral * self.dv;
-            data.par_iter_mut()
-                .zip(density.data.par_iter())
-                .for_each(|(phi, &rho)| {
-                    *phi += nf_scale * rho;
-                });
+        let mut corr_l2_sq = 0.0f64;
+
+        if self.near_field_enabled {
+            // 0th-order: Φ_corr(x) = -G/(4π) · ρ(x) · I₀ · dx³
+            if self.near_field_integral.abs() > 1e-30 {
+                let nf_scale =
+                    -g / (4.0 * std::f64::consts::PI) * self.near_field_integral * self.dv;
+                corr_l2_sq += density
+                    .data
+                    .par_iter()
+                    .map(|&rho| (nf_scale * rho).powi(2))
+                    .sum::<f64>();
+                data.par_iter_mut()
+                    .zip(density.data.par_iter())
+                    .for_each(|(phi, &rho)| {
+                        *phi += nf_scale * rho;
+                    });
+            }
+
+            // 2nd-order: Φ_corr_2(x) = -G · I₂ · ∇²ρ(x)
+            if self.near_field_integral_2.abs() > 1e-30 {
+                let lap_rho = spectral_laplacian(density, &self.dx);
+                let nf2_scale = -g * self.near_field_integral_2;
+                corr_l2_sq += lap_rho
+                    .data
+                    .par_iter()
+                    .map(|&lap| (nf2_scale * lap).powi(2))
+                    .sum::<f64>();
+                data.par_iter_mut()
+                    .zip(lap_rho.data.par_iter())
+                    .for_each(|(phi, &lap)| {
+                        *phi += nf2_scale * lap;
+                    });
+            }
         }
 
-        // 2nd-order: Φ_corr_2(x) = -G · I₂ · ∇²ρ(x)
-        if self.near_field_integral_2.abs() > 1e-30 {
-            let lap_rho = spectral_laplacian(density, &self.dx);
-            let nf2_scale = -g * self.near_field_integral_2;
-            data.par_iter_mut()
-                .zip(lap_rho.data.par_iter())
-                .for_each(|(phi, &lap)| {
-                    *phi += nf2_scale * lap;
-                });
-        }
+        self.last_near_field_l2
+            .store(corr_l2_sq.sqrt().to_bits(), Ordering::Relaxed);
 
         PotentialField {
             data,
@@ -600,6 +637,76 @@ mod tests {
         assert!(
             rel_diff < 0.3,
             "HtPoisson vs TensorPoisson relative difference too large: {rel_diff}"
+        );
+    }
+
+    #[test]
+    fn test_near_field_magnitude_nontrivial() {
+        // A peaked density (single high-value cell) should produce a non-trivial
+        // near-field correction magnitude.
+        let shape = [8, 8, 8];
+        let dx = [1.0, 1.0, 1.0];
+        let solver = HtPoisson::new(shape, dx, 1e-4, 1e-3, 20);
+
+        let n = 512;
+        let mut rho = vec![0.0; n];
+        let center = 4 * 64 + 4 * 8 + 4;
+        rho[center] = 100.0;
+
+        let density = DensityField { data: rho, shape };
+        let _potential = solver.solve(&density, 1.0);
+
+        let mag = solver.last_near_field_magnitude();
+        assert!(
+            mag > 0.0,
+            "Near-field magnitude should be > 0 for peaked density, got {mag}"
+        );
+    }
+
+    #[test]
+    fn test_near_field_magnitude_smooth() {
+        // For a uniform density, the near-field correction magnitude should be
+        // small relative to the potential itself.
+        let shape = [8, 8, 8];
+        let dx = [0.5, 0.5, 0.5];
+        let solver = HtPoisson::new(shape, dx, 1e-4, 1e-3, 20);
+
+        let n = 512;
+        let density = DensityField {
+            data: vec![1.0; n],
+            shape,
+        };
+
+        let potential = solver.solve(&density, 1.0);
+        let mag = solver.last_near_field_magnitude();
+
+        // Compute the L2 norm of the potential for comparison
+        let phi_l2 = potential.data.iter().map(|v| v * v).sum::<f64>().sqrt();
+
+        assert!(
+            mag < phi_l2,
+            "Near-field magnitude ({mag}) should be smaller than potential L2 norm ({phi_l2}) for uniform density"
+        );
+    }
+
+    #[test]
+    fn test_near_field_disabled() {
+        // When near-field correction is disabled, magnitude should be zero.
+        let shape = [8, 8, 8];
+        let dx = [1.0, 1.0, 1.0];
+        let solver = HtPoisson::new(shape, dx, 1e-4, 1e-3, 20).with_near_field_enabled(false);
+
+        let n = 512;
+        let mut rho = vec![0.0; n];
+        rho[4 * 64 + 4 * 8 + 4] = 100.0;
+
+        let density = DensityField { data: rho, shape };
+        let _potential = solver.solve(&density, 1.0);
+
+        let mag = solver.last_near_field_magnitude();
+        assert!(
+            mag == 0.0,
+            "Near-field magnitude should be 0 when disabled, got {mag}"
         );
     }
 }

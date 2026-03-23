@@ -256,7 +256,7 @@ impl PhaseSpaceRepr for SphericalRepr {
         vec![]
     }
 
-    fn total_kinetic_energy(&self) -> f64 {
+    fn total_kinetic_energy(&self) -> Option<f64> {
         let [nr, nv, nl] = self.shape;
         let dphase = self.dr * self.dv * self.dl;
         let mut t = 0.0;
@@ -278,15 +278,15 @@ impl PhaseSpaceRepr for SphericalRepr {
                 }
             }
         }
-        t
+        Some(t)
     }
 
-    fn to_snapshot(&self, time: f64) -> PhaseSpaceSnapshot {
-        PhaseSpaceSnapshot {
+    fn to_snapshot(&self, time: f64) -> Option<PhaseSpaceSnapshot> {
+        Some(PhaseSpaceSnapshot {
             data: self.data.clone(),
             shape: [self.shape[0], self.shape[1], self.shape[2], 1, 1, 1],
             time,
-        }
+        })
     }
 
     fn load_snapshot(&mut self, snap: PhaseSpaceSnapshot) {

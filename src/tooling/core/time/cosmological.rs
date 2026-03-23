@@ -11,12 +11,13 @@ use std::time::Instant;
 
 use super::super::{
     advecator::Advector,
-    integrator::{StepTimings, TimeIntegrator},
+    integrator::{StepProducts, StepTimings, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
     progress::{StepPhase, StepProgress},
     solver::PoissonSolver,
     types::*,
 };
+use crate::CausticError;
 
 /// Cosmological Strang splitting with scale-factor-dependent coefficients.
 pub struct CosmologicalStrangSplitting {
@@ -57,7 +58,7 @@ impl TimeIntegrator for CosmologicalStrangSplitting {
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    ) {
+    ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("cosmo_strang_advance").entered();
         let mut timings = StepTimings::default();
         let a = self.scale_factor;
@@ -123,7 +124,17 @@ impl TimeIntegrator for CosmologicalStrangSplitting {
             p.set_sub_step(4, 5);
         }
 
+        // Compute end-of-step products for caller reuse (use updated scale factor)
+        let t0 = Instant::now();
+        let density = repr.compute_density();
+        let g_eff = self.g * self.scale_factor * self.scale_factor;
+        let potential = solver.solve(&density, g_eff);
+        let acceleration = solver.compute_acceleration(&potential);
+        timings.density_ms += t0.elapsed().as_secs_f64() * 1000.0;
+
         self.last_timings = timings;
+
+        Ok(StepProducts { density, potential, acceleration })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

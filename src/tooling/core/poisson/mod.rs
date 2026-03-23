@@ -5,6 +5,7 @@ pub(crate) mod green_ht;
 pub(crate) mod ht_poisson;
 pub(crate) mod multigrid;
 pub mod multipole;
+pub(crate) mod range_separated;
 pub(crate) mod spherical;
 pub(crate) mod spherical_1d;
 pub(crate) mod tensor_poisson;

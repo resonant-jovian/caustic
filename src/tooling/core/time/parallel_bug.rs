@@ -15,12 +15,13 @@ use faer::Mat;
 use super::super::{
     advecator::Advector,
     algos::ht::HtTensor,
-    integrator::{StepTimings, TimeIntegrator},
+    integrator::{StepProducts, StepTimings, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
     progress::{StepPhase, StepProgress},
     solver::PoissonSolver,
     types::*,
 };
+use crate::CausticError;
 
 use super::bug::{
     self, BugConfig, LEAF_PARENT, conservative_correction, k_step_leaf,
@@ -327,7 +328,7 @@ impl TimeIntegrator for ParallelBugIntegrator {
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    ) {
+    ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("parallel_bug_advance").entered();
         let mut timings = StepTimings::default();
 
@@ -347,7 +348,16 @@ impl TimeIntegrator for ParallelBugIntegrator {
             p.set_phase(StepPhase::StepComplete);
         }
 
+        // Compute end-of-step products for caller reuse
+        let t0 = Instant::now();
+        let density = repr.compute_density();
+        let potential = solver.solve(&density, self.g);
+        let acceleration = solver.compute_acceleration(&potential);
+        timings.density_ms += t0.elapsed().as_secs_f64() * 1000.0;
+
         self.last_timings = timings;
+
+        Ok(StepProducts { density, potential, acceleration })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

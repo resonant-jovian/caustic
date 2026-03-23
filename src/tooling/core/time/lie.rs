@@ -5,12 +5,13 @@ use std::sync::Arc;
 
 use super::super::{
     advecator::Advector,
-    integrator::TimeIntegrator,
+    integrator::{StepProducts, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
     progress::{StepPhase, StepProgress},
     solver::PoissonSolver,
     types::*,
 };
+use crate::CausticError;
 
 /// Lie (1st-order) operator splitting: drift(Δt) → kick(Δt).
 pub struct LieSplitting {
@@ -31,7 +32,7 @@ impl TimeIntegrator for LieSplitting {
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    ) {
+    ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("lie_advance").entered();
 
         if let Some(ref p) = self.progress {
@@ -53,6 +54,21 @@ impl TimeIntegrator for LieSplitting {
         let potential = solver.solve(&density, self.g);
         let accel = solver.compute_acceleration(&potential);
         advector.kick(repr, &accel, dt);
+
+        // Apply hypercollision damping if the representation is SpectralV
+        if let Some(spectral) = repr
+            .as_any_mut()
+            .downcast_mut::<super::super::algos::spectral::SpectralV>()
+        {
+            spectral.apply_hypercollision(dt);
+        }
+
+        // Compute end-of-step products for caller reuse
+        let density = repr.compute_density();
+        let potential = solver.solve(&density, self.g);
+        let acceleration = solver.compute_acceleration(&potential);
+
+        Ok(StepProducts { density, potential, acceleration })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

@@ -9,12 +9,13 @@ use std::time::Instant;
 
 use super::super::{
     advecator::Advector,
-    integrator::{StepTimings, TimeIntegrator},
+    integrator::{StepProducts, StepTimings, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
     progress::{StepPhase, StepProgress},
     solver::PoissonSolver,
     types::*,
 };
+use crate::CausticError;
 
 /// PI controller for adaptive step-size selection.
 pub struct PIController {
@@ -132,7 +133,7 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    ) {
+    ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("adaptive_strang_advance").entered();
         let mut timings = StepTimings::default();
 
@@ -147,8 +148,8 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
             // Take two snapshots of the initial state. PhaseSpaceSnapshot is not
             // Clone, so we need separate calls: one for the Lie step reload, one
             // for rollback on rejection.
-            let snap_for_lie = repr.to_snapshot(0.0);
-            let snap_for_rollback = repr.to_snapshot(0.0);
+            let snap_for_lie = repr.to_snapshot(0.0).ok_or_else(|| CausticError::Solver("adaptive integrator requires to_snapshot support".into()))?;
+            let snap_for_rollback = repr.to_snapshot(0.0).ok_or_else(|| CausticError::Solver("adaptive integrator requires to_snapshot support".into()))?;
 
             // --- Strang step: drift(dt/2) -> kick(dt) -> drift(dt/2) ---
             if let Some(ref p) = self.progress {
@@ -199,7 +200,7 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
             }
 
             // Capture Strang result before overwriting with Lie step
-            let strang_snap = repr.to_snapshot(0.0);
+            let strang_snap = repr.to_snapshot(0.0).ok_or_else(|| CausticError::Solver("adaptive integrator requires to_snapshot support".into()))?;
 
             // --- Lie step: drift(dt) -> kick(dt), from the saved initial state ---
             repr.load_snapshot(snap_for_lie);
@@ -232,7 +233,7 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
             }
 
             // --- Error estimation ---
-            let lie_snap = repr.to_snapshot(0.0);
+            let lie_snap = repr.to_snapshot(0.0).ok_or_else(|| CausticError::Solver("adaptive integrator requires to_snapshot support".into()))?;
             let err = Self::relative_error(&strang_snap.data, &lie_snap.data);
 
             if let Some(ref p) = self.progress {
@@ -258,7 +259,15 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
             p.set_phase(StepPhase::StepComplete);
         }
 
+        let t0 = Instant::now();
+        let density = repr.compute_density();
+        let potential = solver.solve(&density, self.g);
+        let acceleration = solver.compute_acceleration(&potential);
+        timings.density_ms += t0.elapsed().as_secs_f64() * 1000.0;
+
         self.last_timings = timings;
+
+        Ok(StepProducts { density, potential, acceleration })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

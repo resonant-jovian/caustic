@@ -7,6 +7,20 @@ use super::advecator::Advector;
 use super::phasespace::PhaseSpaceRepr;
 use super::progress::StepProgress;
 use super::solver::PoissonSolver;
+use super::types::{AccelerationField, DensityField, PotentialField};
+use crate::CausticError;
+
+/// End-of-step products from `TimeIntegrator::advance()`.
+///
+/// Contains the density, potential, and acceleration fields computed at the
+/// end of the time step. By returning these explicitly, the caller can reuse
+/// them for diagnostics and conservation projections without redundant
+/// Poisson solves.
+pub struct StepProducts {
+    pub density: DensityField,
+    pub potential: PotentialField,
+    pub acceleration: AccelerationField,
+}
 
 /// Complete simulation state at one instant.
 pub struct SimState {
@@ -55,14 +69,21 @@ impl StepTimings {
 /// Trait for all time integration / operator splitting strategies.
 pub trait TimeIntegrator {
     /// Advance the simulation by one timestep Δt.
-    /// Calls advector drift/kick sub-steps in the correct order for this splitting scheme.
+    ///
+    /// Calls advector drift/kick sub-steps in the correct order for this splitting
+    /// scheme, then computes and returns the end-of-step density, potential, and
+    /// acceleration. The caller uses these products for diagnostics and
+    /// conservation projections, avoiding redundant Poisson solves.
+    ///
+    /// Returns `Err` if the representation does not support operations required by
+    /// this integrator (e.g. `to_snapshot`/`load_snapshot` for unsplit methods).
     fn advance(
         &mut self,
         repr: &mut dyn PhaseSpaceRepr,
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    );
+    ) -> Result<StepProducts, CausticError>;
 
     /// Compute the maximum stable Δt given current state and CFL constraints.
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64;

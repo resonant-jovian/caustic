@@ -51,18 +51,21 @@ pub trait PhaseSpaceRepr: Send + Sync {
     fn velocity_distribution(&self, position: &[f64; 3]) -> Vec<f64>;
 
     /// Total kinetic energy T = ½∫fv² dx³dv³.
-    fn total_kinetic_energy(&self) -> f64 {
-        f64::NAN
+    ///
+    /// Returns `None` if this representation does not support direct kinetic
+    /// energy computation. All grid-based representations should implement this.
+    fn total_kinetic_energy(&self) -> Option<f64> {
+        None
     }
 
     /// Extract a full 6D snapshot of the current state.
-    fn to_snapshot(&self, time: f64) -> PhaseSpaceSnapshot {
+    ///
+    /// Returns `None` if this representation cannot produce a dense 6D snapshot
+    /// (e.g. because materialization would exceed memory). Check [`can_materialize`]
+    /// before calling if the result is optional in your context.
+    fn to_snapshot(&self, time: f64) -> Option<PhaseSpaceSnapshot> {
         let _ = time;
-        PhaseSpaceSnapshot {
-            data: vec![],
-            shape: [0; 6],
-            time,
-        }
+        None
     }
 
     /// Replace the current state with data from a dense 6D snapshot.
