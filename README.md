@@ -5,10 +5,23 @@
 [![Crates.io](https://img.shields.io/crates/v/caustic.svg)](https://crates.io/crates/caustic)
 [![docs.rs](https://docs.rs/caustic/badge.svg)](https://docs.rs/caustic)
 [![CI](https://github.com/resonant-jovian/caustic/actions/workflows/test.yml/badge.svg)](https://github.com/resonant-jovian/caustic/actions/workflows/test.yml)
+[![Clippy](https://github.com/resonant-jovian/caustic/actions/workflows/clippy.yml/badge.svg)](https://github.com/resonant-jovian/caustic/actions/workflows/clippy.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
 > [!IMPORTANT]
 > Pre-0.1.0 — the API is unstable, features may be incomplete or change without notice, and it is not yet intended for general use. Even after 0.1.0, until version 1.0.0 it should not be relied upon for production workloads or serious research.
+
+---
+
+### Highlights
+
+- **8 phase-space representations** — from brute-force 6D grids to HT tensor compression
+- **10 Poisson solvers** — FFT, multigrid, tree, spectral harmonics, tensor decomposition
+- **14 time integrators** — 1st through 6th order splitting, unsplit RK, BUG, exponential
+- **10 IC generators** — Plummer, Hernquist, King, NFW, Zel'dovich, mergers, tidal, disk, custom
+- **LoMaC conservation** — machine-precision mass/momentum/energy preservation
+- **188 validation tests** — equilibrium, instability, convergence, solver cross-validation
+- **Pluggable trait architecture** — swap any component independently
 
 ---
 
@@ -46,17 +59,17 @@ caustic = "0.0.12"
           │                                │                                │
           ▼                                ▼                                ▼
    ┌─────────────┐              ┌──────────────────┐              ┌─────────────┐
-   │  Advector    │              │ PhaseSpaceRepr   │              │PoissonSolver│
+   │  Advector   │              │  PhaseSpaceRepr  │              │PoissonSolver│
    │             │              │                  │              │             │
-   │ advances f  │◄────────────│  stores f(x,v)   │─────────────►│ ∇²Φ = 4πGρ │
-   │ by Δt       │  acceleration│  computes ρ(x)   │   density    │ returns Φ,g │
+   │ advances f  │◄─────────────│  stores f(x,v)   │─────────────►│ ∇²Φ = 4πGρ  │
+   │ by Δt       │ acceleration │  computes ρ(x)   │   density    │ returns Φ,g │
    └─────────────┘              └──────────────────┘              └─────────────┘
                                         ▲
                                         │
                                 ┌───────┴────────┐
-                                │ Initial         │
-                                │ Conditions      │
-                                │ (ICs)           │
+                                │ Initial        │
+                                │ Conditions     │
+                                │ (ICs)          │
                                 └────────────────┘
 ```
 
