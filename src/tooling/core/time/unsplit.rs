@@ -12,7 +12,7 @@ use std::sync::Arc;
 use super::super::{
     advecator::Advector,
     init::domain::Domain,
-    integrator::TimeIntegrator,
+    integrator::{StepProducts, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
     progress::{StepPhase, StepProgress},
     solver::PoissonSolver,
@@ -330,7 +330,7 @@ impl TimeIntegrator for UnsplitIntegrator {
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    ) {
+    ) -> StepProducts {
         let _span = tracing::info_span!("unsplit_advance").entered();
 
         if let Some(ref p) = self.progress {
@@ -500,6 +500,11 @@ impl TimeIntegrator for UnsplitIntegrator {
 
             _ => unreachable!("rk_stages validated in constructor"),
         }
+
+        let density = repr.compute_density();
+        let potential = solver.solve(&density, g);
+        let acceleration = solver.compute_acceleration(&potential);
+        StepProducts { density, potential, acceleration }
     }
 
     /// CFL condition for the unsplit integrator.

@@ -31,7 +31,7 @@ use super::super::{
     advecator::Advector,
     algos::ht::HtTensor,
     algos::lagrangian::sl_shift_1d_into,
-    integrator::{StepTimings, TimeIntegrator},
+    integrator::{StepProducts, StepTimings, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
     progress::{StepPhase, StepProgress},
     solver::PoissonSolver,
@@ -651,7 +651,7 @@ impl TimeIntegrator for BugIntegrator {
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    ) {
+    ) -> StepProducts {
         let _span = tracing::info_span!("bug_advance").entered();
         let mut timings = StepTimings::default();
 
@@ -676,7 +676,16 @@ impl TimeIntegrator for BugIntegrator {
             p.set_sub_step(3, 4);
         }
 
+        // Compute end-of-step products for caller reuse
+        let t0 = Instant::now();
+        let density = repr.compute_density();
+        let potential = solver.solve(&density, self.g);
+        let acceleration = solver.compute_acceleration(&potential);
+        timings.density_ms += t0.elapsed().as_secs_f64() * 1000.0;
+
         self.last_timings = timings;
+
+        StepProducts { density, potential, acceleration }
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

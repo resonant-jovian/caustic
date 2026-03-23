@@ -18,7 +18,7 @@ pub use sim::Simulation;
 pub use tooling::core::advecator::Advector;
 pub use tooling::core::conditions::ExitReason;
 pub use tooling::core::init::domain::{Domain, DomainBuilder};
-pub use tooling::core::integrator::{StepTimings, TimeIntegrator};
+pub use tooling::core::integrator::{StepProducts, StepTimings, TimeIntegrator};
 pub use tooling::core::phasespace::PhaseSpaceRepr;
 pub use tooling::core::solver::PoissonSolver;
 pub use tooling::core::types::*;

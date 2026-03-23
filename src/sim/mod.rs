@@ -118,8 +118,9 @@ impl Simulation {
             dt = (t_final - self.time).max(0.0);
         }
 
-        self.integrator
-            .advance(&mut *self.repr, &*self.poisson, &*self.advector, dt);
+        let products =
+            self.integrator
+                .advance(&mut *self.repr, &*self.poisson, &*self.advector, dt);
 
         // Capture integrator sub-step timings (drift, poisson, kick)
         let mut timings = self

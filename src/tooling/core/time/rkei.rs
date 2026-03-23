@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use super::super::{
     advecator::Advector,
-    integrator::TimeIntegrator,
+    integrator::{StepProducts, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
     progress::{StepPhase, StepProgress},
     solver::PoissonSolver,
@@ -47,7 +47,7 @@ impl TimeIntegrator for RkeiIntegrator {
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    ) {
+    ) -> StepProducts {
         let _span = tracing::info_span!("rkei_advance").entered();
 
         if let Some(ref p) = self.progress {
@@ -137,6 +137,11 @@ impl TimeIntegrator for RkeiIntegrator {
                 time: 0.0,
             });
         }
+
+        let density = repr.compute_density();
+        let potential = solver.solve(&density, self.g);
+        let acceleration = solver.compute_acceleration(&potential);
+        StepProducts { density, potential, acceleration }
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

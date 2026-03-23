@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use super::super::{
     advecator::Advector,
-    integrator::{StepTimings, TimeIntegrator},
+    integrator::{StepProducts, StepTimings, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
     progress::{StepPhase, StepProgress},
     solver::PoissonSolver,
@@ -199,7 +199,7 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    ) {
+    ) -> StepProducts {
         let _span = tracing::info_span!("instrumented_strang_advance").entered();
         let mut timings = StepTimings::default();
 
@@ -310,8 +310,16 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
             p.set_sub_step(4, 5);
         }
 
+        let t0 = Instant::now();
+        let density = repr.compute_density();
+        let potential = solver.solve(&density, self.inner.g);
+        let acceleration = solver.compute_acceleration(&potential);
+        timings.density_ms += t0.elapsed().as_secs_f64() * 1000.0;
+
         self.last_diagnostics = diag;
         self.last_timings = timings;
+
+        StepProducts { density, potential, acceleration }
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
