@@ -22,6 +22,7 @@ use super::super::{
     solver::PoissonSolver,
     types::*,
 };
+use crate::CausticError;
 
 /// Suzuki triple-jump coefficient s₁ = 1 / (2 − 2^{1/5}).
 const S1: f64 = 1.1746881100325735;
@@ -225,7 +226,7 @@ impl TimeIntegrator for Rkn6Splitting {
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    ) -> StepProducts {
+    ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("rkn6_advance").entered();
         let mut timings = StepTimings::default();
         let g = self.g;
@@ -460,7 +461,7 @@ impl TimeIntegrator for Rkn6Splitting {
 
         self.last_timings = timings;
 
-        StepProducts { density, potential, acceleration }
+        Ok(StepProducts { density, potential, acceleration })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

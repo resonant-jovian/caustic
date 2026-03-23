@@ -18,6 +18,7 @@ use super::super::{
     solver::PoissonSolver,
     types::*,
 };
+use crate::CausticError;
 
 // BM4 palindromic drift coefficients a_i (6 values, symmetric: a1 a2 a3 a3 a2 a1).
 // 2*(a1 + a2 + a3) = 1.
@@ -71,7 +72,7 @@ impl TimeIntegrator for BlanesMoanSplitting {
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    ) -> StepProducts {
+    ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("bm4_advance").entered();
         let mut timings = StepTimings::default();
         let n_sub: u8 = 11;
@@ -128,7 +129,7 @@ impl TimeIntegrator for BlanesMoanSplitting {
 
         self.last_timings = timings;
 
-        StepProducts { density, potential, acceleration }
+        Ok(StepProducts { density, potential, acceleration })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

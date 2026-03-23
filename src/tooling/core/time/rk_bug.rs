@@ -19,6 +19,7 @@ use super::super::{
     solver::PoissonSolver,
     types::*,
 };
+use crate::CausticError;
 
 use super::bug::{BugConfig, bug_drift_substep, bug_kick_substep, conservative_correction};
 
@@ -212,7 +213,7 @@ impl TimeIntegrator for RkBugIntegrator {
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    ) -> StepProducts {
+    ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("rk_bug_advance").entered();
         let mut timings = StepTimings::default();
 
@@ -241,7 +242,7 @@ impl TimeIntegrator for RkBugIntegrator {
 
         self.last_timings = timings;
 
-        StepProducts { density, potential, acceleration }
+        Ok(StepProducts { density, potential, acceleration })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

@@ -63,15 +63,13 @@ impl Simulation {
     pub fn run(&mut self) -> anyhow::Result<ExitPackage> {
         loop {
             if let Some(reason) = self.step()? {
-                let snapshot = if self.repr.can_materialize() {
-                    self.repr.to_snapshot(self.time)
-                } else {
+                let snapshot = self.repr.to_snapshot(self.time).unwrap_or_else(|| {
                     PhaseSpaceSnapshot {
                         data: vec![],
                         shape: [0; 6],
                         time: self.time,
                     }
-                };
+                });
                 let history = self.diagnostics.history.clone();
                 let wall_secs = self.start_time.elapsed().as_secs_f64();
                 return Ok(ExitPackage::assemble(
@@ -120,7 +118,7 @@ impl Simulation {
 
         let products =
             self.integrator
-                .advance(&mut *self.repr, &*self.poisson, &*self.advector, dt);
+                .advance(&mut *self.repr, &*self.poisson, &*self.advector, dt)?;
 
         // Capture integrator sub-step timings (drift, poisson, kick)
         let mut timings = self
@@ -189,7 +187,9 @@ impl Simulation {
                 }
             } else {
                 // Dense path (UniformGrid6D, etc.)
-                let snapshot = self.repr.to_snapshot(self.time);
+                let snapshot = self.repr.to_snapshot(self.time).ok_or_else(|| {
+                    anyhow::anyhow!("LoMaC dense path requires to_snapshot support")
+                })?;
                 let corrected = lomac.apply(dt, gx, gy, gz, &snapshot.data);
                 let corrected_snap = PhaseSpaceSnapshot {
                     data: corrected,
@@ -521,7 +521,9 @@ impl SimulationBuilder {
             {
                 lom.initialize_from_ht(ht);
             } else {
-                let snapshot = repr.to_snapshot(0.0);
+                let snapshot = repr.to_snapshot(0.0).ok_or_else(|| {
+                    anyhow::anyhow!("LoMaC initialization requires to_snapshot support")
+                })?;
                 lom.initialize_from_kinetic(&snapshot.data);
             }
             Some(lom)

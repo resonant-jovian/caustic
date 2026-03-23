@@ -221,7 +221,7 @@ impl PhaseSpaceRepr for MacroMicroRepr {
         self.inner.velocity_distribution(position)
     }
 
-    fn total_kinetic_energy(&self) -> f64 {
+    fn total_kinetic_energy(&self) -> Option<f64> {
         // From macro fields: T = (1/2) integral(rho |u|^2 dx^3) + (3/2) integral(rho T dx^3).
         let dx = self.domain.dx();
         let dx3 = dx[0] * dx[1] * dx[2];
@@ -240,10 +240,10 @@ impl PhaseSpaceRepr for MacroMicroRepr {
             })
             .sum();
 
-        energy * dx3
+        Some(energy * dx3)
     }
 
-    fn to_snapshot(&self, time: f64) -> PhaseSpaceSnapshot {
+    fn to_snapshot(&self, time: f64) -> Option<PhaseSpaceSnapshot> {
         // Delegate to inner for full 6D snapshot.
         self.inner.to_snapshot(time)
     }
@@ -409,7 +409,7 @@ mod tests {
         assert!(mm.memory_bytes() > 0);
 
         // Kinetic energy should be finite and non-negative.
-        let ke = mm.total_kinetic_energy();
+        let ke = mm.total_kinetic_energy().unwrap();
         assert!(ke.is_finite(), "kinetic energy should be finite, got {ke}");
         assert!(ke >= 0.0, "kinetic energy should be non-negative, got {ke}");
 

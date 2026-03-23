@@ -17,6 +17,7 @@ use super::super::{
     solver::PoissonSolver,
     types::*,
 };
+use crate::CausticError;
 
 /// Cosmological Strang splitting with scale-factor-dependent coefficients.
 pub struct CosmologicalStrangSplitting {
@@ -57,7 +58,7 @@ impl TimeIntegrator for CosmologicalStrangSplitting {
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    ) -> StepProducts {
+    ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("cosmo_strang_advance").entered();
         let mut timings = StepTimings::default();
         let a = self.scale_factor;
@@ -133,7 +134,7 @@ impl TimeIntegrator for CosmologicalStrangSplitting {
 
         self.last_timings = timings;
 
-        StepProducts { density, potential, acceleration }
+        Ok(StepProducts { density, potential, acceleration })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

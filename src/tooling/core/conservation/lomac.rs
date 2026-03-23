@@ -236,12 +236,14 @@ impl LoMaC {
     /// then falls back to dense projection for the correction step.
     pub fn project_ht(&self, ht: &crate::tooling::core::algos::ht::HtTensor) -> Vec<f64> {
         if !self.active {
-            let snap = ht.to_snapshot(0.0);
-            return snap.data;
+            return ht.to_snapshot(0.0).map(|s| s.data).unwrap_or_default();
         }
 
         // Extract snapshot and apply standard projection
-        let snap = ht.to_snapshot(0.0);
+        let snap = match ht.to_snapshot(0.0) {
+            Some(s) => s,
+            None => return vec![],
+        };
         conservative_truncation(
             &snap.data,
             self.spatial_shape,

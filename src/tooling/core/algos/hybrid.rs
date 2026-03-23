@@ -346,7 +346,7 @@ impl PhaseSpaceRepr for HybridRepr {
         }
     }
 
-    fn total_kinetic_energy(&self) -> f64 {
+    fn total_kinetic_energy(&self) -> Option<f64> {
         // Sheet particles carry kinetic energy in all regions.
         // Grid cells carry kinetic energy only in grid-mode regions.
         // Since sheet particles are everywhere but only contribute in sheet-mode cells,

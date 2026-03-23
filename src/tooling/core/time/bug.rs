@@ -37,6 +37,7 @@ use super::super::{
     solver::PoissonSolver,
     types::*,
 };
+use crate::CausticError;
 
 /// Configuration for the BUG integrator.
 pub struct BugConfig {
@@ -651,7 +652,7 @@ impl TimeIntegrator for BugIntegrator {
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    ) -> StepProducts {
+    ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("bug_advance").entered();
         let mut timings = StepTimings::default();
 
@@ -685,7 +686,7 @@ impl TimeIntegrator for BugIntegrator {
 
         self.last_timings = timings;
 
-        StepProducts { density, potential, acceleration }
+        Ok(StepProducts { density, potential, acceleration })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

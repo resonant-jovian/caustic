@@ -1238,7 +1238,7 @@ impl PhaseSpaceRepr for SpectralV {
     ///
     /// So integral v_d^2 * psi_{m_d}(u_d) * psi_0(u_other) du^3 is nonzero only for
     /// specific mode indices. For simplicity, we compute via quadrature.
-    fn total_kinetic_energy(&self) -> f64 {
+    fn total_kinetic_energy(&self) -> Option<f64> {
         let dx = self.domain.dx();
         let dx3 = dx[0] * dx[1] * dx[2];
         let lv = self.lv();
@@ -1284,11 +1284,11 @@ impl PhaseSpaceRepr for SpectralV {
                 local_ke
             })
             .sum();
-        0.5 * ke * dx3 * dv3
+        Some(0.5 * ke * dx3 * dv3)
     }
 
     /// Reconstruct the full 6D phase-space snapshot from Hermite coefficients.
-    fn to_snapshot(&self, time: f64) -> PhaseSpaceSnapshot {
+    fn to_snapshot(&self, time: f64) -> Option<PhaseSpaceSnapshot> {
         let [nx, ny, nz] = self.spatial_shape;
         let nv1 = self.domain.velocity_res.v1 as usize;
         let nv2 = self.domain.velocity_res.v2 as usize;
@@ -1325,11 +1325,11 @@ impl PhaseSpaceRepr for SpectralV {
             }
         }
 
-        PhaseSpaceSnapshot {
+        Some(PhaseSpaceSnapshot {
             data,
             shape: [nx, ny, nz, nv1, nv2, nv3],
             time,
-        }
+        })
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -1725,7 +1725,7 @@ mod tests {
     fn spectral_to_snapshot_shape() {
         let domain = test_domain(4);
         let spec = SpectralV::new(domain.clone(), 3);
-        let snap = spec.to_snapshot(0.0);
+        let snap = spec.to_snapshot(0.0).unwrap();
         assert_eq!(snap.shape, [4, 4, 4, 4, 4, 4]);
         assert_eq!(snap.data.len(), 4usize.pow(6));
     }

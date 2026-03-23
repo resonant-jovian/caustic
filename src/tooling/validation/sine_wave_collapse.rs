@@ -114,7 +114,7 @@ fn run_sine_wave(n_spatial: usize, n_velocity: usize, t_final: f64) -> SineWaveR
         .map(|(&rho, &phi)| 0.5 * rho * phi)
         .sum::<f64>()
         * dx3;
-    let t_ke_init = grid.total_kinetic_energy();
+    let t_ke_init = grid.total_kinetic_energy().unwrap();
     let e_total_init = t_ke_init + w_init;
 
     // Evolve
@@ -154,7 +154,7 @@ fn run_sine_wave(n_spatial: usize, n_velocity: usize, t_final: f64) -> SineWaveR
         .map(|(&rho, &phi)| 0.5 * rho * phi)
         .sum::<f64>()
         * dx3;
-    let t_ke_final = grid.total_kinetic_energy();
+    let t_ke_final = grid.total_kinetic_energy().unwrap();
     let e_total_final = t_ke_final + w_final;
 
     let energy_drift = if e_total_init.abs() > 1e-30 {

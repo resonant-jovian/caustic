@@ -12,6 +12,7 @@ use super::super::{
     solver::PoissonSolver,
     types::*,
 };
+use crate::CausticError;
 
 /// Yoshida coefficient w1 = 1 / (2 − 2^(1/3)).
 const YOSHIDA_W1: f64 = 1.3512071919596578;
@@ -43,7 +44,7 @@ impl TimeIntegrator for YoshidaSplitting {
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    ) -> StepProducts {
+    ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("yoshida_advance").entered();
         let mut timings = StepTimings::default();
 
@@ -187,7 +188,7 @@ impl TimeIntegrator for YoshidaSplitting {
 
         self.last_timings = timings;
 
-        StepProducts { density, potential, acceleration }
+        Ok(StepProducts { density, potential, acceleration })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

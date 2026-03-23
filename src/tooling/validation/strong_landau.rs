@@ -120,7 +120,7 @@ fn strong_landau_damping() {
         .map(|(&rho, &phi)| 0.5 * rho * phi)
         .sum::<f64>()
         * dx3;
-    let t_init = grid.total_kinetic_energy();
+    let t_init = grid.total_kinetic_energy().unwrap();
     let e_total_init = t_init + w_init;
 
     for step in 0..n_steps {
@@ -149,7 +149,7 @@ fn strong_landau_damping() {
         .map(|(&rho, &phi)| 0.5 * rho * phi)
         .sum::<f64>()
         * dx3;
-    let t_final_ke = grid.total_kinetic_energy();
+    let t_final_ke = grid.total_kinetic_energy().unwrap();
     let e_total_final = t_final_ke + w_final;
 
     let energy_drift = if e_total_init.abs() > 1e-30 {

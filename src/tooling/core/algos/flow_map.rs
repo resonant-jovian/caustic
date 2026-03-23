@@ -812,24 +812,26 @@ impl PhaseSpaceRepr for FlowMapRepr {
     }
 
     /// Total kinetic energy T = sum of 0.5 * mass[i] * |V[i]|^2.
-    fn total_kinetic_energy(&self) -> f64 {
+    fn total_kinetic_energy(&self) -> Option<f64> {
         let n = self.num_tracers();
-        (0..n)
-            .into_par_iter()
-            .map(|i| {
-                let vx = self.velocities[3 * i];
-                let vy = self.velocities[3 * i + 1];
-                let vz = self.velocities[3 * i + 2];
-                0.5 * self.masses[i] * (vx * vx + vy * vy + vz * vz)
-            })
-            .sum()
+        Some(
+            (0..n)
+                .into_par_iter()
+                .map(|i| {
+                    let vx = self.velocities[3 * i];
+                    let vy = self.velocities[3 * i + 1];
+                    let vz = self.velocities[3 * i + 2];
+                    0.5 * self.masses[i] * (vx * vx + vy * vy + vz * vz)
+                })
+                .sum(),
+        )
     }
 
     /// Extract a full 6D snapshot by CIC deposition of all tracers.
     ///
     /// Each tracer is deposited onto 2^3 x 2^3 = 64 surrounding cells in the 6D grid.
     /// This is expensive for large grids and should only be used for checkpoints.
-    fn to_snapshot(&self, time: f64) -> PhaseSpaceSnapshot {
+    fn to_snapshot(&self, time: f64) -> Option<PhaseSpaceSnapshot> {
         let d = &self.domain;
         let nx = [
             d.spatial_res.x1 as usize,
@@ -988,11 +990,11 @@ impl PhaseSpaceRepr for FlowMapRepr {
             }
         }
 
-        PhaseSpaceSnapshot {
+        Some(PhaseSpaceSnapshot {
             data,
             shape: [nx[0], nx[1], nx[2], nv[0], nv[1], nv[2]],
             time,
-        }
+        })
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -1208,7 +1210,7 @@ mod tests {
             expected_ke += 0.5 * repr.masses[i] * (vx * vx + vy * vy + vz * vz);
         }
 
-        let ke = repr.total_kinetic_energy();
+        let ke = repr.total_kinetic_energy().unwrap();
         assert!(
             (ke - expected_ke).abs() < 1e-14,
             "kinetic energy mismatch: expected {expected_ke}, got {ke}"

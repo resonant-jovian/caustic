@@ -21,7 +21,11 @@ impl PrimarySnapshot {
         let density = repr.compute_density();
         let n = density.data.len();
         let shape = density.shape;
-        let distribution = repr.to_snapshot(time);
+        let distribution = repr.to_snapshot(time).unwrap_or_else(|| PhaseSpaceSnapshot {
+            data: vec![],
+            shape: [0; 6],
+            time,
+        });
 
         Self {
             distribution,

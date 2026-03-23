@@ -2579,32 +2579,28 @@ impl PhaseSpaceRepr for HtTensor {
             .collect()
     }
 
-    fn total_kinetic_energy(&self) -> f64 {
+    fn total_kinetic_energy(&self) -> Option<f64> {
         // Use tree contractions via compute_energy_density() instead of
         // materializing the full 6D grid (which exceeds memory for large grids).
         let dx = self.domain.dx();
         let dx3 = dx[0] * dx[1] * dx[2];
         let energy_density = self.compute_energy_density();
-        energy_density.data.iter().sum::<f64>() * dx3
+        Some(energy_density.data.iter().sum::<f64>() * dx3)
     }
 
-    fn to_snapshot(&self, time: f64) -> PhaseSpaceSnapshot {
+    fn to_snapshot(&self, time: f64) -> Option<PhaseSpaceSnapshot> {
         if !self.can_materialize() {
             tracing::warn!(
                 "HtTensor::to_snapshot() skipped: full grid ({} elements) exceeds materialization limit",
                 self.shape.iter().product::<usize>()
             );
-            return PhaseSpaceSnapshot {
-                data: vec![],
-                shape: [0; 6],
-                time,
-            };
+            return None;
         }
-        PhaseSpaceSnapshot {
+        Some(PhaseSpaceSnapshot {
             data: self.to_full(),
             shape: self.shape,
             time,
-        }
+        })
     }
 
     fn as_any(&self) -> &dyn Any {

@@ -12,6 +12,7 @@ use super::super::{
     solver::PoissonSolver,
     types::*,
 };
+use crate::CausticError;
 
 /// Strang splitting: drift(Δt/2) → kick(Δt) → drift(Δt/2).
 pub struct StrangSplitting {
@@ -37,7 +38,7 @@ impl TimeIntegrator for StrangSplitting {
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    ) -> StepProducts {
+    ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("strang_advance").entered();
         let mut timings = StepTimings::default();
 
@@ -115,7 +116,7 @@ impl TimeIntegrator for StrangSplitting {
 
         self.last_timings = timings;
 
-        StepProducts { density, potential, acceleration }
+        Ok(StepProducts { density, potential, acceleration })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
@@ -187,7 +188,7 @@ mod tests {
         let advector = SemiLagrangian::new();
         let mut integrator = StrangSplitting::new(1.0);
 
-        integrator.advance(&mut spec, &poisson, &advector, 0.1);
+        integrator.advance(&mut spec, &poisson, &advector, 0.1).unwrap();
 
         // The high mode (3,3,3) should be significantly damped.
         // Damping factor for mode (3,3,3) with nu=1.0, order=2, dt=0.1:

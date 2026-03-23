@@ -586,13 +586,13 @@ impl PhaseSpaceRepr for SheetTracker {
         0.0
     }
 
-    fn total_kinetic_energy(&self) -> f64 {
+    fn total_kinetic_energy(&self) -> Option<f64> {
         let ke: f64 = self
             .particles
             .par_iter()
             .map(|p| p.v[0] * p.v[0] + p.v[1] * p.v[1] + p.v[2] * p.v[2])
             .sum();
-        0.5 * self.particle_mass * ke
+        Some(0.5 * self.particle_mass * ke)
     }
 
     fn stream_count(&self) -> StreamCountField {
@@ -610,7 +610,7 @@ impl PhaseSpaceRepr for SheetTracker {
             .collect()
     }
 
-    fn to_snapshot(&self, time: f64) -> PhaseSpaceSnapshot {
+    fn to_snapshot(&self, time: f64) -> Option<PhaseSpaceSnapshot> {
         // Approximate: CIC deposit each particle onto the full 6D grid.
         // Each particle is a delta in both x and v; we smear it across the
         // 8 nearest x-cells and 8 nearest v-cells (64 contributions total).
@@ -757,11 +757,11 @@ impl PhaseSpaceRepr for SheetTracker {
             }
         }
 
-        PhaseSpaceSnapshot {
+        Some(PhaseSpaceSnapshot {
             data,
             shape: [nx[0], nx[1], nx[2], nv[0], nv[1], nv[2]],
             time,
-        }
+        })
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -886,7 +886,7 @@ mod tests {
         for p in &mut sheet.particles {
             p.v = [1.0, 0.0, 0.0];
         }
-        let ke = sheet.total_kinetic_energy();
+        let ke = sheet.total_kinetic_energy().unwrap();
         let expected = 0.5 * sheet.particle_mass * sheet.particles.len() as f64 * 1.0;
         assert!(
             (ke - expected).abs() < 1e-14,

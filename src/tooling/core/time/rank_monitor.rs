@@ -15,6 +15,7 @@ use super::super::{
     progress::{StepPhase, StepProgress},
     solver::PoissonSolver,
 };
+use crate::CausticError;
 
 /// Per-step rank diagnostics, populated by `InstrumentedStrangSplitting`.
 /// Fields are `None` when the representation is not `HtTensor`.
@@ -199,7 +200,7 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    ) -> StepProducts {
+    ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("instrumented_strang_advance").entered();
         let mut timings = StepTimings::default();
 
@@ -319,7 +320,7 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
         self.last_diagnostics = diag;
         self.last_timings = timings;
 
-        StepProducts { density, potential, acceleration }
+        Ok(StepProducts { density, potential, acceleration })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
@@ -369,7 +370,7 @@ mod tests {
         let advector = SemiLagrangian::new();
         let mut integrator = InstrumentedStrangSplitting::new(1.0);
 
-        integrator.advance(&mut grid, &poisson, &advector, 0.01);
+        integrator.advance(&mut grid, &poisson, &advector, 0.01).unwrap();
 
         // UniformGrid6D is not HtTensor, so all rank fields should be None
         assert!(integrator.last_diagnostics.pre_drift_ranks.is_none());
@@ -452,7 +453,7 @@ mod tests {
         // Run enough steps to populate the rank history (>= 3)
         let dt = 0.001;
         for _ in 0..5 {
-            integrator.advance(&mut ht, &poisson, &advector, dt);
+            integrator.advance(&mut ht, &poisson, &advector, dt).unwrap();
         }
 
         let diag = &integrator.last_diagnostics;
@@ -529,7 +530,7 @@ mod tests {
         // G = 0: pure free streaming, no Poisson kick — keeps frames well-conditioned
         let mut integrator = InstrumentedStrangSplitting::new(0.0);
 
-        integrator.advance(&mut ht, &poisson, &advector, 0.001);
+        integrator.advance(&mut ht, &poisson, &advector, 0.001).unwrap();
 
         let diag = &integrator.last_diagnostics;
 

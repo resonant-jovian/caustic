@@ -123,8 +123,10 @@ impl Diagnostics {
     }
 
     /// Total kinetic energy T = ½∫fv² dx³dv³.
+    ///
+    /// Returns `0.0` if the representation does not support kinetic energy computation.
     pub fn kinetic_energy(repr: &dyn PhaseSpaceRepr) -> f64 {
-        repr.total_kinetic_energy()
+        repr.total_kinetic_energy().unwrap_or(0.0)
     }
 
     /// Total potential energy W = ½∫ρΦ dx³.

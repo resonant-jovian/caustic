@@ -28,6 +28,7 @@ use super::super::{
     solver::PoissonSolver,
     types::*,
 };
+use crate::CausticError;
 
 /// Lawson-RK integrator: exact drift + RK4 gravity kick.
 pub struct LawsonRkIntegrator {
@@ -64,7 +65,7 @@ impl TimeIntegrator for LawsonRkIntegrator {
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    ) -> StepProducts {
+    ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("lawson_rk_advance").entered();
         let mut timings = StepTimings::default();
 
@@ -80,7 +81,7 @@ impl TimeIntegrator for LawsonRkIntegrator {
         timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
 
         // Save state after half-drift for RK4 stage resets
-        let snap_after_drift = repr.to_snapshot(0.0);
+        let snap_after_drift = repr.to_snapshot(0.0).ok_or_else(|| CausticError::Solver("Lawson-RK integrator requires to_snapshot support".into()))?;
 
         // Step 2: RK4 kick with 4 Poisson solves
         // Stage 1: evaluate acceleration at drifted state
@@ -164,7 +165,7 @@ impl TimeIntegrator for LawsonRkIntegrator {
 
         self.last_timings = timings;
 
-        StepProducts { density, potential, acceleration }
+        Ok(StepProducts { density, potential, acceleration })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

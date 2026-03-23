@@ -11,6 +11,7 @@ use super::super::{
     solver::PoissonSolver,
     types::*,
 };
+use crate::CausticError;
 
 /// Lie (1st-order) operator splitting: drift(Δt) → kick(Δt).
 pub struct LieSplitting {
@@ -31,7 +32,7 @@ impl TimeIntegrator for LieSplitting {
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    ) -> StepProducts {
+    ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("lie_advance").entered();
 
         if let Some(ref p) = self.progress {
@@ -67,7 +68,7 @@ impl TimeIntegrator for LieSplitting {
         let potential = solver.solve(&density, self.g);
         let acceleration = solver.compute_acceleration(&potential);
 
-        StepProducts { density, potential, acceleration }
+        Ok(StepProducts { density, potential, acceleration })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

@@ -20,6 +20,7 @@ use super::super::{
     solver::PoissonSolver,
     types::*,
 };
+use crate::CausticError;
 
 /// Method-of-lines Runge-Kutta integrator for the full 6D Vlasov PDE.
 ///
@@ -320,7 +321,7 @@ impl TimeIntegrator for UnsplitIntegrator {
         solver: &dyn PoissonSolver,
         advector: &dyn Advector,
         dt: f64,
-    ) -> StepProducts {
+    ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("unsplit_advance").entered();
 
         if let Some(ref p) = self.progress {
@@ -334,7 +335,9 @@ impl TimeIntegrator for UnsplitIntegrator {
         let g = self.g;
 
         // Extract current state as flat data
-        let snap0 = repr.to_snapshot(0.0);
+        let snap0 = repr.to_snapshot(0.0).ok_or_else(|| {
+            CausticError::Solver("unsplit integrator requires to_snapshot support".into())
+        })?;
         let y0 = snap0.data;
         let n = y0.len();
 
@@ -493,7 +496,7 @@ impl TimeIntegrator for UnsplitIntegrator {
         let density = repr.compute_density();
         let potential = solver.solve(&density, g);
         let acceleration = solver.compute_acceleration(&potential);
-        StepProducts { density, potential, acceleration }
+        Ok(StepProducts { density, potential, acceleration })
     }
 
     /// CFL condition for the unsplit integrator.
@@ -625,9 +628,9 @@ mod tests {
             Box::new(UniformGrid6D::from_snapshot(snap, domain));
 
         let dt = 0.01;
-        unsplit.advance(&mut *repr, &poisson, &advector, dt);
+        unsplit.advance(&mut *repr, &poisson, &advector, dt).unwrap();
 
-        let result = repr.to_snapshot(dt);
+        let result = repr.to_snapshot(dt).unwrap();
         // Basic sanity: result should be finite and have positive mass
         assert!(
             result.data.iter().all(|v| v.is_finite()),
@@ -682,8 +685,8 @@ mod tests {
         let mut repr: Box<dyn PhaseSpaceRepr> =
             Box::new(UniformGrid6D::from_snapshot(snap, domain));
 
-        unsplit.advance(&mut *repr, &poisson, &advector, 0.01);
-        let result = repr.to_snapshot(0.01);
+        unsplit.advance(&mut *repr, &poisson, &advector, 0.01).unwrap();
+        let result = repr.to_snapshot(0.01).unwrap();
         assert!(result.data.iter().all(|v| v.is_finite()));
     }
 
@@ -715,8 +718,8 @@ mod tests {
         let mut repr: Box<dyn PhaseSpaceRepr> =
             Box::new(UniformGrid6D::from_snapshot(snap, domain));
 
-        unsplit.advance(&mut *repr, &poisson, &advector, 0.01);
-        let result = repr.to_snapshot(0.01);
+        unsplit.advance(&mut *repr, &poisson, &advector, 0.01).unwrap();
+        let result = repr.to_snapshot(0.01).unwrap();
         assert!(result.data.iter().all(|v| v.is_finite()));
     }
 

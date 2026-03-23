@@ -1254,7 +1254,7 @@ impl PhaseSpaceRepr for TensorTrain {
         result
     }
 
-    fn total_kinetic_energy(&self) -> f64 {
+    fn total_kinetic_energy(&self) -> Option<f64> {
         // T = 0.5 * integral f * v^2 dx^3 dv^3
         let dx = self.domain.dx();
         let dv = self.domain.dv();
@@ -1312,15 +1312,15 @@ impl PhaseSpaceRepr for TensorTrain {
                 }
             }
         }
-        0.5 * t * cell_vol
+        Some(0.5 * t * cell_vol)
     }
 
-    fn to_snapshot(&self, time: f64) -> PhaseSpaceSnapshot {
-        PhaseSpaceSnapshot {
+    fn to_snapshot(&self, time: f64) -> Option<PhaseSpaceSnapshot> {
+        Some(PhaseSpaceSnapshot {
             data: self.to_full(),
             shape: self.shape,
             time,
-        }
+        })
     }
 
     fn as_any(&self) -> &dyn Any {

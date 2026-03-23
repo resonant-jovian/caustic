@@ -707,7 +707,7 @@ impl PhaseSpaceRepr for AmrGrid {
     }
 
     /// Total kinetic energy T = (1/2) integral of f * v^2 dx^3 dv^3.
-    fn total_kinetic_energy(&self) -> f64 {
+    fn total_kinetic_energy(&self) -> Option<f64> {
         let leaves = self.root.collect_leaves();
         let t: f64 = leaves
             .par_iter()
@@ -718,11 +718,11 @@ impl PhaseSpaceRepr for AmrGrid {
                 leaf.value * v2 * leaf.cell_volume()
             })
             .sum();
-        0.5 * t
+        Some(0.5 * t)
     }
 
     /// Extract a full 6D snapshot by depositing leaf values onto a uniform grid.
-    fn to_snapshot(&self, time: f64) -> PhaseSpaceSnapshot {
+    fn to_snapshot(&self, time: f64) -> Option<PhaseSpaceSnapshot> {
         let nx = self.nx();
         let nv = self.nv();
         let dx = self.domain.dx();
@@ -793,11 +793,11 @@ impl PhaseSpaceRepr for AmrGrid {
             .map(|a| f64::from_bits(a.into_inner()))
             .collect();
 
-        PhaseSpaceSnapshot {
+        Some(PhaseSpaceSnapshot {
             data,
             shape: [nx[0], nx[1], nx[2], nv[0], nv[1], nv[2]],
             time,
-        }
+        })
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -1023,7 +1023,7 @@ mod tests {
         // Don't refine. The root cell has center at velocity = (0,0,0),
         // so v^2 = 0 and T = 0.
         amr.root.value = 1.0;
-        let t = amr.total_kinetic_energy();
+        let t = amr.total_kinetic_energy().unwrap();
         assert!(
             t.abs() < 1e-12,
             "Kinetic energy should be zero for v=0 center, got {t}"
@@ -1104,7 +1104,7 @@ mod tests {
         let mut amr = AmrGrid::new(domain, 100.0, 1);
         amr.root.value = 2.5;
 
-        let snap = amr.to_snapshot(0.0);
+        let snap = amr.to_snapshot(0.0).unwrap();
         assert_eq!(snap.shape, [4, 4, 4, 4, 4, 4]);
         // The root cell covers the entire domain, so all uniform cells should get
         // some contribution.

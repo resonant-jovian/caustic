@@ -852,7 +852,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
         self.data[base..base + n_vel].to_vec()
     }
 
-    fn total_kinetic_energy(&self) -> f64 {
+    fn total_kinetic_energy(&self) -> Option<f64> {
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
         let dx = self.cached_dx;
         let dv = self.cached_dv;
@@ -888,16 +888,16 @@ impl PhaseSpaceRepr for UniformGrid6D {
             })
             .sum();
 
-        0.5 * t * dx3 * dv3
+        Some(0.5 * t * dx3 * dv3)
     }
 
-    fn to_snapshot(&self, time: f64) -> PhaseSpaceSnapshot {
+    fn to_snapshot(&self, time: f64) -> Option<PhaseSpaceSnapshot> {
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
-        PhaseSpaceSnapshot {
+        Some(PhaseSpaceSnapshot {
             data: self.data.clone(),
             shape: [nx1, nx2, nx3, nv1, nv2, nv3],
             time,
-        }
+        })
     }
 
     fn load_snapshot(&mut self, snap: PhaseSpaceSnapshot) {
