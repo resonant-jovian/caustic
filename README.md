@@ -4,10 +4,11 @@
 
 [![Crates.io](https://img.shields.io/crates/v/caustic.svg)](https://crates.io/crates/caustic)
 [![docs.rs](https://docs.rs/caustic/badge.svg)](https://docs.rs/caustic)
-[![CI](https://github.com/resonant-jovian/caustic/actions/workflows/test.yml/badge.svg)](https://github.com/resonant-jovian/caustic/actions/workflows/test.yml)
-[![Clippy](https://github.com/resonant-jovian/caustic/actions/workflows/clippy.yml/badge.svg)](https://github.com/resonant-jovian/caustic/actions/workflows/clippy.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Support on thanks.dev](https://img.shields.io/badge/Support-thanks.dev-green)](https://thanks.dev/u/gh/resonant-jovian)
+
+[![CI](https://github.com/resonant-jovian/caustic/actions/workflows/test.yml/badge.svg)](https://github.com/resonant-jovian/caustic/actions/workflows/test.yml)
+[![Clippy](https://github.com/resonant-jovian/caustic/actions/workflows/clippy.yml/badge.svg)](https://github.com/resonant-jovian/caustic/actions/workflows/clippy.yml)
 
 > [!IMPORTANT]
 > Pre-0.1.0 — the API is unstable, features may be incomplete or change without notice, and it is not yet intended for general use. Even after 0.1.0, until version 1.0.0 it should not be relied upon for production workloads or serious research.
