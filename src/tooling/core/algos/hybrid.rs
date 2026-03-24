@@ -71,7 +71,7 @@ impl HybridRepr {
             self.domain.velocity_res.v3 as usize,
         ];
 
-        let cell_vol_6d = dx[0] * dx[1] * dx[2] * dv[0] * dv[1] * dv[2];
+        let cell_vol_6d = self.domain.cell_volume_6d();
 
         // 6D grid strides (row-major: x1, x2, x3, v1, v2, v3)
         let sv3 = 1usize;
@@ -302,8 +302,7 @@ impl PhaseSpaceRepr for HybridRepr {
     fn total_mass(&self) -> f64 {
         let sheet_density = self.sheet.compute_density();
         let grid_density = self.grid.compute_density();
-        let dx = self.domain.dx();
-        let cell_vol = dx[0] * dx[1] * dx[2];
+        let cell_vol = self.domain.cell_volume_3d();
 
         let total: f64 = self
             .mask

@@ -450,7 +450,7 @@ impl PhaseSpaceRepr for FlowMapRepr {
         let n_cells = nx * ny * nz;
         let dx = self.cached_dx;
         let lx = self.cached_lx;
-        let cell_vol = dx[0] * dx[1] * dx[2];
+        let cell_vol = self.domain.cell_volume_3d();
         let is_periodic = self.cached_is_periodic;
         let n_tracers = self.num_tracers();
 
@@ -631,8 +631,7 @@ impl PhaseSpaceRepr for FlowMapRepr {
     /// from their velocities and masses.
     fn moment(&self, position: &[f64; 3], order: usize) -> Tensor {
         let indices = self.tracers_in_cell(position);
-        let dx = self.cached_dx;
-        let cell_vol = dx[0] * dx[1] * dx[2];
+        let cell_vol = self.domain.cell_volume_3d();
 
         match order {
             0 => {
@@ -723,8 +722,7 @@ impl PhaseSpaceRepr for FlowMapRepr {
     /// This is a spatial-only approximation; the true C₂ involves the 6D distribution.
     fn casimir_c2(&self) -> f64 {
         let density = self.compute_density();
-        let dx = self.cached_dx;
-        let cell_vol = dx[0] * dx[1] * dx[2];
+        let cell_vol = self.domain.cell_volume_3d();
         density.data.iter().map(|&rho| rho * rho).sum::<f64>() * cell_vol
     }
 
@@ -852,7 +850,7 @@ impl PhaseSpaceRepr for FlowMapRepr {
         let total_6d = nx[0] * nx[1] * nx[2] * nv[0] * nv[1] * nv[2];
         let mut data = vec![0.0f64; total_6d];
 
-        let cell_vol_6d = dx[0] * dx[1] * dx[2] * dv[0] * dv[1] * dv[2];
+        let cell_vol_6d = d.cell_volume_6d();
         let is_periodic = self.cached_is_periodic;
 
         // Strides for row-major 6D: x1, x2, x3, v1, v2, v3
@@ -1169,8 +1167,7 @@ mod tests {
         let repr = gaussian_flow_map(&domain, 6, 6);
 
         let density = repr.compute_density();
-        let dx = domain.dx();
-        let cell_vol = dx[0] * dx[1] * dx[2];
+        let cell_vol = domain.cell_volume_3d();
 
         // Total mass from density field should match total_mass()
         let mass_from_density: f64 = density.data.iter().sum::<f64>() * cell_vol;

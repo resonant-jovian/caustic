@@ -21,6 +21,7 @@ use super::super::{
     solver::PoissonSolver,
     types::*,
 };
+use super::helpers;
 use crate::CausticError;
 
 use super::bug::{
@@ -370,13 +371,7 @@ impl TimeIntegrator for ParallelBugIntegrator {
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
-        let density = repr.compute_density();
-        let rho_max = density.data.iter().cloned().fold(0.0_f64, f64::max);
-        if rho_max <= 0.0 || self.g <= 0.0 {
-            return 1e10;
-        }
-        let t_dyn = 1.0 / (self.g * rho_max).sqrt();
-        cfl_factor * t_dyn
+        helpers::dynamical_timestep(repr, self.g, cfl_factor)
     }
 
     fn last_step_timings(&self) -> Option<&StepTimings> {

@@ -227,7 +227,7 @@ impl SheetTracker {
         let n_cells = nx * ny * nz;
         let dx = domain.dx();
         let lx = domain.lx();
-        let cell_vol = dx[0] * dx[1] * dx[2];
+        let cell_vol = domain.cell_volume_3d();
 
         let is_periodic = matches!(
             domain.spatial_bc,
@@ -490,8 +490,7 @@ impl PhaseSpaceRepr for SheetTracker {
 
     fn moment(&self, position: &[f64; 3], order: usize) -> Tensor {
         let indices = self.particles_in_cell(position);
-        let dx = self.cached_dx;
-        let cell_vol = dx[0] * dx[1] * dx[2];
+        let cell_vol = self.domain.cell_volume_3d();
 
         match order {
             0 => {
@@ -633,7 +632,7 @@ impl PhaseSpaceRepr for SheetTracker {
         let total_6d = nx[0] * nx[1] * nx[2] * nv[0] * nv[1] * nv[2];
         let mut data = vec![0.0f64; total_6d];
 
-        let cell_vol_6d = dx[0] * dx[1] * dx[2] * dv[0] * dv[1] * dv[2];
+        let cell_vol_6d = d.cell_volume_6d();
         let is_periodic = matches!(
             d.spatial_bc,
             super::super::init::domain::SpatialBoundType::Periodic
@@ -830,8 +829,7 @@ mod tests {
             p.x = [0.0, 0.0, 0.0];
         }
         let density = sheet.interpolate_density(&domain);
-        let dx = domain.dx();
-        let total: f64 = density.data.iter().sum::<f64>() * dx[0] * dx[1] * dx[2];
+        let total: f64 = density.data.iter().sum::<f64>() * domain.cell_volume_3d();
         // Total mass should equal particle_mass * n_particles
         let expected_mass = sheet.particle_mass * sheet.particles.len() as f64;
         assert!(
@@ -931,8 +929,7 @@ mod tests {
         let m = sheet.moment(&pos, 0);
         assert_eq!(m.rank, 0);
         // Density should be particle_mass / cell_volume for a single particle per cell
-        let dx = domain.dx();
-        let cell_vol = dx[0] * dx[1] * dx[2];
+        let cell_vol = domain.cell_volume_3d();
         let expected_rho = sheet.particle_mass / cell_vol;
         assert!(
             (m.data[0] - expected_rho).abs() / expected_rho < 1e-10,

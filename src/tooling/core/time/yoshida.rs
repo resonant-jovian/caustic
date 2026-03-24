@@ -22,6 +22,7 @@ use super::super::{
     solver::PoissonSolver,
     types::*,
 };
+use super::helpers;
 use crate::CausticError;
 
 /// Yoshida coefficient w1 = 1 / (2 - 2^(1/3)), the positive sub-step weight.
@@ -107,12 +108,7 @@ impl TimeIntegrator for YoshidaSplitting {
         }
 
         // Apply hypercollision damping after kick 1
-        if let Some(spectral) = repr
-            .as_any_mut()
-            .downcast_mut::<super::super::algos::spectral::SpectralV>()
-        {
-            spectral.apply_hypercollision(YOSHIDA_W1 * dt);
-        }
+        helpers::apply_hypercollision_if_spectral(repr, YOSHIDA_W1 * dt);
 
         // Substep 3: drift (w1+w0)·dt/2
         if let Some(ref p) = self.progress {
@@ -144,12 +140,7 @@ impl TimeIntegrator for YoshidaSplitting {
         }
 
         // Apply hypercollision damping after kick 2
-        if let Some(spectral) = repr
-            .as_any_mut()
-            .downcast_mut::<super::super::algos::spectral::SpectralV>()
-        {
-            spectral.apply_hypercollision(YOSHIDA_W0 * dt);
-        }
+        helpers::apply_hypercollision_if_spectral(repr, YOSHIDA_W0 * dt);
 
         // Substep 5: drift (w0+w1)·dt/2
         if let Some(ref p) = self.progress {
@@ -181,12 +172,7 @@ impl TimeIntegrator for YoshidaSplitting {
         }
 
         // Apply hypercollision damping after kick 3
-        if let Some(spectral) = repr
-            .as_any_mut()
-            .downcast_mut::<super::super::algos::spectral::SpectralV>()
-        {
-            spectral.apply_hypercollision(YOSHIDA_W1 * dt);
-        }
+        helpers::apply_hypercollision_if_spectral(repr, YOSHIDA_W1 * dt);
 
         // Substep 7: drift w1·dt/2
         if let Some(ref p) = self.progress {
@@ -218,13 +204,7 @@ impl TimeIntegrator for YoshidaSplitting {
 
     /// Estimate the maximum stable time step from the dynamical time t_dyn = 1/sqrt(G*rho_max).
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
-        let density = repr.compute_density();
-        let rho_max = density.data.iter().cloned().fold(0.0_f64, f64::max);
-        if rho_max <= 0.0 || self.g <= 0.0 {
-            return 1e10;
-        }
-        let t_dyn = 1.0 / (self.g * rho_max).sqrt();
-        cfl_factor * t_dyn
+        helpers::dynamical_timestep(repr, self.g, cfl_factor)
     }
 
     /// Return the timing breakdown from the most recent step.

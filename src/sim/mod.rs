@@ -20,8 +20,19 @@ use crate::tooling::core::{
     types::*,
 };
 
+/// Convert f64 to Decimal, returning `Decimal::ZERO` for unrepresentable values.
+///
+/// Shorthand for config/init code that doesn't need field-name logging.
+#[inline]
+pub fn dec(v: f64) -> Decimal {
+    Decimal::from_f64_retain(v).unwrap_or(Decimal::ZERO)
+}
+
 /// Convert f64 to Decimal with a warning on unrepresentable values (NaN, Inf, subnormal).
-fn f64_to_decimal(v: f64, field: &str) -> Decimal {
+///
+/// Logs a `tracing::warn!` and returns `Decimal::ZERO` for NaN, Inf, and
+/// subnormal inputs. Use the `_decimal()` builder variants for exact values.
+pub fn f64_to_decimal(v: f64, field: &str) -> Decimal {
     Decimal::from_f64_retain(v).unwrap_or_else(|| {
         tracing::warn!(
             "{field}({v}) is not representable as Decimal (NaN/Inf/subnormal); defaulting to 0. \

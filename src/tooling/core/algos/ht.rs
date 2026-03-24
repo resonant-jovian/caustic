@@ -2441,9 +2441,7 @@ impl PhaseSpaceRepr for HtTensor {
     }
 
     fn total_mass(&self) -> f64 {
-        let dx = self.domain.dx();
-        let dv = self.domain.dv();
-        let vol = dx[0] * dx[1] * dx[2] * dv[0] * dv[1] * dv[2];
+        let vol = self.domain.cell_volume_6d();
 
         // Contract all leaves with unit weights, propagate through tree
         let mut cvec: Vec<Vec<f64>> = Vec::with_capacity(6);
@@ -2460,9 +2458,7 @@ impl PhaseSpaceRepr for HtTensor {
     }
 
     fn casimir_c2(&self) -> f64 {
-        let dx = self.domain.dx();
-        let dv = self.domain.dv();
-        let vol = dx[0] * dx[1] * dx[2] * dv[0] * dv[1] * dv[2];
+        let vol = self.domain.cell_volume_6d();
         self.inner_product(self) * vol
     }
 
@@ -2481,9 +2477,7 @@ impl PhaseSpaceRepr for HtTensor {
             );
             return f64::NAN;
         }
-        let dx = self.domain.dx();
-        let dv = self.domain.dv();
-        let vol = dx[0] * dx[1] * dx[2] * dv[0] * dv[1] * dv[2];
+        let vol = self.domain.cell_volume_6d();
         let data = self.to_full();
         let total = data.len() as u64;
         let report_interval = (total / 100).max(1);
@@ -2587,8 +2581,7 @@ impl PhaseSpaceRepr for HtTensor {
     fn total_kinetic_energy(&self) -> Option<f64> {
         // Use tree contractions via compute_energy_density() instead of
         // materializing the full 6D grid (which exceeds memory for large grids).
-        let dx = self.domain.dx();
-        let dx3 = dx[0] * dx[1] * dx[2];
+        let dx3 = self.domain.cell_volume_3d();
         let energy_density = self.compute_energy_density();
         Some(energy_density.data.iter().sum::<f64>() * dx3)
     }
@@ -4115,8 +4108,7 @@ mod tests {
         assert!(any_positive, "density is all zero after drift-kick-drift");
 
         // Check mass is reasonable
-        let dx = domain.dx();
-        let dx3 = dx[0] * dx[1] * dx[2];
+        let dx3 = domain.cell_volume_3d();
         let total_rho: f64 = rho_ht.data.iter().sum::<f64>() * dx3;
         println!("slar_drift_kick_drift_ht: total density integral = {total_rho:.6}");
         assert!(total_rho > 0.0, "total density integral should be positive");

@@ -831,35 +831,25 @@ impl PhaseSpaceRepr for UniformGrid6D {
 
     /// Integrate f over the full 6D volume: M = sum(f) * dx^3 * dv^3. Parallel via rayon.
     fn total_mass(&self) -> f64 {
-        let dx = self.cached_dx;
-        let dv = self.cached_dv;
-        let dx3 = dx[0] * dx[1] * dx[2];
-        let dv3 = dv[0] * dv[1] * dv[2];
-        self.data.par_iter().sum::<f64>() * dx3 * dv3
+        let cell_vol = self.domain.cell_volume_6d();
+        self.data.par_iter().sum::<f64>() * cell_vol
     }
 
     /// Second Casimir invariant: C2 = integral(f^2) dx^3 dv^3. Parallel via rayon.
     fn casimir_c2(&self) -> f64 {
-        let dx = self.cached_dx;
-        let dv = self.cached_dv;
-        let dx3 = dx[0] * dx[1] * dx[2];
-        let dv3 = dv[0] * dv[1] * dv[2];
-        self.data.par_iter().map(|&f| f * f).sum::<f64>() * dx3 * dv3
+        let cell_vol = self.domain.cell_volume_6d();
+        self.data.par_iter().map(|&f| f * f).sum::<f64>() * cell_vol
     }
 
     /// Boltzmann entropy: S = -integral(f ln f) dx^3 dv^3, skipping cells with f <= 0.
     fn entropy(&self) -> f64 {
-        let dx = self.cached_dx;
-        let dv = self.cached_dv;
-        let dx3 = dx[0] * dx[1] * dx[2];
-        let dv3 = dv[0] * dv[1] * dv[2];
+        let cell_vol = self.domain.cell_volume_6d();
         self.data
             .par_iter()
             .filter(|&&f| f > 0.0)
             .map(|&f| -f * f.ln())
             .sum::<f64>()
-            * dx3
-            * dv3
+            * cell_vol
     }
 
     /// Count peaks in the v1-marginal distribution at each spatial cell (proxy for stream count).
@@ -927,10 +917,8 @@ impl PhaseSpaceRepr for UniformGrid6D {
     /// Kinetic energy T = 0.5 * integral(f * v^2) dx^3 dv^3 using a precomputed v^2 lookup table.
     fn total_kinetic_energy(&self) -> Option<f64> {
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
-        let dx = self.cached_dx;
         let dv = self.cached_dv;
-        let dx3 = dx[0] * dx[1] * dx[2];
-        let dv3 = dv[0] * dv[1] * dv[2];
+        let cell_vol = self.domain.cell_volume_6d();
         let lv = self.cached_lv;
 
         let n_spatial = nx1 * nx2 * nx3;
@@ -961,7 +949,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
             })
             .sum();
 
-        Some(0.5 * t * dx3 * dv3)
+        Some(0.5 * t * cell_vol)
     }
 
     /// Clone the full grid data into a [`PhaseSpaceSnapshot`] tagged with `time`.

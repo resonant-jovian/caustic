@@ -82,7 +82,7 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 pub(crate) mod sim;
 pub mod tooling;
 
-pub use sim::Simulation;
+pub use sim::{dec, f64_to_decimal, Simulation};
 pub use tooling::core::advecator::Advector;
 pub use tooling::core::conditions::ExitReason;
 pub use tooling::core::init::domain::{Domain, DomainBuilder};

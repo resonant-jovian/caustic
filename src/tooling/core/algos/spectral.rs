@@ -1055,8 +1055,7 @@ impl PhaseSpaceRepr for SpectralV {
     /// Since only the zeroth Hermite mode contributes to the velocity integral,
     /// M = sum_x a_{0,0,0}(x) * norm * dx^3.
     fn total_mass(&self) -> f64 {
-        let dx = self.domain.dx();
-        let dx3 = dx[0] * dx[1] * dx[2];
+        let dx3 = self.domain.cell_volume_3d();
         let n_modes3 = self.n_modes * self.n_modes * self.n_modes;
         let norm = self.density_normalization();
 
@@ -1074,8 +1073,7 @@ impl PhaseSpaceRepr for SpectralV {
     /// The sigma^3 factor comes from the change of variable v -> u = v/sigma
     /// and the fact that the psi_n are orthonormal in u-space.
     fn casimir_c2(&self) -> f64 {
-        let dx = self.domain.dx();
-        let dx3 = dx[0] * dx[1] * dx[2];
+        let dx3 = self.domain.cell_volume_3d();
         let sigma = self.velocity_scale;
         let n_modes3 = self.n_modes * self.n_modes * self.n_modes;
 
@@ -1090,8 +1088,7 @@ impl PhaseSpaceRepr for SpectralV {
     /// No closed form exists in Hermite space; we reconstruct f on a velocity quadrature
     /// grid and integrate numerically.
     fn entropy(&self) -> f64 {
-        let dx = self.domain.dx();
-        let dx3 = dx[0] * dx[1] * dx[2];
+        let dx3 = self.domain.cell_volume_3d();
         let lv = self.lv();
         let nv = self.domain.velocity_res.v1 as usize;
         let nv = nv.max(8); // at least 8 points for quadrature
@@ -1239,8 +1236,7 @@ impl PhaseSpaceRepr for SpectralV {
     /// So integral v_d^2 * psi_{m_d}(u_d) * psi_0(u_other) du^3 is nonzero only for
     /// specific mode indices. For simplicity, we compute via quadrature.
     fn total_kinetic_energy(&self) -> Option<f64> {
-        let dx = self.domain.dx();
-        let dx3 = dx[0] * dx[1] * dx[2];
+        let dx3 = self.domain.cell_volume_3d();
         let lv = self.lv();
         let nv = self.domain.velocity_res.v1 as usize;
         let nv = nv.max(8);

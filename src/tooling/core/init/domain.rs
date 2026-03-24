@@ -198,6 +198,21 @@ impl Domain {
         (dx, dv, lx, lv)
     }
 
+    /// Spatial cell volume dx1 * dx2 * dx3.
+    #[inline]
+    pub fn cell_volume_3d(&self) -> f64 {
+        let dx = self.cached_dx;
+        dx[0] * dx[1] * dx[2]
+    }
+
+    /// Full 6D phase-space cell volume dx1*dx2*dx3 * dv1*dv2*dv3.
+    #[inline]
+    pub fn cell_volume_6d(&self) -> f64 {
+        let dx = self.cached_dx;
+        let dv = self.cached_dv;
+        dx[0] * dx[1] * dx[2] * dv[0] * dv[1] * dv[2]
+    }
+
     /// Total number of 6D cells: Nx³ × Nv³.
     pub fn total_cells(&self) -> usize {
         (self.spatial_res.x1 as usize)

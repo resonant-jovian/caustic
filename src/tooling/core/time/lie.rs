@@ -18,6 +18,7 @@ use super::super::{
     solver::PoissonSolver,
     types::*,
 };
+use super::helpers;
 use crate::CausticError;
 
 /// First-order Lie operator splitting: drift(Δt) followed by kick(Δt).
@@ -69,12 +70,7 @@ impl TimeIntegrator for LieSplitting {
         advector.kick(repr, &accel, dt);
 
         // Apply hypercollision damping if the representation is SpectralV
-        if let Some(spectral) = repr
-            .as_any_mut()
-            .downcast_mut::<super::super::algos::spectral::SpectralV>()
-        {
-            spectral.apply_hypercollision(dt);
-        }
+        helpers::apply_hypercollision_if_spectral(repr, dt);
 
         // Compute end-of-step products for caller reuse
         let density = repr.compute_density();
@@ -89,13 +85,7 @@ impl TimeIntegrator for LieSplitting {
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
-        let density = repr.compute_density();
-        let rho_max = density.data.iter().cloned().fold(0.0_f64, f64::max);
-        if rho_max <= 0.0 || self.g <= 0.0 {
-            return 1e10;
-        }
-        let t_dyn = 1.0 / (self.g * rho_max).sqrt();
-        cfl_factor * t_dyn
+        helpers::dynamical_timestep(repr, self.g, cfl_factor)
     }
 
     fn set_progress(&mut self, progress: Arc<StepProgress>) {

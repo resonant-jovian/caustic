@@ -71,8 +71,7 @@ impl MacroMicroRepr {
         let default_temp = (lv[0] * lv[0] + lv[1] * lv[1] + lv[2] * lv[2]) / 9.0;
         let temperature = vec![default_temp; n_spatial];
 
-        let dx = domain.dx();
-        let dx3 = dx[0] * dx[1] * dx[2];
+        let dx3 = domain.cell_volume_3d();
         let total_mass = density.iter().sum::<f64>() * dx3;
 
         Self {
@@ -100,8 +99,7 @@ impl MacroMicroRepr {
         let density_field = self.inner.compute_density();
         self.density = density_field.data;
 
-        let dx = self.domain.dx();
-        let dx3 = dx[0] * dx[1] * dx[2];
+        let dx3 = self.domain.cell_volume_3d();
         self.total_mass_cached = self.density.iter().sum::<f64>() * dx3;
 
         // Recompute u and T from moments of inner repr at each spatial cell center.
@@ -184,15 +182,13 @@ impl PhaseSpaceRepr for MacroMicroRepr {
         // Approximate via density: sum rho^2 * dx^3.
         // The full C2 requires velocity integration of f^2; this is the
         // fluid-level approximation.
-        let dx = self.domain.dx();
-        let dx3 = dx[0] * dx[1] * dx[2];
+        let dx3 = self.domain.cell_volume_3d();
         self.density.par_iter().map(|&rho| rho * rho).sum::<f64>() * dx3
     }
 
     /// Fluid-level entropy: configurational (-integral rho ln rho) plus thermal (3/2 rho ln(2 pi e T)).
     fn entropy(&self) -> f64 {
-        let dx = self.domain.dx();
-        let dx3 = dx[0] * dx[1] * dx[2];
+        let dx3 = self.domain.cell_volume_3d();
 
         let n_spatial = self.n_spatial();
         let s_config: f64 = self
@@ -230,8 +226,7 @@ impl PhaseSpaceRepr for MacroMicroRepr {
 
     /// Kinetic energy from macro fields: bulk (1/2 rho |u|^2) plus thermal (3/2 rho T).
     fn total_kinetic_energy(&self) -> Option<f64> {
-        let dx = self.domain.dx();
-        let dx3 = dx[0] * dx[1] * dx[2];
+        let dx3 = self.domain.cell_volume_3d();
         let n_spatial = self.n_spatial();
 
         let energy: f64 = (0..n_spatial)

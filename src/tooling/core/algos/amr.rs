@@ -425,7 +425,7 @@ impl PhaseSpaceRepr for AmrGrid {
         let n_spatial = nx[0] * nx[1] * nx[2];
 
         // Spatial cell volume for normalization.
-        let dx3 = dx[0] * dx[1] * dx[2];
+        let dx3 = self.domain.cell_volume_3d();
 
         let leaves = self.root.collect_leaves();
         let rho = leaves
@@ -754,7 +754,7 @@ impl PhaseSpaceRepr for AmrGrid {
         let s_x2 = nx[2] * s_x3;
         let s_x1 = nx[1] * s_x2;
 
-        let uniform_vol = dx[0] * dx[1] * dx[2] * dv[0] * dv[1] * dv[2];
+        let uniform_vol = self.domain.cell_volume_6d();
 
         let leaves = self.root.collect_leaves();
         leaves

@@ -10,7 +10,6 @@
 //! When the representation is `SpectralV`, hypercollision damping is applied after the kick.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use super::super::{
     advecator::Advector,
@@ -20,6 +19,7 @@ use super::super::{
     solver::PoissonSolver,
     types::*,
 };
+use super::helpers;
 use crate::CausticError;
 
 /// Second-order symplectic time integrator via Strang splitting.
@@ -63,75 +63,46 @@ impl TimeIntegrator for StrangSplitting {
 
         if let Some(ref p) = self.progress {
             p.start_step();
-            p.set_phase(StepPhase::DriftHalf1);
-            p.set_sub_step(0, 5);
         }
+        helpers::report_phase!(self.progress, StepPhase::DriftHalf1, 0, 5);
 
         {
             let _s = tracing::info_span!("drift_half").entered();
-            let t0 = Instant::now();
-            advector.drift(repr, dt / 2.0);
-            timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+            helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / 2.0));
         }
 
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::PoissonSolve);
-            p.set_sub_step(1, 5);
-        }
+        helpers::report_phase!(self.progress, StepPhase::PoissonSolve, 1, 5);
 
         let accel = {
             let _s = tracing::info_span!("poisson_solve").entered();
-            let t0 = Instant::now();
-            let density = repr.compute_density();
-            let potential = solver.solve(&density, self.g);
-            let accel = solver.compute_acceleration(&potential);
-            timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
+            let (density, potential, accel) =
+                helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, solver, self.g));
+            let _ = (density, potential);
             accel
         };
 
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::Kick);
-            p.set_sub_step(2, 5);
-        }
+        helpers::report_phase!(self.progress, StepPhase::Kick, 2, 5);
 
         {
             let _s = tracing::info_span!("kick").entered();
-            let t0 = Instant::now();
-            advector.kick(repr, &accel, dt);
-            timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+            helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, dt));
         }
 
         // Apply hypercollision damping if the representation is SpectralV
-        if let Some(spectral) = repr
-            .as_any_mut()
-            .downcast_mut::<super::super::algos::spectral::SpectralV>()
-        {
-            spectral.apply_hypercollision(dt);
-        }
+        helpers::apply_hypercollision_if_spectral(repr, dt);
 
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::DriftHalf2);
-            p.set_sub_step(3, 5);
-        }
+        helpers::report_phase!(self.progress, StepPhase::DriftHalf2, 3, 5);
 
         {
             let _s = tracing::info_span!("drift_half").entered();
-            let t0 = Instant::now();
-            advector.drift(repr, dt / 2.0);
-            timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+            helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / 2.0));
         }
 
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::StepComplete);
-            p.set_sub_step(4, 5);
-        }
+        helpers::report_phase!(self.progress, StepPhase::StepComplete, 4, 5);
 
         // Compute end-of-step products for caller reuse
-        let t0 = Instant::now();
-        let density = repr.compute_density();
-        let potential = solver.solve(&density, self.g);
-        let acceleration = solver.compute_acceleration(&potential);
-        timings.density_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        let (density, potential, acceleration) =
+            helpers::time_ms!(timings, density_ms, helpers::solve_poisson(repr, solver, self.g));
 
         self.last_timings = timings;
 
@@ -144,13 +115,7 @@ impl TimeIntegrator for StrangSplitting {
 
     /// Estimate the maximum stable time step from the dynamical time t_dyn = 1/sqrt(G*rho_max).
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
-        let density = repr.compute_density();
-        let rho_max = density.data.iter().cloned().fold(0.0_f64, f64::max);
-        if rho_max <= 0.0 || self.g <= 0.0 {
-            return 1e10;
-        }
-        let t_dyn = 1.0 / (self.g * rho_max).sqrt();
-        cfl_factor * t_dyn
+        helpers::dynamical_timestep(repr, self.g, cfl_factor)
     }
 
     /// Return the timing breakdown from the most recent step.
