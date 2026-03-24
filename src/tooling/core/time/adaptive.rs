@@ -11,7 +11,6 @@
 //! Strang solution.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use super::super::{
     advecator::Advector,
@@ -174,51 +173,33 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
             })?;
 
             // --- Strang step: drift(dt/2) -> kick(dt) -> drift(dt/2) ---
-            if let Some(ref p) = self.progress {
-                p.set_phase(StepPhase::DriftHalf1);
-                p.set_sub_step(0, 7);
-            }
+            helpers::report_phase!(self.progress, StepPhase::DriftHalf1, 0, 7);
             {
                 let _s = tracing::info_span!("strang_drift_half").entered();
-                let t0 = Instant::now();
-                advector.drift(repr, dt_try / 2.0);
-                timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+                helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt_try / 2.0));
             }
 
-            if let Some(ref p) = self.progress {
-                p.set_phase(StepPhase::PoissonSolve);
-                p.set_sub_step(1, 7);
-            }
+            helpers::report_phase!(self.progress, StepPhase::PoissonSolve, 1, 7);
             let accel = {
                 let _s = tracing::info_span!("strang_poisson").entered();
-                let t0 = Instant::now();
-                let density = repr.compute_density();
-                let potential = solver.solve(&density, self.g);
-                let accel = solver.compute_acceleration(&potential);
-                timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
+                let (_density, _potential, accel) = helpers::time_ms!(
+                    timings,
+                    poisson_ms,
+                    helpers::solve_poisson(repr, solver, self.g)
+                );
                 accel
             };
 
-            if let Some(ref p) = self.progress {
-                p.set_phase(StepPhase::Kick);
-                p.set_sub_step(2, 7);
-            }
+            helpers::report_phase!(self.progress, StepPhase::Kick, 2, 7);
             {
                 let _s = tracing::info_span!("strang_kick").entered();
-                let t0 = Instant::now();
-                advector.kick(repr, &accel, dt_try);
-                timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+                helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, dt_try));
             }
 
-            if let Some(ref p) = self.progress {
-                p.set_phase(StepPhase::DriftHalf2);
-                p.set_sub_step(3, 7);
-            }
+            helpers::report_phase!(self.progress, StepPhase::DriftHalf2, 3, 7);
             {
                 let _s = tracing::info_span!("strang_drift_half").entered();
-                let t0 = Instant::now();
-                advector.drift(repr, dt_try / 2.0);
-                timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+                helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt_try / 2.0));
             }
 
             // Capture Strang result before overwriting with Lie step
@@ -229,31 +210,21 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
             // --- Lie step: drift(dt) -> kick(dt), from the saved initial state ---
             repr.load_snapshot(snap_for_lie)?;
 
-            if let Some(ref p) = self.progress {
-                p.set_phase(StepPhase::DriftHalf1);
-                p.set_sub_step(4, 7);
-            }
+            helpers::report_phase!(self.progress, StepPhase::DriftHalf1, 4, 7);
             {
                 let _s = tracing::info_span!("lie_drift").entered();
-                let t0 = Instant::now();
-                advector.drift(repr, dt_try);
-                timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+                helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt_try));
             }
 
-            if let Some(ref p) = self.progress {
-                p.set_phase(StepPhase::Kick);
-                p.set_sub_step(5, 7);
-            }
+            helpers::report_phase!(self.progress, StepPhase::Kick, 5, 7);
             {
                 let _s = tracing::info_span!("lie_kick").entered();
-                let t0 = Instant::now();
-                let density = repr.compute_density();
-                let potential = solver.solve(&density, self.g);
-                let accel = solver.compute_acceleration(&potential);
-                timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
-                let t0 = Instant::now();
-                advector.kick(repr, &accel, dt_try);
-                timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+                let (_density, _potential, accel) = helpers::time_ms!(
+                    timings,
+                    poisson_ms,
+                    helpers::solve_poisson(repr, solver, self.g)
+                );
+                helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, dt_try));
             }
 
             // --- Error estimation ---
@@ -262,10 +233,7 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
             })?;
             let err = Self::relative_error(&strang_snap.data, &lie_snap.data);
 
-            if let Some(ref p) = self.progress {
-                p.set_phase(StepPhase::Diagnostics);
-                p.set_sub_step(6, 7);
-            }
+            helpers::report_phase!(self.progress, StepPhase::Diagnostics, 6, 7);
 
             let (dt_new, accepted) = self.controller.step(dt_try, err);
             self.suggested_dt = Some(dt_new);
@@ -281,15 +249,10 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
             }
         }
 
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::StepComplete);
-        }
+        helpers::report_phase!(self.progress, StepPhase::StepComplete, 0, 0);
 
-        let t0 = Instant::now();
-        let density = repr.compute_density();
-        let potential = solver.solve(&density, self.g);
-        let acceleration = solver.compute_acceleration(&potential);
-        timings.density_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        let (density, potential, acceleration) =
+            helpers::time_ms!(timings, density_ms, helpers::solve_poisson(repr, solver, self.g));
 
         self.last_timings = timings;
 

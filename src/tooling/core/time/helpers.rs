@@ -73,7 +73,7 @@ macro_rules! time_ms {
 /// `report_phase!(self.progress, StepPhase::DriftHalf1, 0, 5);`
 macro_rules! report_phase {
     ($progress:expr, $phase:expr, $step:expr, $total:expr) => {
-        if let Some(ref p) = $progress {
+        if let Some(p) = &$progress {
             p.set_phase($phase);
             p.set_sub_step($step, $total);
         }

@@ -59,9 +59,8 @@ impl LawsonRkIntegrator {
         solver: &dyn PoissonSolver,
         g: f64,
     ) -> AccelerationField {
-        let density = repr.compute_density();
-        let potential = solver.solve(&density, g);
-        solver.compute_acceleration(&potential)
+        let (_density, _potential, accel) = helpers::solve_poisson(repr, solver, g);
+        accel
     }
 }
 
@@ -78,14 +77,11 @@ impl TimeIntegrator for LawsonRkIntegrator {
 
         if let Some(ref p) = self.progress {
             p.start_step();
-            p.set_phase(StepPhase::DriftHalf1);
-            p.set_sub_step(0, 7);
         }
+        helpers::report_phase!(self.progress, StepPhase::DriftHalf1, 0, 7);
 
         // Step 1: Exact half-drift (free-streaming, no CFL restriction)
-        let t0 = Instant::now();
-        advector.drift(repr, dt / 2.0);
-        timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / 2.0));
 
         // Save state after half-drift for RK4 stage resets
         let snap_after_drift = repr.to_snapshot(0.0).ok_or_else(|| {
@@ -94,83 +90,59 @@ impl TimeIntegrator for LawsonRkIntegrator {
 
         // Step 2: RK4 kick with 4 Poisson solves
         // Stage 1: evaluate acceleration at drifted state
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::PoissonSolve);
-            p.set_sub_step(1, 7);
-        }
-        let t0 = Instant::now();
-        let a1 = Self::compute_accel(repr, solver, self.g);
-        timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::report_phase!(self.progress, StepPhase::PoissonSolve, 1, 7);
+        let a1 = helpers::time_ms!(timings, poisson_ms, Self::compute_accel(repr, solver, self.g));
 
         // Stage 2: half-kick with a1, evaluate acceleration
-        if let Some(ref p) = self.progress {
-            p.set_sub_step(2, 7);
-        }
-        let t0 = Instant::now();
-        advector.kick(repr, &a1, dt / 2.0);
-        let a2 = Self::compute_accel(repr, solver, self.g);
-        timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::report_phase!(self.progress, StepPhase::PoissonSolve, 2, 7);
+        let a2 = helpers::time_ms!(timings, poisson_ms, {
+            advector.kick(repr, &a1, dt / 2.0);
+            Self::compute_accel(repr, solver, self.g)
+        });
 
         // Stage 3: restore, half-kick with a2, evaluate acceleration
-        if let Some(ref p) = self.progress {
-            p.set_sub_step(3, 7);
-        }
-        let t0 = Instant::now();
+        helpers::report_phase!(self.progress, StepPhase::PoissonSolve, 3, 7);
         let PhaseSpaceSnapshot { data, shape, time } = snap_after_drift;
-        repr.load_snapshot(PhaseSpaceSnapshot {
-            data: data.clone(),
-            shape,
-            time,
-        })?;
-        advector.kick(repr, &a2, dt / 2.0);
-        let a3 = Self::compute_accel(repr, solver, self.g);
-        timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        let a3 = helpers::time_ms!(timings, poisson_ms, {
+            repr.load_snapshot(PhaseSpaceSnapshot {
+                data: data.clone(),
+                shape,
+                time,
+            }).expect("Lawson-RK snapshot restore failed");
+            advector.kick(repr, &a2, dt / 2.0);
+            Self::compute_accel(repr, solver, self.g)
+        });
 
         // Stage 4: restore, full-kick with a3, evaluate acceleration
-        if let Some(ref p) = self.progress {
-            p.set_sub_step(4, 7);
-        }
-        let t0 = Instant::now();
-        repr.load_snapshot(PhaseSpaceSnapshot {
-            data: data.clone(),
-            shape,
-            time,
-        })?;
-        advector.kick(repr, &a3, dt);
-        let a4 = Self::compute_accel(repr, solver, self.g);
-        timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::report_phase!(self.progress, StepPhase::PoissonSolve, 4, 7);
+        let a4 = helpers::time_ms!(timings, poisson_ms, {
+            repr.load_snapshot(PhaseSpaceSnapshot {
+                data: data.clone(),
+                shape,
+                time,
+            }).expect("Lawson-RK snapshot restore failed");
+            advector.kick(repr, &a3, dt);
+            Self::compute_accel(repr, solver, self.g)
+        });
 
         // Apply RK4-weighted kick: (a1 + 2*a2 + 2*a3 + a4) / 6 * dt
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::Kick);
-            p.set_sub_step(5, 7);
-        }
-        let t0 = Instant::now();
+        helpers::report_phase!(self.progress, StepPhase::Kick, 5, 7);
         repr.load_snapshot(PhaseSpaceSnapshot { data, shape, time })?;
-        advector.kick(repr, &a1, dt / 6.0);
-        advector.kick(repr, &a2, dt / 3.0);
-        advector.kick(repr, &a3, dt / 3.0);
-        advector.kick(repr, &a4, dt / 6.0);
-        timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(timings, kick_ms, {
+            advector.kick(repr, &a1, dt / 6.0);
+            advector.kick(repr, &a2, dt / 3.0);
+            advector.kick(repr, &a3, dt / 3.0);
+            advector.kick(repr, &a4, dt / 6.0)
+        });
 
         // Step 3: Exact half-drift
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::DriftHalf2);
-            p.set_sub_step(6, 7);
-        }
-        let t0 = Instant::now();
-        advector.drift(repr, dt / 2.0);
-        timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::report_phase!(self.progress, StepPhase::DriftHalf2, 6, 7);
+        helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / 2.0));
 
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::StepComplete);
-        }
+        helpers::report_phase!(self.progress, StepPhase::StepComplete, 7, 7);
 
-        let t0 = Instant::now();
-        let density = repr.compute_density();
-        let potential = solver.solve(&density, self.g);
-        let acceleration = solver.compute_acceleration(&potential);
-        timings.density_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        let (density, potential, acceleration) =
+            helpers::time_ms!(timings, density_ms, helpers::solve_poisson(repr, solver, self.g));
 
         self.last_timings = timings;
 

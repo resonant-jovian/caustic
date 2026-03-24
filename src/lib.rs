@@ -111,7 +111,10 @@ pub use tooling::core::init::mergers::MergerIC;
 pub use tooling::core::init::stability::DiskStabilityIC;
 pub use tooling::core::init::tidal::TidalIC;
 pub use tooling::core::output::exit::standard::ExitEvaluator;
-pub use tooling::core::output::phasespace::{PhaseSpaceDiagnostics, field_energy_spectrum};
+pub use tooling::core::output::phasespace::{
+    PhaseSpaceDiagnostics, field_energy_spectrum, poisson_residual_l2,
+    potential_power_spectrum,
+};
 pub use tooling::core::poisson::fft::{FftIsolated, FftPoisson};
 pub use tooling::core::poisson::ht_poisson::HtPoisson;
 pub use tooling::core::poisson::multigrid::Multigrid;

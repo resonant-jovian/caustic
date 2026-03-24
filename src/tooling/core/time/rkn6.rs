@@ -14,7 +14,6 @@
 //! methods at the cost of roughly 3x more Poisson solves per time step.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use super::super::{
     advecator::Advector,
@@ -72,14 +71,9 @@ impl Rkn6Splitting {
         phase: StepPhase,
         sub: u8,
     ) {
-        if let Some(p) = progress {
-            p.set_phase(phase);
-            p.set_sub_step(sub, 19);
-        }
+        helpers::report_phase!(progress, phase, sub, 19);
         let _s = tracing::info_span!("rkn6_drift").entered();
-        let t0 = Instant::now();
-        advector.drift(repr, coeff);
-        timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(timings, drift_ms, advector.drift(repr, coeff));
     }
 
     /// Single kick sub-step (density → potential → acceleration → kick) with timing.
@@ -95,19 +89,11 @@ impl Rkn6Splitting {
         progress: &Option<Arc<StepProgress>>,
         sub: u8,
     ) {
-        if let Some(p) = progress {
-            p.set_phase(StepPhase::Kick);
-            p.set_sub_step(sub, 19);
-        }
+        helpers::report_phase!(progress, StepPhase::Kick, sub, 19);
         let _s = tracing::info_span!("rkn6_kick").entered();
-        let t0 = Instant::now();
-        let density = repr.compute_density();
-        let potential = solver.solve(&density, g);
-        let accel = solver.compute_acceleration(&potential);
-        timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
-        let t0 = Instant::now();
-        advector.kick(repr, &accel, coeff);
-        timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        let (_density, _potential, accel) =
+            helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, solver, g));
+        helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, coeff));
     }
 
     /// Execute one Yoshida 4th-order step with the given (scaled) time step.
@@ -126,102 +112,58 @@ impl Rkn6Splitting {
         total_sub: u8,
     ) {
         // Sub-step 1: drift w1·dt/2
-        if let Some(p) = progress {
-            p.set_phase(StepPhase::DriftHalf1);
-            p.set_sub_step(base_sub, total_sub);
-        }
+        helpers::report_phase!(progress, StepPhase::DriftHalf1, base_sub, total_sub);
         {
             let _s = tracing::info_span!("rkn6_drift").entered();
-            let t0 = Instant::now();
-            advector.drift(repr, YOSHIDA_W1 * dt / 2.0);
-            timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+            helpers::time_ms!(timings, drift_ms, advector.drift(repr, YOSHIDA_W1 * dt / 2.0));
         }
 
         // Sub-step 2: kick w1·dt
-        if let Some(p) = progress {
-            p.set_phase(StepPhase::Kick);
-            p.set_sub_step(base_sub + 1, total_sub);
-        }
+        helpers::report_phase!(progress, StepPhase::Kick, base_sub + 1, total_sub);
         {
             let _s = tracing::info_span!("rkn6_kick").entered();
-            let t0 = Instant::now();
-            let density = repr.compute_density();
-            let potential = solver.solve(&density, self.g);
-            let accel = solver.compute_acceleration(&potential);
-            timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
-            let t0 = Instant::now();
-            advector.kick(repr, &accel, YOSHIDA_W1 * dt);
-            timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+            let (_density, _potential, accel) =
+                helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, solver, self.g));
+            helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, YOSHIDA_W1 * dt));
         }
 
         // Sub-step 3: drift (w1+w0)·dt/2
-        if let Some(p) = progress {
-            p.set_phase(StepPhase::DriftHalf2);
-            p.set_sub_step(base_sub + 2, total_sub);
-        }
+        helpers::report_phase!(progress, StepPhase::DriftHalf2, base_sub + 2, total_sub);
         {
             let _s = tracing::info_span!("rkn6_drift").entered();
-            let t0 = Instant::now();
-            advector.drift(repr, (YOSHIDA_W1 + YOSHIDA_W0) * dt / 2.0);
-            timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+            helpers::time_ms!(timings, drift_ms, advector.drift(repr, (YOSHIDA_W1 + YOSHIDA_W0) * dt / 2.0));
         }
 
         // Sub-step 4: kick w0·dt
-        if let Some(p) = progress {
-            p.set_phase(StepPhase::Kick);
-            p.set_sub_step(base_sub + 3, total_sub);
-        }
+        helpers::report_phase!(progress, StepPhase::Kick, base_sub + 3, total_sub);
         {
             let _s = tracing::info_span!("rkn6_kick").entered();
-            let t0 = Instant::now();
-            let density = repr.compute_density();
-            let potential = solver.solve(&density, self.g);
-            let accel = solver.compute_acceleration(&potential);
-            timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
-            let t0 = Instant::now();
-            advector.kick(repr, &accel, YOSHIDA_W0 * dt);
-            timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+            let (_density, _potential, accel) =
+                helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, solver, self.g));
+            helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, YOSHIDA_W0 * dt));
         }
 
         // Sub-step 5: drift (w0+w1)·dt/2
-        if let Some(p) = progress {
-            p.set_phase(StepPhase::DriftHalf1);
-            p.set_sub_step(base_sub + 4, total_sub);
-        }
+        helpers::report_phase!(progress, StepPhase::DriftHalf1, base_sub + 4, total_sub);
         {
             let _s = tracing::info_span!("rkn6_drift").entered();
-            let t0 = Instant::now();
-            advector.drift(repr, (YOSHIDA_W0 + YOSHIDA_W1) * dt / 2.0);
-            timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+            helpers::time_ms!(timings, drift_ms, advector.drift(repr, (YOSHIDA_W0 + YOSHIDA_W1) * dt / 2.0));
         }
 
         // Sub-step 6: kick w1·dt
-        if let Some(p) = progress {
-            p.set_phase(StepPhase::Kick);
-            p.set_sub_step(base_sub + 5, total_sub);
-        }
+        helpers::report_phase!(progress, StepPhase::Kick, base_sub + 5, total_sub);
         {
             let _s = tracing::info_span!("rkn6_kick").entered();
-            let t0 = Instant::now();
-            let density = repr.compute_density();
-            let potential = solver.solve(&density, self.g);
-            let accel = solver.compute_acceleration(&potential);
-            timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
-            let t0 = Instant::now();
-            advector.kick(repr, &accel, YOSHIDA_W1 * dt);
-            timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+            let (_density, _potential, accel) =
+                helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, solver, self.g));
+            helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, YOSHIDA_W1 * dt));
         }
 
         // Sub-step 7: drift w1·dt/2
-        if let Some(p) = progress {
-            p.set_phase(StepPhase::DriftHalf2);
-            p.set_sub_step(base_sub + 6, total_sub);
-        }
+        helpers::report_phase!(progress, StepPhase::DriftHalf2, base_sub + 6, total_sub);
         {
             let _s = tracing::info_span!("rkn6_drift").entered();
-            let t0 = Instant::now();
-            advector.drift(repr, YOSHIDA_W1 * dt / 2.0);
-            timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+            helpers::time_ms!(timings, drift_ms, advector.drift(repr, YOSHIDA_W1 * dt / 2.0));
         }
     }
 }
@@ -455,16 +397,11 @@ impl TimeIntegrator for Rkn6Splitting {
             18,
         );
 
-        if let Some(ref p) = progress {
-            p.set_phase(StepPhase::StepComplete);
-        }
+        helpers::report_phase!(progress, StepPhase::StepComplete, 19, 19);
 
         // Compute end-of-step products for caller reuse
-        let t0 = Instant::now();
-        let density = repr.compute_density();
-        let potential = solver.solve(&density, self.g);
-        let acceleration = solver.compute_acceleration(&potential);
-        timings.density_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        let (density, potential, acceleration) =
+            helpers::time_ms!(timings, density_ms, helpers::solve_poisson(repr, solver, self.g));
 
         self.last_timings = timings;
 

@@ -13,7 +13,6 @@
 //! J. Comput. Appl. Math. 142 (2002), 313-330, method SRKN₆b.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use super::super::{
     advecator::Advector,
@@ -95,47 +94,29 @@ impl TimeIntegrator for BlanesMoanSplitting {
         // = 6 drifts interleaved with 5 kicks = 11 sub-steps.
         for i in 0..6 {
             // --- Drift a_i * dt ---
-            if let Some(ref p) = self.progress {
-                p.set_phase(StepPhase::DriftHalf1);
-                p.set_sub_step(2 * i as u8, n_sub);
-            }
+            helpers::report_phase!(self.progress, StepPhase::DriftHalf1, 2 * i as u8, n_sub);
             {
                 let _s = tracing::info_span!("bm4_drift", stage = i).entered();
-                let t0 = Instant::now();
-                advector.drift(repr, BM4_A[i] * dt);
-                timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+                helpers::time_ms!(timings, drift_ms, advector.drift(repr, BM4_A[i] * dt));
             }
 
             // --- Kick b_i * dt (5 kicks between 6 drifts) ---
             if i < 5 {
-                if let Some(ref p) = self.progress {
-                    p.set_phase(StepPhase::Kick);
-                    p.set_sub_step(2 * i as u8 + 1, n_sub);
-                }
+                helpers::report_phase!(self.progress, StepPhase::Kick, 2 * i as u8 + 1, n_sub);
                 {
                     let _s = tracing::info_span!("bm4_kick", stage = i).entered();
-                    let t0 = Instant::now();
-                    let density = repr.compute_density();
-                    let potential = solver.solve(&density, self.g);
-                    let accel = solver.compute_acceleration(&potential);
-                    timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
-                    let t0 = Instant::now();
-                    advector.kick(repr, &accel, BM4_B[i] * dt);
-                    timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+                    let (_density, _potential, accel) =
+                        helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, solver, self.g));
+                    helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, BM4_B[i] * dt));
                 }
             }
         }
 
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::StepComplete);
-        }
+        helpers::report_phase!(self.progress, StepPhase::StepComplete, n_sub, n_sub);
 
         // Compute end-of-step products for caller reuse
-        let t0 = Instant::now();
-        let density = repr.compute_density();
-        let potential = solver.solve(&density, self.g);
-        let acceleration = solver.compute_acceleration(&potential);
-        timings.density_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        let (density, potential, acceleration) =
+            helpers::time_ms!(timings, density_ms, helpers::solve_poisson(repr, solver, self.g));
 
         self.last_timings = timings;
 

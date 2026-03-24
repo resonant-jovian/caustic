@@ -12,7 +12,6 @@
 //! When the representation is `SpectralV`, hypercollision damping is applied after each kick.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use super::super::{
     advecator::Advector,
@@ -79,119 +78,72 @@ impl TimeIntegrator for YoshidaSplitting {
         //   → drift((w0+w1)·dt/2) → kick(w1·dt) → drift(w1·dt/2)
 
         // Substep 1: drift w1·dt/2
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::YoshidaDrift1);
-            p.set_sub_step(0, 7);
-        }
+        helpers::report_phase!(self.progress, StepPhase::YoshidaDrift1, 0, 7);
         {
             let _s = tracing::info_span!("yoshida_drift_1").entered();
-            let t0 = Instant::now();
-            advector.drift(repr, YOSHIDA_W1 * dt / 2.0);
-            timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+            helpers::time_ms!(timings, drift_ms, advector.drift(repr, YOSHIDA_W1 * dt / 2.0));
         }
 
         // Substep 2: kick w1·dt
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::YoshidaKick1);
-            p.set_sub_step(1, 7);
-        }
+        helpers::report_phase!(self.progress, StepPhase::YoshidaKick1, 1, 7);
         {
             let _s = tracing::info_span!("yoshida_kick_1").entered();
-            let t0 = Instant::now();
-            let density = repr.compute_density();
-            let potential = solver.solve(&density, self.g);
-            let accel = solver.compute_acceleration(&potential);
-            timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
-            let t0 = Instant::now();
-            advector.kick(repr, &accel, YOSHIDA_W1 * dt);
-            timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+            let (_density, _potential, accel) =
+                helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, solver, self.g));
+            helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, YOSHIDA_W1 * dt));
         }
 
         // Apply hypercollision damping after kick 1
         helpers::apply_hypercollision_if_spectral(repr, YOSHIDA_W1 * dt);
 
         // Substep 3: drift (w1+w0)·dt/2
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::YoshidaDrift2);
-            p.set_sub_step(2, 7);
-        }
+        helpers::report_phase!(self.progress, StepPhase::YoshidaDrift2, 2, 7);
         {
             let _s = tracing::info_span!("yoshida_drift_2").entered();
-            let t0 = Instant::now();
-            advector.drift(repr, (YOSHIDA_W1 + YOSHIDA_W0) * dt / 2.0);
-            timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+            helpers::time_ms!(timings, drift_ms, advector.drift(repr, (YOSHIDA_W1 + YOSHIDA_W0) * dt / 2.0));
         }
 
         // Substep 4: kick w0·dt
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::YoshidaKick2);
-            p.set_sub_step(3, 7);
-        }
+        helpers::report_phase!(self.progress, StepPhase::YoshidaKick2, 3, 7);
         {
             let _s = tracing::info_span!("yoshida_kick_2").entered();
-            let t0 = Instant::now();
-            let density = repr.compute_density();
-            let potential = solver.solve(&density, self.g);
-            let accel = solver.compute_acceleration(&potential);
-            timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
-            let t0 = Instant::now();
-            advector.kick(repr, &accel, YOSHIDA_W0 * dt);
-            timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+            let (_density, _potential, accel) =
+                helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, solver, self.g));
+            helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, YOSHIDA_W0 * dt));
         }
 
         // Apply hypercollision damping after kick 2
         helpers::apply_hypercollision_if_spectral(repr, YOSHIDA_W0 * dt);
 
         // Substep 5: drift (w0+w1)·dt/2
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::YoshidaDrift3);
-            p.set_sub_step(4, 7);
-        }
+        helpers::report_phase!(self.progress, StepPhase::YoshidaDrift3, 4, 7);
         {
             let _s = tracing::info_span!("yoshida_drift_3").entered();
-            let t0 = Instant::now();
-            advector.drift(repr, (YOSHIDA_W0 + YOSHIDA_W1) * dt / 2.0);
-            timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+            helpers::time_ms!(timings, drift_ms, advector.drift(repr, (YOSHIDA_W0 + YOSHIDA_W1) * dt / 2.0));
         }
 
         // Substep 6: kick w1·dt
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::YoshidaKick3);
-            p.set_sub_step(5, 7);
-        }
+        helpers::report_phase!(self.progress, StepPhase::YoshidaKick3, 5, 7);
         {
             let _s = tracing::info_span!("yoshida_kick_3").entered();
-            let t0 = Instant::now();
-            let density = repr.compute_density();
-            let potential = solver.solve(&density, self.g);
-            let accel = solver.compute_acceleration(&potential);
-            timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
-            let t0 = Instant::now();
-            advector.kick(repr, &accel, YOSHIDA_W1 * dt);
-            timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+            let (_density, _potential, accel) =
+                helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, solver, self.g));
+            helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, YOSHIDA_W1 * dt));
         }
 
         // Apply hypercollision damping after kick 3
         helpers::apply_hypercollision_if_spectral(repr, YOSHIDA_W1 * dt);
 
         // Substep 7: drift w1·dt/2
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::YoshidaDrift4);
-            p.set_sub_step(6, 7);
-        }
+        helpers::report_phase!(self.progress, StepPhase::YoshidaDrift4, 6, 7);
         {
             let _s = tracing::info_span!("yoshida_drift_4").entered();
-            let t0 = Instant::now();
-            advector.drift(repr, YOSHIDA_W1 * dt / 2.0);
-            timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+            helpers::time_ms!(timings, drift_ms, advector.drift(repr, YOSHIDA_W1 * dt / 2.0));
         }
 
         // Compute end-of-step products for caller reuse
-        let t0 = Instant::now();
-        let density = repr.compute_density();
-        let potential = solver.solve(&density, self.g);
-        let acceleration = solver.compute_acceleration(&potential);
-        timings.density_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        let (density, potential, acceleration) =
+            helpers::time_ms!(timings, density_ms, helpers::solve_poisson(repr, solver, self.g));
 
         self.last_timings = timings;
 

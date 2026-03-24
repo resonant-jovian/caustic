@@ -218,6 +218,55 @@ pub fn spectral_laplacian(density: &DensityField, dx: &[f64; 3]) -> DensityField
     }
 }
 
+/// In-place 3D complex-to-complex FFT via sequential 1D transforms along each axis.
+///
+/// Transforms `buffer` (row-major with shape `[nx, ny, nz]`) in place. Used by
+/// diagnostic functions (power spectrum, field energy spectrum) that don't need
+/// the parallelised variant in [`spectral_laplacian`].
+pub fn fft_3d_c2c_inplace(buffer: &mut [Complex64], shape: [usize; 3]) {
+    let [nx, ny, nz] = shape;
+    let mut planner = FftPlanner::new();
+
+    // Axis 2 (z) — contiguous
+    let fft_z = planner.plan_fft_forward(nz);
+    for ix in 0..nx {
+        for iy in 0..ny {
+            let start = ix * ny * nz + iy * nz;
+            fft_z.process(&mut buffer[start..start + nz]);
+        }
+    }
+
+    // Axis 1 (y) — strided
+    let fft_y = planner.plan_fft_forward(ny);
+    let mut temp = vec![Complex64::new(0.0, 0.0); ny];
+    for ix in 0..nx {
+        for iz in 0..nz {
+            for iy in 0..ny {
+                temp[iy] = buffer[ix * ny * nz + iy * nz + iz];
+            }
+            fft_y.process(&mut temp);
+            for iy in 0..ny {
+                buffer[ix * ny * nz + iy * nz + iz] = temp[iy];
+            }
+        }
+    }
+
+    // Axis 0 (x) — strided
+    let fft_x = planner.plan_fft_forward(nx);
+    let mut temp = vec![Complex64::new(0.0, 0.0); nx];
+    for iy in 0..ny {
+        for iz in 0..nz {
+            for ix in 0..nx {
+                temp[ix] = buffer[ix * ny * nz + iy * nz + iz];
+            }
+            fft_x.process(&mut temp);
+            for ix in 0..nx {
+                buffer[ix * ny * nz + iy * nz + iz] = temp[ix];
+            }
+        }
+    }
+}
+
 fn wavenumber(i: usize, n: usize, l: f64) -> f64 {
     use std::f64::consts::PI;
     let j = if i <= n / 2 {
