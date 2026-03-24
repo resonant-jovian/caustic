@@ -74,13 +74,14 @@ impl Simulation {
     pub fn run(&mut self) -> anyhow::Result<ExitPackage> {
         loop {
             if let Some(reason) = self.step()? {
-                let snapshot = self.repr.to_snapshot(self.time).unwrap_or_else(|| {
-                    PhaseSpaceSnapshot {
-                        data: vec![],
-                        shape: [0; 6],
-                        time: self.time,
-                    }
-                });
+                let snapshot =
+                    self.repr
+                        .to_snapshot(self.time)
+                        .unwrap_or_else(|| PhaseSpaceSnapshot {
+                            data: vec![],
+                            shape: [0; 6],
+                            time: self.time,
+                        });
                 let history = self.diagnostics.history.clone();
                 let wall_secs = self.start_time.elapsed().as_secs_f64();
                 return Ok(ExitPackage::assemble(

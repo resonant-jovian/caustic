@@ -51,7 +51,8 @@ impl TimeIntegrator for RkeiIntegrator {
     ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("rkei_advance").entered();
 
-        let snap_err = || CausticError::Solver("RKEI integrator requires to_snapshot support".into());
+        let snap_err =
+            || CausticError::Solver("RKEI integrator requires to_snapshot support".into());
 
         if let Some(ref p) = self.progress {
             p.start_step();
@@ -144,7 +145,11 @@ impl TimeIntegrator for RkeiIntegrator {
         let density = repr.compute_density();
         let potential = solver.solve(&density, self.g);
         let acceleration = solver.compute_acceleration(&potential);
-        Ok(StepProducts { density, potential, acceleration })
+        Ok(StepProducts {
+            density,
+            potential,
+            acceleration,
+        })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
@@ -194,7 +199,9 @@ mod tests {
         let advector = SemiLagrangian::new();
         let mut integrator = RkeiIntegrator::new(1.0);
 
-        integrator.advance(&mut grid, &poisson, &advector, 0.01).unwrap();
+        integrator
+            .advance(&mut grid, &poisson, &advector, 0.01)
+            .unwrap();
 
         // Should not contain NaN
         assert!(

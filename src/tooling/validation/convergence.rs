@@ -374,7 +374,9 @@ fn jeans_growth_rate_convergence() {
         let mut integrator = StrangSplitting::new(g);
 
         for _ in 0..n_steps {
-            integrator.advance(&mut grid, &poisson, &advector, dt).unwrap();
+            integrator
+                .advance(&mut grid, &poisson, &advector, dt)
+                .unwrap();
         }
 
         // Measure final amplitude

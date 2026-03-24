@@ -1,8 +1,15 @@
-//! FFT-based Poisson solvers. Periodic (FftPoisson) and isolated (FftIsolated via
-//! Hockney-Eastwood zero-padding method). Both O(N³ log N).
+//! FFT-based Poisson solvers for the gravitational Poisson equation nabla^2 Phi = 4*pi*G*rho.
+//!
+//! Provides two solvers, both O(N^3 log N):
+//! - [`FftPoisson`]: periodic boundary conditions using R2C/C2R real-to-complex FFTs
+//!   with Hermitian symmetry on the z-axis. Suited for cosmological periodic boxes.
+//! - [`FftIsolated`]: isolated (vacuum) boundary conditions via the Hockney-Eastwood
+//!   zero-padding method. Pads the domain to (2N)^3 and convolves with a precomputed
+//!   free-space Green's function. *Deprecated in favour of `VgfPoisson`.*
 //!
 //! All FFT plans are precomputed at construction time and cached for reuse
-//! across solves, avoiding redundant plan creation on each call.
+//! across solves, avoiding redundant plan creation on each call. Scratch buffers
+//! are similarly cached behind a `Mutex` to eliminate per-call heap allocations.
 
 use super::super::{init::domain::Domain, solver::PoissonSolver, types::*};
 use rayon::prelude::*;
@@ -31,11 +38,18 @@ fn fft_3d_c2c(
     super::fft_utils::fft_3d_c2c_scratch(buf, &mut scratch, shape, plans);
 }
 
-/// Periodic-BC Poisson solver. O(N³ log N). For cosmological boxes.
+/// Periodic-boundary-condition Poisson solver using 3D FFTs, O(N^3 log N).
 ///
+/// Solves nabla^2 Phi = 4*pi*G*rho spectrally: forward-transform rho, multiply by
+/// the Green's function -1/k^2, and inverse-transform to obtain Phi. The z-axis
+/// exploits Hermitian symmetry via R2C/C2R transforms; x and y use full C2C.
+///
+/// Best suited for cosmological periodic boxes where the domain wraps on all axes.
 /// FFT plans are precomputed at construction and reused across all `solve()` calls.
 pub struct FftPoisson {
+    /// Number of grid cells along each spatial axis [nx, ny, nz].
     pub shape: [usize; 3],
+    /// Grid spacing along each spatial axis [dx, dy, dz].
     pub dx: [f64; 3],
     // Cached R2C / C2R plans for z-axis (Hermitian-symmetric)
     r2c_z: Arc<dyn realfft::RealToComplex<f64>>,
@@ -51,6 +65,7 @@ pub struct FftPoisson {
 }
 
 impl FftPoisson {
+    /// Create a new periodic Poisson solver, precomputing all FFT plans for the given domain.
     pub fn new(domain: &Domain) -> Self {
         let shape = [
             domain.spatial_res.x1 as usize,
@@ -275,6 +290,10 @@ impl PoissonSolver for FftPoisson {
         self.progress = Some(p);
     }
 
+    /// Solve nabla^2 Phi = 4*pi*G*rho with periodic BC via spectral Green's function.
+    ///
+    /// Forward-transforms rho (R2C), divides by -k^2 in Fourier space (zeroing the DC
+    /// mode to remove the mean), and inverse-transforms (C2R) to obtain the potential.
     fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
         let _span = tracing::info_span!("fft_poisson_solve").entered();
         use std::f64::consts::PI;
@@ -328,6 +347,10 @@ impl PoissonSolver for FftPoisson {
         }
     }
 
+    /// Compute the gravitational acceleration g = -grad(Phi) via spectral differentiation.
+    ///
+    /// Forward-transforms Phi, multiplies each component by -i*k_j, and inverse-transforms
+    /// to obtain gx, gy, gz. All three components are computed in a single parallel pass.
     fn compute_acceleration(&self, potential: &PotentialField) -> AccelerationField {
         let [nx, ny, nz] = self.shape;
         let n_total = nx * ny * nz;
@@ -405,10 +428,14 @@ impl PoissonSolver for FftPoisson {
     }
 }
 
-/// Isolated-BC Poisson solver (Hockney-Eastwood zero-padding). Correct vacuum BC.
-/// Pads density into (2N)³ box, convolves with precomputed Green's function, extracts N³ solution.
+/// Isolated-boundary-condition Poisson solver using the Hockney-Eastwood zero-padding method.
 ///
-/// FFT plans are precomputed for the (2N)³ grid at construction time.
+/// Embeds the N^3 density field into a (2N)^3 periodic box, convolves with the precomputed
+/// Fourier-space free-space Green's function G(r) = -1/(4*pi*r), and extracts the N^3
+/// interior to obtain the potential with correct vacuum boundary conditions. O(N^3 log N).
+///
+/// FFT plans and the Green's function FFT are precomputed at construction time for the
+/// (2N)^3 grid. Acceleration is computed via second-order finite differences (not spectral).
 ///
 /// **Deprecated:** Prefer [`VgfPoisson`](super::vgf::VgfPoisson) which provides
 /// spectral-accuracy isolated boundary conditions with lower memory overhead.
@@ -417,7 +444,9 @@ impl PoissonSolver for FftPoisson {
     note = "use VgfPoisson for isolated BC; FftIsolated will be removed in a future release"
 )]
 pub struct FftIsolated {
+    /// Number of grid cells along each spatial axis [nx, ny, nz] (physical grid, not padded).
     pub shape: [usize; 3],
+    /// Grid spacing along each spatial axis [dx, dy, dz].
     pub dx: [f64; 3],
     /// Precomputed FFT of the free-space Green's function on the (2N)³ grid.
     green_hat: Vec<Complex<f64>>,
@@ -432,6 +461,10 @@ pub struct FftIsolated {
 
 #[allow(deprecated)]
 impl FftIsolated {
+    /// Create a new isolated-BC Poisson solver, precomputing FFT plans and the Green's function.
+    ///
+    /// Builds the free-space Green's function G(r) = -1/(4*pi*r) on the (2N)^3 padded grid
+    /// with minimum-image wrapping, then forward-transforms it for reuse in every `solve()` call.
     pub fn new(domain: &Domain) -> Self {
         use std::f64::consts::PI;
         let shape = [
@@ -515,6 +548,10 @@ impl PoissonSolver for FftIsolated {
         self.progress = Some(p);
     }
 
+    /// Solve nabla^2 Phi = 4*pi*G*rho with isolated BC via Hockney-Eastwood convolution.
+    ///
+    /// Zero-pads rho into (2N)^3, forward-FFTs, multiplies pointwise with the cached
+    /// Green's function, inverse-FFTs, and extracts the N^3 physical sub-grid.
     fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
         let _span = tracing::info_span!("fft_isolated_solve").entered();
         use std::f64::consts::PI;
@@ -598,6 +635,7 @@ impl PoissonSolver for FftIsolated {
         }
     }
 
+    /// Compute gravitational acceleration via second-order centered finite differences.
     fn compute_acceleration(&self, potential: &PotentialField) -> AccelerationField {
         super::utils::finite_difference_acceleration(potential, &self.dx)
     }

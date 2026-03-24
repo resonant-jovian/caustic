@@ -1,5 +1,11 @@
-//! Geometric multigrid solver for ∇²Φ = 4πGρ. Supports periodic and Dirichlet (isolated/open) BC.
-//! O(N³) per V-cycle, O(N³ log ε) total.
+//! Geometric multigrid V-cycle solver for the 3D Poisson equation ∇²Φ = 4πGρ.
+//!
+//! Uses red-black Gauss-Seidel smoothing (parallelised with rayon), full-weighting
+//! restriction, and trilinear prolongation on a standard 7-point stencil. Supports
+//! both periodic and Dirichlet (zero) boundary conditions. The coarsest grid is
+//! solved by many GS sweeps acting as a pseudo-direct solver.
+//!
+//! Complexity: O(N³) work per V-cycle, O(N³ log(1/ε)) total for tolerance ε.
 
 use rayon::prelude::*;
 use std::sync::Arc;
@@ -16,11 +22,17 @@ use super::super::{
 /// Uses V-cycles with red-black Gauss-Seidel smoothing, full-weighting restriction,
 /// and trilinear prolongation. Supports periodic and Dirichlet zero boundary conditions.
 pub struct Multigrid {
+    /// Number of multigrid levels (1 = single-grid, higher = deeper V-cycle).
     pub levels: usize,
+    /// Grid dimensions `[nx, ny, nz]`.
     pub shape: [usize; 3],
+    /// Cell spacings `[dx, dy, dz]`.
     pub dx: [f64; 3],
+    /// Spatial boundary condition (Periodic or Dirichlet zero).
     pub bc: SpatialBoundType,
+    /// Number of red-black Gauss-Seidel sweeps per pre/post-smoothing phase.
     pub n_smooth: usize,
+    /// Relative residual convergence tolerance for the iterative V-cycle loop.
     pub tolerance: f64,
     /// Shared progress state for intra-phase reporting.
     progress: Option<Arc<super::super::progress::StepProgress>>,
@@ -476,6 +488,7 @@ fn l2_norm(v: &[f64]) -> f64 {
 }
 
 impl PoissonSolver for Multigrid {
+    /// Register a shared progress handle for intra-step reporting to the TUI.
     fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
         self.progress = Some(p);
     }
@@ -545,7 +558,7 @@ impl PoissonSolver for Multigrid {
         }
     }
 
-    /// Compute gravitational acceleration g = -nabla Phi via finite differences.
+    /// Compute gravitational acceleration g = -∇Φ via second-order centered finite differences.
     fn compute_acceleration(&self, potential: &PotentialField) -> AccelerationField {
         super::utils::finite_difference_acceleration(potential, &self.dx)
     }

@@ -174,7 +174,21 @@ pub fn conservative_truncation(
     )
 }
 
-/// Extract macroscopic moments from a distribution function.
+/// Extract macroscopic moments (density, momentum, kinetic energy) from a distribution function.
+///
+/// Integrates f(x,v) over velocity space at each spatial cell to obtain the
+/// five conserved quantities: mass density, three momentum components, and
+/// kinetic energy density.
+///
+/// # Arguments
+/// * `f` - Distribution function values on 6D grid, shape [n_spatial * n_vel]
+/// * `spatial_shape` - Number of spatial cells [nx, ny, nz]
+/// * `velocity_shape` - Number of velocity cells [nv1, nv2, nv3]
+/// * `dv` - Velocity cell spacings [dv1, dv2, dv3]
+/// * `v_min` - Minimum velocity coordinates [v1_min, v2_min, v3_min]
+///
+/// # Returns
+/// One `MacroState` per spatial cell containing density, momentum, and energy.
 pub fn extract_moments(
     f: &[f64],
     spatial_shape: [usize; 3],

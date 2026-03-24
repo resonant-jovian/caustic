@@ -34,7 +34,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// factors so that each `solve()` only needs: from_dense → pad → FFT → multiply
 /// → sum → IFFT → truncate → extract.
 pub struct HtPoisson {
+    /// Spatial grid dimensions [N0, N1, N2] of the original (unpadded) domain.
     pub shape: [usize; 3],
+    /// Grid spacing [dx0, dx1, dx2] in each spatial direction.
     pub dx: [f64; 3],
     /// Exponential sum: 1/r ≈ Σ c_k exp(-α_k r²).
     exp_c: Vec<f64>,
@@ -52,7 +54,7 @@ pub struct HtPoisson {
     /// Hockney-Eastwood G(0) regularization value.
     g_origin: f64,
     /// Pre-computed: FFT of 1D Gaussian factors per exp-sum term per axis.
-    /// Indexed as green_factors[k][axis] = Vec<Complex64> of length padded_shape[axis].
+    /// Indexed as `green_factors[k][axis]`, each a `Vec<Complex64>` of length `padded_shape[axis]`.
     green_factors: Vec<[Vec<Complex64>; 3]>,
     /// Pre-computed prefactor = -1/(4π).
     prefactor: f64,
@@ -73,6 +75,17 @@ pub struct HtPoisson {
 }
 
 impl HtPoisson {
+    /// Create a new HtPoisson solver.
+    ///
+    /// Computes the Braess-Hackbusch exponential sum for 1/r, then precomputes
+    /// the per-term 1D FFT of each Gaussian factor and caches leaf FFT plans.
+    /// Subsequent `solve()` calls only perform the HT convolution pipeline.
+    ///
+    /// - `shape`: spatial grid dimensions [N0, N1, N2].
+    /// - `dx`: grid spacing in each direction.
+    /// - `exp_sum_accuracy`: target accuracy for the exponential sum.
+    /// - `tolerance`: truncation tolerance for HT compression of the density.
+    /// - `max_rank`: maximum HT rank after truncation.
     pub fn new(
         shape: [usize; 3],
         dx: [f64; 3],
@@ -160,6 +173,7 @@ impl HtPoisson {
         }
     }
 
+    /// Create from a [`Domain`](crate::tooling::core::init::domain::Domain), extracting shape and dx automatically.
     pub fn from_domain(
         domain: &crate::tooling::core::init::domain::Domain,
         exp_sum_accuracy: f64,
@@ -200,6 +214,11 @@ impl PoissonSolver for HtPoisson {
         self.progress = Some(p);
     }
 
+    /// Solve the Poisson equation via HT-format convolution with the exp-sum Green's function.
+    ///
+    /// Pipeline: zero-pad rho -> HT decomposition -> FFT leaves -> multiply each of R_G
+    /// Gaussian terms as rank-1 diagonal scaling -> sum -> IFFT leaves -> truncate ->
+    /// extract N^3 subgrid -> apply near-field corrections.
     fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
         let [nx, ny, nz] = self.shape;
         let [px, py, pz] = self.padded_shape;
@@ -323,6 +342,7 @@ impl PoissonSolver for HtPoisson {
         }
     }
 
+    /// Compute acceleration g = -grad(Phi) via second-order centered finite differences.
     fn compute_acceleration(&self, potential: &PotentialField) -> AccelerationField {
         finite_difference_acceleration(potential, &self.dx)
     }

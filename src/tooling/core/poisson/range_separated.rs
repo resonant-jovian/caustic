@@ -63,6 +63,8 @@ impl RangeSeparatedPoisson {
 }
 
 impl PoissonSolver for RangeSeparatedPoisson {
+    /// Solve for the gravitational potential by combining long-range (inner solver)
+    /// and short-range (direct summation within `r_s`) contributions.
     fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
         let [nx, ny, nz] = self.shape;
 
@@ -134,6 +136,7 @@ impl PoissonSolver for RangeSeparatedPoisson {
         }
     }
 
+    /// Compute the gravitational acceleration via second-order finite differences on the potential.
     fn compute_acceleration(&self, potential: &PotentialField) -> AccelerationField {
         finite_difference_acceleration(potential, &self.dx)
     }

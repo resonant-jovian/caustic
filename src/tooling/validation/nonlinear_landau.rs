@@ -92,7 +92,9 @@ fn nonlinear_landau_damping() {
     let n_steps = 100; // t_final = 10.0
 
     for _ in 0..n_steps {
-        integrator.advance(&mut grid, &poisson, &advector, dt).unwrap();
+        integrator
+            .advance(&mut grid, &poisson, &advector, dt)
+            .unwrap();
     }
 
     // Check no NaN

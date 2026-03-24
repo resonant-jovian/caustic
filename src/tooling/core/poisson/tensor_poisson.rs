@@ -32,7 +32,9 @@ use rustfft::num_complex::Complex64;
 /// so repeated solves only require the convolution pipeline.
 /// FFT plans are cached for reuse across `solve()` calls.
 pub struct TensorPoisson {
+    /// Spatial grid dimensions [N0, N1, N2] of the original (unpadded) domain.
     pub shape: [usize; 3],
+    /// Grid spacing [dx0, dx1, dx2] in each spatial direction.
     pub dx: [f64; 3],
     /// Precomputed FFT of Green's function on (2N)³ grid, stored as dense complex array.
     green_fft: Vec<Complex64>,
@@ -60,6 +62,15 @@ pub struct TensorPoisson {
 
 impl TensorPoisson {
     /// Create a new TensorPoisson solver.
+    ///
+    /// Builds the Braess-Hackbusch exponential sum approximation for 1/r,
+    /// constructs the Green's function on a (2N)^3 zero-padded grid, and
+    /// precomputes its 3D FFT plus cached forward/inverse FFT plans.
+    ///
+    /// - `shape`: spatial grid dimensions [N0, N1, N2].
+    /// - `dx`: grid spacing in each direction.
+    /// - `exp_sum_accuracy`: target accuracy for the exponential sum decomposition.
+    /// - `_tolerance`, `_max_rank`: reserved for future rank-adaptive modes.
     pub fn new(
         shape: [usize; 3],
         dx: [f64; 3],
@@ -151,7 +162,7 @@ impl TensorPoisson {
         }
     }
 
-    /// Create from pre-built domain parameters.
+    /// Create from a [`Domain`](crate::tooling::core::init::domain::Domain), extracting shape and dx automatically.
     pub fn from_domain(
         domain: &crate::tooling::core::init::domain::Domain,
         exp_sum_accuracy: f64,
@@ -186,6 +197,10 @@ impl PoissonSolver for TensorPoisson {
         self.progress = Some(p);
     }
 
+    /// Solve the Poisson equation using dense FFT convolution with the precomputed Green's function.
+    ///
+    /// Pipeline: zero-pad rho to (2N)^3 -> 3D FFT -> pointwise multiply by Green's FFT ->
+    /// 3D IFFT -> extract N^3 subgrid -> apply near-field corrections.
     fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
         let [nx, ny, nz] = self.shape;
         let [px, py, pz] = self.padded_shape;
@@ -292,6 +307,7 @@ impl PoissonSolver for TensorPoisson {
         }
     }
 
+    /// Compute acceleration g = -grad(Phi) via second-order centered finite differences.
     fn compute_acceleration(&self, potential: &PotentialField) -> AccelerationField {
         finite_difference_acceleration(potential, &self.dx)
     }

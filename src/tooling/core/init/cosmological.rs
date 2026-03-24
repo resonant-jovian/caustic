@@ -1,5 +1,14 @@
 //! Zel'dovich approximation initial conditions for cosmological structure formation.
-//! f is a 3D sheet in 6D phase space (cold dark matter).
+//!
+//! Implements the single-mode and multi-mode Zel'dovich approximation for
+//! cosmological pancake collapse. The distribution function represents cold
+//! dark matter as a thin 3D sheet in 6D phase space, with positions displaced
+//! from a uniform Lagrangian grid by the Zel'dovich displacement field s(q)
+//! and velocities set by the growing-mode relation v = aHfs.
+//!
+//! The single-mode variant (`ZeldovichSingleMode`) uses a sinusoidal
+//! perturbation with an analytic caustic time, making it ideal for
+//! convergence and validation tests against exact solutions.
 
 use super::super::types::PhaseSpaceSnapshot;
 use super::domain::Domain;
@@ -7,11 +16,15 @@ use rayon::prelude::*;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 
-/// Cosmological parameters for Friedmann background.
+/// Cosmological parameters for a flat Friedmann-Lemaitre background (LCDM).
 pub struct CosmologyParams {
+    /// Hubble constant H_0 in km/s/Mpc.
     pub h0: Decimal,
+    /// Present-day matter density parameter Omega_m.
     pub omega_m: Decimal,
+    /// Present-day dark energy density parameter Omega_Lambda.
     pub omega_lambda: Decimal,
+    /// Initial scale factor a(t_init).
     pub a_init: Decimal,
     // Cached f64 values for hot-path computation
     h0_f64: f64,
@@ -35,7 +48,9 @@ impl CosmologyParams {
         }
     }
 
-    /// Create from Decimal parameters (exact config).
+    /// Create from Decimal parameters for exact config round-tripping.
+    ///
+    /// Caches f64 conversions internally for hot-path computation.
     pub fn new_decimal(
         h0: Decimal,
         omega_m: Decimal,
@@ -55,20 +70,29 @@ impl CosmologyParams {
     }
 }
 
-/// 1D matter power spectrum P(k) for seeding perturbations.
+/// Tabulated 1D matter power spectrum P(k) for seeding density perturbations.
 pub struct PowerSpectrum {
-    /// (k, P(k)) pairs.
+    /// Wavenumber-power pairs (k, P(k)), sorted by increasing k.
     pub values: Vec<(f64, f64)>,
 }
 
-/// Zel'dovich pancake IC: cold dark matter sheet.
-/// f(x,v,t₀) = ρ̄·δ³(v − v₀(x)) where v₀ is the Zel'dovich velocity field.
+/// Multi-mode Zel'dovich pancake IC: cold dark matter sheet with random perturbations.
+///
+/// The exact distribution is f(x,v,t_0) = rho_bar * delta^3(v - v_0(x)) where v_0 is
+/// the Zel'dovich velocity field derived from a Harrison-Zel'dovich-like power spectrum.
+/// On a grid this is represented as a thin Gaussian in velocity centred on v_0(x).
 pub struct ZeldovichIC {
+    /// Mean comoving matter density rho_bar.
     pub mean_density: Decimal,
+    /// Hubble constant H_0 in km/s/Mpc.
     pub h0: Decimal,
+    /// Present-day matter density parameter Omega_m.
     pub omega_m: Decimal,
+    /// Present-day dark energy density parameter Omega_Lambda.
     pub omega_lambda: Decimal,
+    /// Initial cosmological scale factor a(t_init).
     pub scale_factor_init: Decimal,
+    /// RNG seed for Fourier-space Gaussian random field generation.
     pub random_seed: u64,
     // Cached f64 values for hot-path computation
     mean_density_f64: f64,
@@ -96,7 +120,9 @@ impl ZeldovichIC {
         }
     }
 
-    /// Create from Decimal parameters (exact config).
+    /// Create from Decimal parameters for exact config round-tripping.
+    ///
+    /// Caches f64 conversions internally for hot-path computation.
     pub fn new_decimal(
         mean_density: Decimal,
         h0: Decimal,
@@ -508,17 +534,29 @@ fn ifft_3d(data: &[rustfft::num_complex::Complex64], shape: [usize; 3]) -> Vec<f
     buf.iter().map(|c| c.re * scale).collect()
 }
 
-/// Simple single-mode Zel'dovich pancake IC for validation tests.
+/// Single-mode Zel'dovich pancake IC for validation tests.
+///
+/// Uses a sinusoidal perturbation v_0(x) = -A sin(k x_1) along the first
+/// spatial axis only. The analytic caustic time t_c = 1/(Ak) makes this
+/// ideal for convergence studies against exact solutions.
 pub struct ZeldovichSingleMode {
+    /// Mean comoving matter density rho_bar.
     pub mean_density: f64,
+    /// Perturbation amplitude A controlling the velocity field strength.
     pub amplitude: f64,
+    /// Perturbation wavenumber k (radians per unit length).
     pub wavenumber: f64,
+    /// Velocity-space Gaussian width sigma_v for the cold-stream representation.
     pub sigma_v: f64,
 }
 
 impl ZeldovichSingleMode {
-    /// Sample f(x,v) = ρ̄/(√(2π)σ_v)³ · exp(-(v - v₀(x))²/(2σ_v²))
-    /// where v₀(x) = (-A·sin(k·x₁), 0, 0)
+    /// Sample the single-mode Zel'dovich distribution onto a 6D grid.
+    ///
+    /// f(x,v) = rho_bar / ((2pi)^{3/2} sigma_v^3) exp(-(v - v_0(x))^2 / (2 sigma_v^2))
+    /// where v_0(x) = (-A sin(k x_1), 0, 0).
+    ///
+    /// An optional `progress` handle reports intra-step progress to the TUI.
     pub fn sample_on_grid(
         &self,
         domain: &Domain,

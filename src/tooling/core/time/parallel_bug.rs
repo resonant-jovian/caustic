@@ -58,17 +58,22 @@ impl Default for ParallelBugConfig {
     }
 }
 
-/// Parallel BUG integrator: computes all 6 leaf K-steps simultaneously.
+/// Parallel BUG integrator: computes all 6 leaf K-steps simultaneously via rayon.
 ///
-/// Falls back to standard Strang splitting for non-HT representations.
+/// Spatial leaves (x1, x2, x3) and velocity leaves (v1, v2, v3) are updated
+/// concurrently within each Strang sub-step, then applied respecting sibling
+/// constraints. Falls back to standard Strang splitting for non-HT representations.
 pub struct ParallelBugIntegrator {
+    /// BUG truncation, rank, rejection, and conservation settings.
     pub config: ParallelBugConfig,
+    /// Gravitational constant G.
     pub g: f64,
     last_timings: StepTimings,
     progress: Option<Arc<StepProgress>>,
 }
 
 impl ParallelBugIntegrator {
+    /// Create a new parallel BUG integrator with the given gravitational constant and config.
     pub fn new(g: f64, config: ParallelBugConfig) -> Self {
         Self {
             config,
@@ -357,7 +362,11 @@ impl TimeIntegrator for ParallelBugIntegrator {
 
         self.last_timings = timings;
 
-        Ok(StepProducts { density, potential, acceleration })
+        Ok(StepProducts {
+            density,
+            potential,
+            acceleration,
+        })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

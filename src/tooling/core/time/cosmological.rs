@@ -1,10 +1,14 @@
 //! Cosmological comoving-coordinate Strang splitting.
 //!
-//! Wraps StrangSplitting with scale-factor-dependent coefficients for
-//! cosmological simulations in an expanding universe:
-//! - Drift: v*dt/(a*m) instead of v*dt
-//! - Kick: acceleration *= a*m
-//! - Poisson: 4*pi*G*a^2*rho_bar*delta
+//! Adapts second-order Strang splitting for an expanding universe by
+//! incorporating scale-factor-dependent coefficients and Hubble drag.
+//! The scale factor a(t) is evolved via Euler integration each step.
+//!
+//! Coordinate modifications relative to standard Strang splitting:
+//! - Drift: displacement scaled by 1/a (comoving coordinates)
+//! - Kick: acceleration scaled by a (momentum in comoving frame)
+//! - Poisson: effective G_eff = G * a^2 for the comoving Poisson equation
+//! - CFL: time step also limited by Hubble time 0.1/H(t)
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -134,7 +138,11 @@ impl TimeIntegrator for CosmologicalStrangSplitting {
 
         self.last_timings = timings;
 
-        Ok(StepProducts { density, potential, acceleration })
+        Ok(StepProducts {
+            density,
+            potential,
+            acceleration,
+        })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

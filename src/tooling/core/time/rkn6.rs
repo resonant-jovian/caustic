@@ -1,15 +1,17 @@
-//! 6th-order symplectic integrator via triple-jump composition.
+//! 6th-order symplectic integrator via Suzuki triple-jump composition.
 //!
-//! Achieves 6th-order accuracy by composing three 4th-order Yoshida steps
-//! with Suzuki (1990) / Kahan & Li (1997) coefficients:
+//! Achieves 6th-order accuracy by composing three 4th-order Yoshida (Strang)
+//! blocks with Suzuki (1990) / Kahan & Li (1997) triple-jump coefficients:
 //!
-//!   S₆(Δt) = S₄(s₁·Δt) ∘ S₄(s₂·Δt) ∘ S₄(s₁·Δt)
+//!   S₆(Δt) = S₄(s₁·Δt) . S₄(s₂·Δt) . S₄(s₁·Δt)
 //!
-//! where s₁ = 1/(2 − 2^{1/5}), s₂ = 1 − 2·s₁.
-//!
-//! Each inner S₄ (Yoshida) step has 7 sub-steps (4 drifts + 3 kicks),
-//! giving 3 × 7 = 21 sub-steps total, reduced to 19 when adjacent
-//! boundary drifts are merged at composition seams.
+//! where s₁ = 1/(2 - 2^{1/5}), s₂ = 1 - 2*s₁. The negative middle
+//! coefficient s₂ cancels the 5th-order error term from the outer blocks.
+//! Each inner S₄ step is a standard Yoshida 4th-order splitting with 7
+//! sub-steps (4 drifts + 3 kicks), giving 3 x 7 = 21 sub-steps total,
+//! reduced to 19 when adjacent boundary drifts are merged at the two
+//! composition seams. Provides much tighter energy conservation than 4th-order
+//! methods at the cost of roughly 3x more Poisson solves per time step.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -36,16 +38,20 @@ const YOSHIDA_W0: f64 = -1.7024143839193153;
 
 /// 6th-order symplectic integrator (triple-jump composition of Yoshida).
 ///
-/// Higher accuracy than Yoshida alone (4th-order), at the cost of 3×
+/// Higher accuracy than Yoshida alone (4th-order), at the cost of 3x
 /// the sub-steps per time step. Useful when very tight energy conservation
 /// is required or when large time steps are desirable.
 pub struct Rkn6Splitting {
+    /// Gravitational constant G used in the Poisson solve.
     pub g: f64,
+    /// Timing breakdown from the most recent `advance` call.
     last_timings: StepTimings,
+    /// Optional lock-free progress reporter for TUI sub-step tracking.
     progress: Option<Arc<StepProgress>>,
 }
 
 impl Rkn6Splitting {
+    /// Creates a 6th-order triple-jump integrator with the given gravitational constant.
     pub fn new(g: f64) -> Self {
         Self {
             g,
@@ -461,7 +467,11 @@ impl TimeIntegrator for Rkn6Splitting {
 
         self.last_timings = timings;
 
-        Ok(StepProducts { density, potential, acceleration })
+        Ok(StepProducts {
+            density,
+            potential,
+            acceleration,
+        })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

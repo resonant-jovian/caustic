@@ -1,5 +1,15 @@
-//! Yoshida 4th-order symplectic integrator. Uses 3 Strang-like sub-steps with
-//! specific coefficients w0, w1.
+//! Yoshida fourth-order symplectic integrator for the Vlasov--Poisson system.
+//!
+//! Composes three Strang-like sub-steps with carefully chosen coefficients from
+//! Yoshida (1990) to cancel the leading third-order error term, yielding fourth-order
+//! global accuracy. The full step consists of 7 sub-steps (4 drifts + 3 kicks):
+//!   drift(w1*dt/2) -> kick(w1*dt) -> drift((w1+w0)*dt/2) -> kick(w0*dt)
+//!   -> drift((w0+w1)*dt/2) -> kick(w1*dt) -> drift(w1*dt/2)
+//! where w1 = 1/(2 - 2^(1/3)) and w0 = 1 - 2*w1.
+//!
+//! More expensive per step than [`StrangSplitting`](super::strang::StrangSplitting)
+//! (3 Poisson solves vs 1), but allows much larger time steps for the same error budget.
+//! When the representation is `SpectralV`, hypercollision damping is applied after each kick.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -14,20 +24,27 @@ use super::super::{
 };
 use crate::CausticError;
 
-/// Yoshida coefficient w1 = 1 / (2 − 2^(1/3)).
+/// Yoshida coefficient w1 = 1 / (2 - 2^(1/3)), the positive sub-step weight.
 const YOSHIDA_W1: f64 = 1.3512071919596578;
 
-/// Yoshida coefficient w0 = 1 − 2·w1.
+/// Yoshida coefficient w0 = 1 - 2*w1, the negative sub-step weight (note: w0 < 0).
 const YOSHIDA_W0: f64 = -1.7024143839193153;
 
-/// Yoshida 4th-order symplectic integrator.
+/// Fourth-order symplectic time integrator via Yoshida splitting.
+///
+/// Composes 7 sub-steps (4 drifts, 3 kicks with Poisson solves) using the Yoshida (1990)
+/// triple-jump coefficients to achieve O(dt^4) accuracy while preserving symplecticity.
 pub struct YoshidaSplitting {
+    /// Gravitational constant G used when solving the Poisson equation.
     pub g: f64,
+    /// Timing breakdown from the most recent step (drift, kick, Poisson, density).
     last_timings: StepTimings,
+    /// Optional progress reporter for intra-step phase tracking by the TUI.
     progress: Option<Arc<StepProgress>>,
 }
 
 impl YoshidaSplitting {
+    /// Create a new Yoshida splitting integrator with the given gravitational constant.
     pub fn new(g: f64) -> Self {
         Self {
             g,
@@ -38,6 +55,10 @@ impl YoshidaSplitting {
 }
 
 impl TimeIntegrator for YoshidaSplitting {
+    /// Advance the phase-space representation by one time step dt using Yoshida splitting.
+    ///
+    /// Executes the 7-sub-step sequence (4 drifts + 3 kick-with-Poisson-solve) and applies
+    /// SpectralV hypercollision damping after each kick. Returns end-of-step products.
     fn advance(
         &mut self,
         repr: &mut dyn PhaseSpaceRepr,
@@ -188,9 +209,14 @@ impl TimeIntegrator for YoshidaSplitting {
 
         self.last_timings = timings;
 
-        Ok(StepProducts { density, potential, acceleration })
+        Ok(StepProducts {
+            density,
+            potential,
+            acceleration,
+        })
     }
 
+    /// Estimate the maximum stable time step from the dynamical time t_dyn = 1/sqrt(G*rho_max).
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
         let density = repr.compute_density();
         let rho_max = density.data.iter().cloned().fold(0.0_f64, f64::max);
@@ -201,10 +227,12 @@ impl TimeIntegrator for YoshidaSplitting {
         cfl_factor * t_dyn
     }
 
+    /// Return the timing breakdown from the most recent step.
     fn last_step_timings(&self) -> Option<&StepTimings> {
         Some(&self.last_timings)
     }
 
+    /// Attach a shared progress reporter for intra-step phase tracking.
     fn set_progress(&mut self, progress: Arc<StepProgress>) {
         self.progress = Some(progress);
     }

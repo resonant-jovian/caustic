@@ -37,11 +37,11 @@ use super::lagrangian::{sl_shift_1d, sl_shift_1d_into};
 use super::mp7::mp7_shift_1d_into;
 use super::wpfc::{AdvectionScheme, wpfc_shift_1d_into, zhang_shu_limiter};
 use rayon::prelude::*;
-use rustfft::{Fft, FftPlanner};
 use rustfft::num_complex::Complex64;
-use std::sync::Arc;
+use rustfft::{Fft, FftPlanner};
 use std::any::Any;
 use std::cell::RefCell;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Velocity-space exponential filter configuration.

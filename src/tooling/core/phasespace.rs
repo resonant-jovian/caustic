@@ -90,7 +90,7 @@ pub trait PhaseSpaceRepr: Send + Sync {
     /// Extract a full 6D snapshot of the current state.
     ///
     /// Returns `None` if this representation cannot produce a dense 6D snapshot
-    /// (e.g. because materialization would exceed memory). Check [`can_materialize`]
+    /// (e.g. because materialization would exceed memory). Check [`can_materialize`](Self::can_materialize)
     /// before calling if the result is optional in your context.
     fn to_snapshot(&self, time: f64) -> Option<PhaseSpaceSnapshot> {
         let _ = time;

@@ -1,11 +1,16 @@
-//! Blanes-Moan 4th-order symplectic integrator (BM4).
+//! Blanes-Moan optimized 4th-order symplectic integrator (BM4, method SRKN₆b).
 //!
-//! 6-stage palindromic DKD composition with smaller error constants than
-//! Yoshida 4th-order (7 sub-steps). 11 sub-steps: 6 drifts + 5 kicks.
+//! A 6-stage palindromic drift-kick-drift (DKD) composition that achieves
+//! 4th-order accuracy with significantly smaller leading-order error constants
+//! than the classical Yoshida 4th-order splitting. The palindromic structure
+//! (a₁ a₂ a₃ a₃ a₂ a₁ for drifts, b₁ b₂ b₃ b₂ b₁ for kicks) ensures
+//! time-reversibility and symplecticity. Totals 11 sub-steps (6 drifts +
+//! 5 kicks) versus Yoshida's 7, trading more force evaluations per step for
+//! a lower error constant that allows larger stable time steps.
 //!
 //! Coefficients from Blanes & Moan, "Practical symplectic partitioned
-//! Runge-Kutta and Runge-Kutta-Nyström methods",
-//! J. Comput. Appl. Math. 142 (2002), 313–330, method SRKN₆b.
+//! Runge-Kutta and Runge-Kutta-Nystrom methods",
+//! J. Comput. Appl. Math. 142 (2002), 313-330, method SRKN₆b.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -50,12 +55,16 @@ const BM4_B: [f64; 5] = [
 /// it preferable when drift and kick evaluations are cheap relative to the
 /// accuracy gain.
 pub struct BlanesMoanSplitting {
+    /// Gravitational constant G used in the Poisson solve.
     pub g: f64,
+    /// Timing breakdown from the most recent `advance` call.
     last_timings: StepTimings,
+    /// Optional lock-free progress reporter for TUI sub-step tracking.
     progress: Option<Arc<StepProgress>>,
 }
 
 impl BlanesMoanSplitting {
+    /// Creates a Blanes-Moan 4th-order integrator with the given gravitational constant.
     pub fn new(g: f64) -> Self {
         Self {
             g,
@@ -129,7 +138,11 @@ impl TimeIntegrator for BlanesMoanSplitting {
 
         self.last_timings = timings;
 
-        Ok(StepProducts { density, potential, acceleration })
+        Ok(StepProducts {
+            density,
+            potential,
+            acceleration,
+        })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

@@ -161,13 +161,21 @@ impl RankAdaptiveController {
 /// Summary of rank-adaptive controller state for diagnostics.
 #[derive(Clone, Debug)]
 pub struct RankAdaptiveSummary {
+    /// Current truncation tolerance used for SVD compression.
     pub tolerance: f64,
+    /// Current observed maximum rank across all HT nodes.
     pub max_rank: usize,
+    /// Maximum allowed rank (memory budget).
     pub rank_budget: usize,
+    /// Whether the rank budget is currently saturated.
     pub budget_saturated: bool,
+    /// Relative mass conservation error from the most recent step.
     pub last_mass_error: f64,
+    /// Relative momentum conservation error from the most recent step.
     pub last_momentum_error: f64,
+    /// Relative energy conservation error from the most recent step.
     pub last_energy_error: f64,
+    /// Total number of time steps processed by the controller.
     pub total_steps: usize,
 }
 

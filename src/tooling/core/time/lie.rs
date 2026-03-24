@@ -1,5 +1,12 @@
-//! Lie (first-order) splitting: drift(Δt) → kick(Δt). Only 1st-order accurate.
-//! Use only for testing and comparison.
+//! Lie (first-order) operator splitting: drift(Δt) → kick(Δt).
+//!
+//! Applies spatial drift and velocity kick sequentially without the symmetric
+//! half-step structure of Strang splitting. This yields only 1st-order accuracy
+//! and does not preserve symplecticity, so it is not suitable for production runs.
+//!
+//! Primary use: as an error estimator in adaptive splitting schemes, where the
+//! difference between a Lie step and a Strang step provides a local truncation
+//! error estimate. Also useful as a baseline for convergence comparisons.
 
 use std::sync::Arc;
 
@@ -13,13 +20,19 @@ use super::super::{
 };
 use crate::CausticError;
 
-/// Lie (1st-order) operator splitting: drift(Δt) → kick(Δt).
+/// First-order Lie operator splitting: drift(Δt) followed by kick(Δt).
+///
+/// Not symplectic. Mainly used as a cheap error estimator for adaptive methods
+/// or as a convergence baseline.
 pub struct LieSplitting {
+    /// Gravitational constant G used in the Poisson solve.
     pub g: f64,
+    /// Optional lock-free progress reporter for TUI sub-step tracking.
     progress: Option<Arc<StepProgress>>,
 }
 
 impl LieSplitting {
+    /// Creates a Lie splitting integrator with the given gravitational constant.
     pub fn new(g: f64) -> Self {
         Self { g, progress: None }
     }
@@ -68,7 +81,11 @@ impl TimeIntegrator for LieSplitting {
         let potential = solver.solve(&density, self.g);
         let acceleration = solver.compute_acceleration(&potential);
 
-        Ok(StepProducts { density, potential, acceleration })
+        Ok(StepProducts {
+            density,
+            potential,
+            acceleration,
+        })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

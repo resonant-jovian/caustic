@@ -1,8 +1,14 @@
 //! Adaptive time stepping via embedded error estimation and PI control.
 //!
-//! Uses the Lie-in-Strang embedded pair: run both Lie (1st-order) and Strang
-//! (2nd-order) with the same dt. The L2 difference provides an error estimate.
-//! A PI controller selects dt_new to maintain the error near tolerance.
+//! Each step runs both a Strang (2nd-order) and a Lie (1st-order) split with
+//! the same timestep. The relative L2 difference between the two results
+//! serves as a local truncation error estimate. A PI controller then adjusts
+//! the next timestep to keep this error near a user-specified tolerance.
+//!
+//! Steps whose error exceeds the tolerance are rejected: the state is rolled
+//! back to the initial snapshot and retried with a smaller dt (up to
+//! `max_retries` attempts). The accepted result is always the higher-order
+//! Strang solution.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -36,6 +42,9 @@ pub struct PIController {
 }
 
 impl PIController {
+    /// Create a PI controller for a method of the given `order` and error `tolerance`.
+    ///
+    /// Gains `k_i` and `k_p` are set to standard values (0.3/p and 0.4/p).
     pub fn new(tolerance: f64, order: f64) -> Self {
         Self {
             tolerance,
@@ -87,8 +96,13 @@ impl PIController {
 }
 
 /// Adaptive Strang splitting with Lie-in-Strang embedded error estimation.
+///
+/// Compares Strang (2nd-order) and Lie (1st-order) results each step to
+/// estimate local error, then adapts dt via an internal PI controller.
 pub struct AdaptiveStrangSplitting {
+    /// Gravitational constant G used in Poisson solves.
     pub g: f64,
+    /// PI controller that converts error estimates into timestep adjustments.
     pub controller: PIController,
     suggested_dt: Option<f64>,
     last_timings: StepTimings,
@@ -98,6 +112,9 @@ pub struct AdaptiveStrangSplitting {
 }
 
 impl AdaptiveStrangSplitting {
+    /// Create an adaptive integrator with the given gravitational constant and error tolerance.
+    ///
+    /// The PI controller is initialised for a 2nd-order method. `max_retries` defaults to 5.
     pub fn new(g: f64, tolerance: f64) -> Self {
         Self {
             g,
@@ -148,8 +165,12 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
             // Take two snapshots of the initial state. PhaseSpaceSnapshot is not
             // Clone, so we need separate calls: one for the Lie step reload, one
             // for rollback on rejection.
-            let snap_for_lie = repr.to_snapshot(0.0).ok_or_else(|| CausticError::Solver("adaptive integrator requires to_snapshot support".into()))?;
-            let snap_for_rollback = repr.to_snapshot(0.0).ok_or_else(|| CausticError::Solver("adaptive integrator requires to_snapshot support".into()))?;
+            let snap_for_lie = repr.to_snapshot(0.0).ok_or_else(|| {
+                CausticError::Solver("adaptive integrator requires to_snapshot support".into())
+            })?;
+            let snap_for_rollback = repr.to_snapshot(0.0).ok_or_else(|| {
+                CausticError::Solver("adaptive integrator requires to_snapshot support".into())
+            })?;
 
             // --- Strang step: drift(dt/2) -> kick(dt) -> drift(dt/2) ---
             if let Some(ref p) = self.progress {
@@ -200,7 +221,9 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
             }
 
             // Capture Strang result before overwriting with Lie step
-            let strang_snap = repr.to_snapshot(0.0).ok_or_else(|| CausticError::Solver("adaptive integrator requires to_snapshot support".into()))?;
+            let strang_snap = repr.to_snapshot(0.0).ok_or_else(|| {
+                CausticError::Solver("adaptive integrator requires to_snapshot support".into())
+            })?;
 
             // --- Lie step: drift(dt) -> kick(dt), from the saved initial state ---
             repr.load_snapshot(snap_for_lie)?;
@@ -233,7 +256,9 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
             }
 
             // --- Error estimation ---
-            let lie_snap = repr.to_snapshot(0.0).ok_or_else(|| CausticError::Solver("adaptive integrator requires to_snapshot support".into()))?;
+            let lie_snap = repr.to_snapshot(0.0).ok_or_else(|| {
+                CausticError::Solver("adaptive integrator requires to_snapshot support".into())
+            })?;
             let err = Self::relative_error(&strang_snap.data, &lie_snap.data);
 
             if let Some(ref p) = self.progress {
@@ -267,7 +292,11 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
 
         self.last_timings = timings;
 
-        Ok(StepProducts { density, potential, acceleration })
+        Ok(StepProducts {
+            density,
+            potential,
+            acceleration,
+        })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

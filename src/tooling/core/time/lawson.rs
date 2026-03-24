@@ -1,13 +1,14 @@
-//! Lawson-RK integrator: exact free-streaming + RK4 gravity kick.
+//! Lawson-RK integrator: exact free-streaming propagation with RK4 gravity kicks.
 //!
-//! Removes the linear free-streaming CFL constraint by solving
-//! ∂f/∂t + v·∇ₓf = 0 via semi-Lagrangian advection (stable at any
-//! Courant number), then applies 4th-order Runge-Kutta sub-stepping
-//! to the nonlinear gravity term with 4 Poisson solves per step.
+//! The free-streaming (drift) part of the Vlasov equation is solved exactly
+//! via semi-Lagrangian advection, which is unconditionally stable regardless
+//! of the spatial Courant number. This eliminates the often-restrictive
+//! spatial CFL constraint v_max * dt / dx that limits standard Strang
+//! splitting. The remaining nonlinear gravity term is then integrated with
+//! classical 4th-order Runge-Kutta, requiring 4 Poisson solves per step.
 //!
-//! The effective CFL constraint is determined solely by the velocity-space
-//! advection: a_max · dt / dv, typically less restrictive than the spatial
-//! CFL v_max · dt / dx that limits standard Strang splitting.
+//! The only CFL restriction comes from velocity-space advection:
+//! a_max * dt / dv, which is typically much less restrictive.
 //!
 //! Best suited for `UniformGrid6D` and `SpectralV` representations.
 //! Not recommended for HT (use BUG-based integrators instead).
@@ -31,13 +32,18 @@ use super::super::{
 use crate::CausticError;
 
 /// Lawson-RK integrator: exact drift + RK4 gravity kick.
+///
+/// Wraps each step in a Strang-style drift/2 -- RK4 kick -- drift/2 sequence,
+/// where the drift is solved exactly and the kick uses four Poisson solves.
 pub struct LawsonRkIntegrator {
+    /// Gravitational constant G used in Poisson solves.
     pub g: f64,
     last_timings: StepTimings,
     progress: Option<Arc<StepProgress>>,
 }
 
 impl LawsonRkIntegrator {
+    /// Create a Lawson-RK integrator with the given gravitational constant.
     pub fn new(g: f64) -> Self {
         Self {
             g,
@@ -81,7 +87,9 @@ impl TimeIntegrator for LawsonRkIntegrator {
         timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
 
         // Save state after half-drift for RK4 stage resets
-        let snap_after_drift = repr.to_snapshot(0.0).ok_or_else(|| CausticError::Solver("Lawson-RK integrator requires to_snapshot support".into()))?;
+        let snap_after_drift = repr.to_snapshot(0.0).ok_or_else(|| {
+            CausticError::Solver("Lawson-RK integrator requires to_snapshot support".into())
+        })?;
 
         // Step 2: RK4 kick with 4 Poisson solves
         // Stage 1: evaluate acceleration at drifted state
@@ -165,7 +173,11 @@ impl TimeIntegrator for LawsonRkIntegrator {
 
         self.last_timings = timings;
 
-        Ok(StepProducts { density, potential, acceleration })
+        Ok(StepProducts {
+            density,
+            potential,
+            acceleration,
+        })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

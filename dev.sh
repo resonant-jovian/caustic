@@ -6,7 +6,7 @@ set -euo pipefail
 #
 # Usage: ./dev.sh <command> [flags]
 #
-# Commands: test, bench, profile, build, lint, clean, info, help
+# Commands: run, test, bench, profile, build, lint, clean, info, help
 # ══════════════════════════════════════════════════════════════════════════════
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -598,17 +598,76 @@ Flags:
 EOF
 }
 
+# ── run ──────────────────────────────────────────────────────────────────────
+
+cmd_run() {
+    local profile=""
+    local features=""
+    local cargo_args=()
+    local passthrough=()
+    local seen_dashdash=false
+
+    while [[ $# -gt 0 ]]; do
+        if $seen_dashdash; then
+            passthrough+=("$1"); shift; continue
+        fi
+        case "$1" in
+            --)           seen_dashdash=true ;;
+            --release)    profile="release" ;;
+            --fast)
+                if [[ "$PROJECT" == "phasma" ]]; then
+                    profile="fast-release"
+                else
+                    profile="release"
+                fi
+                ;;
+            --profiling)  profile="profiling" ;;
+            --features)   shift; features="$1" ;;
+            --help|-h)    cmd_run_help; return ;;
+            *)            passthrough+=("$1") ;;
+        esac
+        shift
+    done
+
+    [[ -n "$profile" ]]  && cargo_args+=(--profile "$profile")
+    [[ -n "$features" ]] && cargo_args+=(--features "$features")
+
+    hdr "run $PROJECT ${profile:+($profile)}"
+    log "cargo run ${cargo_args[*]} -- ${passthrough[*]}"
+    cargo run "${cargo_args[@]}" -- "${passthrough[@]}"
+}
+
+cmd_run_help() {
+    cat <<'EOF'
+Usage: ./dev.sh run [flags] [-- program-args...]
+
+Flags:
+  --release       release profile
+  --fast          fast-release (phasma: thin LTO; caustic: release)
+  --profiling     release + debug symbols
+  --features <f>  comma-separated features
+
+Everything after -- is passed to the binary.
+
+Examples:
+  ./dev.sh run -- --config runs/plummer.toml --run
+  ./dev.sh run --release -- --config runs/plummer.toml --batch
+  ./dev.sh run -- --wizard
+EOF
+}
+
 # ── lint ─────────────────────────────────────────────────────────────────────
 
 cmd_lint() {
     local fix=false
-    local run_all=false
+    local skip_sibling=false
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --fix)     fix=true ;;
-            --all)     run_all=true ;;
-            --help|-h) cmd_lint_help; return ;;
+            --fix)          fix=true ;;
+            --all)          ;; # kept for compat, but sibling is now automatic
+            --only)         skip_sibling=true ;;
+            --help|-h)      cmd_lint_help; return ;;
         esac
         shift
     done
@@ -618,19 +677,21 @@ cmd_lint() {
     if $fix; then
         log "cargo clippy --fix --allow-dirty"
         cargo clippy --fix --allow-dirty
-        log "cargo fmt"
-        cargo fmt
     else
         log "cargo clippy"
         cargo clippy
-        log "cargo fmt --check"
-        cargo fmt --check
     fi
-    ok "lint passed"
 
-    if $run_all; then
+    log "cargo fmt"
+    cargo fmt
+    log "cargo fmt --check"
+    cargo fmt --check
+    ok "lint $PROJECT passed"
+
+    # Auto-lint sibling if present
+    if ! $skip_sibling && [[ -d "$SIBLING_DIR" ]] && [[ -f "$SIBLING_DIR/dev.sh" ]]; then
         hdr "lint $SIBLING"
-        run_in_sibling ./dev.sh lint $($fix && echo "--fix")
+        run_in_sibling ./dev.sh lint --only $($fix && echo "--fix")
     fi
 }
 
@@ -639,8 +700,12 @@ cmd_lint_help() {
 Usage: ./dev.sh lint [flags]
 
 Flags:
-  --fix   apply clippy fixes and format code
-  --all   lint both projects
+  --fix    apply clippy fixes
+  --only   lint only this project (skip sibling)
+  --all    (compat) same as default — sibling is auto-detected
+
+Lint always runs: clippy, cargo fmt (apply), cargo fmt --check (verify).
+Automatically lints sibling project if found at ../<sibling>/.
 EOF
 }
 
@@ -859,6 +924,10 @@ ${BOLD}Usage:${RESET} ./dev.sh <command> [flags]
 ${BOLD}Commands:${RESET}
   ${CYAN}doctor${RESET}     check prerequisites, show install commands for missing tools
 
+  ${CYAN}run${RESET}        build and run the binary
+               --release  --fast  --profiling  --features <f>
+               [-- program-args...]
+
   ${CYAN}test${RESET}       run tests
                --all  --release  --debug  --ignored  --include-ignored
                --filter <pattern>  --threads <n>
@@ -873,8 +942,8 @@ ${BOLD}Commands:${RESET}
   ${CYAN}build${RESET}      build project
                --release  --fast  --profiling  --features <f>  --all
 
-  ${CYAN}lint${RESET}       clippy + fmt
-               --fix  --all
+  ${CYAN}lint${RESET}       clippy + fmt (auto-lints sibling if found)
+               --fix  --only
 
   ${CYAN}clean${RESET}      clean build artifacts
                --all  --profiles
@@ -885,6 +954,7 @@ ${BOLD}Commands:${RESET}
 
 ${BOLD}Examples:${RESET}
   ./dev.sh doctor                      # check all prerequisites
+  ./dev.sh run -- --config run.toml    # build & run with config
   ./dev.sh test                        # default tests for this project
   ./dev.sh test --all --ignored        # all tests including #[ignore], both projects
   ./dev.sh bench --save v1             # save criterion baseline
@@ -910,6 +980,7 @@ command="$1"; shift
 
 case "$command" in
     doctor)  cmd_doctor ;;
+    run)     cmd_run "$@" ;;
     test)    cmd_test "$@" ;;
     bench)   cmd_bench "$@" ;;
     profile) cmd_profile "$@" ;;

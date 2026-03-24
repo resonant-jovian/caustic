@@ -38,19 +38,28 @@ const ROOT_3D: usize = 4;
 /// A node in the 3D HT dimension tree. Same enum variants as 6D HtNode.
 #[derive(Clone)]
 pub enum HtNode3D {
-    /// Leaf node: basis matrix U ∈ ℝ^{n × k}.
-    Leaf { dim: usize, frame: Mat<f64> },
-    /// Interior node: transfer tensor B ∈ ℝ^{k_t × k_left × k_right} (flat, row-major).
+    /// Leaf node: basis matrix U ∈ R^{n x k} for one spatial dimension.
+    Leaf {
+        /// Dimension index (0 = x1, 1 = x2, 2 = x3).
+        dim: usize,
+        /// Orthonormal basis matrix, shape (n, k) where n = grid points, k = rank.
+        frame: Mat<f64>,
+    },
+    /// Interior node: transfer tensor B ∈ R^{k_t x k_left x k_right} stored flat in row-major order.
     Interior {
+        /// Index of the left child node in the nodes array.
         left: usize,
+        /// Index of the right child node in the nodes array.
         right: usize,
+        /// Flattened transfer tensor of size k_t * k_left * k_right.
         transfer: Vec<f64>,
-        /// [k_t, k_left, k_right]
+        /// Rank triple [k_t, k_left, k_right].
         ranks: [usize; 3],
     },
 }
 
 impl HtNode3D {
+    /// Return the rank of this node (number of columns for leaves, parent rank for interiors).
     #[inline]
     pub fn rank(&self) -> usize {
         match self {
@@ -60,11 +69,18 @@ impl HtNode3D {
     }
 }
 
-/// 3D Hierarchical Tucker tensor for spatial scalar fields.
+/// 3D Hierarchical Tucker tensor for spatial scalar fields (density, potential).
+///
+/// Stores a 3D tensor in compressed HT format with 5 nodes: 3 leaves (one per
+/// spatial dimension) and 2 interior/root nodes. Memory scales as O(n*k^2 + k^3)
+/// instead of O(n^3) for the dense representation.
 #[derive(Clone)]
 pub struct HtTensor3D {
+    /// All 5 nodes in the dimension tree (indices 0-2: leaves, 3: interior, 4: root).
     pub nodes: Vec<HtNode3D>,
+    /// Grid dimensions [n_x1, n_x2, n_x3].
     pub shape: [usize; 3],
+    /// Cell spacings [dx1, dx2, dx3].
     pub dx: [f64; 3],
 }
 
@@ -335,7 +351,7 @@ impl HtTensor3D {
         Self { nodes, shape, dx }
     }
 
-    /// Construct from a DensityField.
+    /// Construct an HT3D tensor from a `DensityField` via HSVD.
     pub fn from_density(
         density: &super::super::types::DensityField,
         dx: [f64; 3],
@@ -345,7 +361,11 @@ impl HtTensor3D {
         Self::from_dense(&density.data, density.shape, dx, tolerance, max_rank)
     }
 
-    /// Build HT3D by sampling a function f(i0, i1, i2) -> f64 via fiber-based HTACA.
+    /// Build an HT3D by sampling a function f(i0, i1, i2) -> f64 via fiber-based HTACA.
+    ///
+    /// Avoids materializing the full dense array. Leaf frames are built from random
+    /// fiber samples with column-pivoted QR, then transfer tensors are computed
+    /// by projecting onto the leaf bases.
     pub fn from_function_aca<F: Fn([usize; 3]) -> f64 + Sync>(
         f: &F,
         shape: [usize; 3],
@@ -550,7 +570,8 @@ impl HtTensor3D {
         Self { nodes, shape, dx }
     }
 
-    /// Zero-pad leaf frames from N to 2N rows (for Hockney convolution).
+    /// Zero-pad leaf frames from N to 2N rows (for Hockney isolated-BC convolution).
+    /// Transfer tensors are unchanged; only leaf frames grow.
     pub fn zero_pad(&self) -> HtTensor3D {
         let new_shape = [self.shape[0] * 2, self.shape[1] * 2, self.shape[2] * 2];
         let mut nodes = Vec::with_capacity(NUM_NODES_3D);
@@ -595,8 +616,8 @@ impl HtTensor3D {
         }
     }
 
-    /// Like [`zero_pad`](Self::zero_pad) but consumes `self`, moving
-    /// transfer tensors instead of cloning them.
+    /// Consuming variant of [`zero_pad`](Self::zero_pad) that moves transfer tensors
+    /// instead of cloning them.
     pub fn into_zero_padded(self) -> HtTensor3D {
         let new_shape = [self.shape[0] * 2, self.shape[1] * 2, self.shape[2] * 2];
         let mut nodes = Vec::with_capacity(NUM_NODES_3D);
@@ -641,7 +662,8 @@ impl HtTensor3D {
         }
     }
 
-    /// Extract the first N entries from each leaf frame (undo zero-padding).
+    /// Extract the first N entries from each leaf frame, undoing zero-padding.
+    /// Returns a new HT3D with the given `shape`.
     pub fn extract_subgrid(&self, shape: [usize; 3]) -> HtTensor3D {
         let mut nodes = Vec::with_capacity(NUM_NODES_3D);
 
@@ -685,8 +707,8 @@ impl HtTensor3D {
         }
     }
 
-    /// Like [`extract_subgrid`](Self::extract_subgrid) but consumes `self`,
-    /// moving transfer tensors instead of cloning them.
+    /// Consuming variant of [`extract_subgrid`](Self::extract_subgrid) that moves
+    /// transfer tensors instead of cloning them.
     pub fn into_subgrid(self, shape: [usize; 3]) -> HtTensor3D {
         let mut nodes = Vec::with_capacity(NUM_NODES_3D);
 
@@ -730,7 +752,7 @@ impl HtTensor3D {
         }
     }
 
-    /// Expand to dense N³ array.
+    /// Expand to a dense N^3 array by full tensor reconstruction.
     pub fn to_full_3d(&self) -> Vec<f64> {
         self.to_dense_subgrid(self.shape)
     }
@@ -868,6 +890,9 @@ impl HtTensor3D {
     }
 
     /// Add two HT3D tensors via rank concatenation (block-diagonal transfer tensors).
+    ///
+    /// The result has ranks equal to the sum of the input ranks. Call `truncate()`
+    /// afterward to reduce ranks if needed.
     pub fn add(&self, other: &HtTensor3D) -> HtTensor3D {
         assert_eq!(self.shape, other.shape, "Shape mismatch in HT3D addition");
 
@@ -983,8 +1008,9 @@ impl HtTensor3D {
         }
     }
 
-    /// Truncate ranks via in-place HSVD: bottom-up orthogonalization then
-    /// top-down SVD truncation. Complexity O(n·k² + k³) vs O(N³) for dense roundtrip.
+    /// Truncate ranks in-place via HSVD: bottom-up QR orthogonalization of leaves,
+    /// then top-down SVD truncation at the root. Complexity is O(n*k^2 + k^3),
+    /// much cheaper than a full dense roundtrip at O(N^3).
     pub fn truncate(&mut self, eps: f64, max_rank: usize) {
         // ── Phase 1: Bottom-up orthogonalization ──
         // QR each leaf frame, absorb R into parent transfer tensor.
@@ -1190,7 +1216,7 @@ impl HtTensor3D {
         };
     }
 
-    /// Create a zero HT3D tensor.
+    /// Create a zero-valued HT3D tensor with rank 1 in all nodes.
     pub fn zero(shape: [usize; 3], dx: [f64; 3]) -> Self {
         let mut nodes = Vec::with_capacity(NUM_NODES_3D);
 
@@ -1218,12 +1244,12 @@ impl HtTensor3D {
         Self { nodes, shape, dx }
     }
 
-    /// Get the ranks of all nodes.
+    /// Return the rank of every node in the dimension tree (length 5).
     pub fn ranks(&self) -> Vec<usize> {
         self.nodes.iter().map(|n| n.rank()).collect()
     }
 
-    /// Frobenius norm squared: ||T||² = Σ T[i,j,k]² (computed via dense expansion for now).
+    /// Frobenius norm squared: `||T||^2 = sum T[i,j,k]^2`. Currently computed via dense expansion.
     pub fn norm_sq(&self) -> f64 {
         let data = self.to_full_3d();
         data.iter().map(|x| x * x).sum()
@@ -1233,25 +1259,35 @@ impl HtTensor3D {
 // ─── Complex 3D HT tensor for Fourier-space operations ──────────────────────
 
 /// A node in the complex 3D HT dimension tree.
-/// Leaf frames are complex; transfer tensors remain REAL because FFT only acts on leaves.
+///
+/// Leaf frames are complex (split real/imaginary storage); transfer tensors remain
+/// real because FFT only acts on leaves and does not change the rank structure.
 #[derive(Clone)]
 pub enum HtNode3DComplex {
-    /// Leaf: frame stored as separate real and imaginary parts.
+    /// Leaf: complex frame stored as separate real and imaginary matrices.
     Leaf {
+        /// Dimension index (0 = x1, 1 = x2, 2 = x3).
         dim: usize,
+        /// Real part of the leaf frame, shape (n, k).
         frame_re: Mat<f64>,
+        /// Imaginary part of the leaf frame, shape (n, k).
         frame_im: Mat<f64>,
     },
-    /// Interior: transfer tensor stays real (same as HtNode3D::Interior).
+    /// Interior: real transfer tensor (identical layout to `HtNode3D::Interior`).
     Interior {
+        /// Index of the left child node.
         left: usize,
+        /// Index of the right child node.
         right: usize,
+        /// Flattened transfer tensor of size k_t * k_left * k_right.
         transfer: Vec<f64>,
+        /// Rank triple [k_t, k_left, k_right].
         ranks: [usize; 3],
     },
 }
 
 impl HtNode3DComplex {
+    /// Return the rank of this complex node.
     #[inline]
     pub fn rank(&self) -> usize {
         match self {
@@ -1261,11 +1297,18 @@ impl HtNode3DComplex {
     }
 }
 
-/// Complex 3D HT tensor for Fourier-space operations.
+/// Complex 3D HT tensor for Fourier-space operations (e.g., Poisson solve via FFT).
+///
+/// Leaf frames carry complex values (split real/imaginary) while transfer tensors
+/// remain real. Produced by `HtTensor3D::fft_leaves()` and converted back via
+/// `ifft_leaves()`.
 #[derive(Clone)]
 pub struct HtTensor3DComplex {
+    /// All 5 complex nodes (indices 0-2: leaves, 3: interior, 4: root).
     pub nodes: Vec<HtNode3DComplex>,
+    /// Grid dimensions [n_x1, n_x2, n_x3].
     pub shape: [usize; 3],
+    /// Cell spacings [dx1, dx2, dx3].
     pub dx: [f64; 3],
 }
 
@@ -1348,15 +1391,15 @@ impl HtTensor3DComplex {
         }
     }
 
-    /// Get ranks of all nodes.
+    /// Return the rank of every node in the complex dimension tree (length 5).
     pub fn ranks(&self) -> Vec<usize> {
         self.nodes.iter().map(|n| n.rank()).collect()
     }
 }
 
 impl HtTensor3D {
-    /// Apply 1D FFT to each column of each leaf frame, producing a complex HT3D.
-    /// Transfer tensors are copied unchanged (rank is exactly preserved).
+    /// Apply 1D forward FFT to each column of each leaf frame, producing a complex HT3D.
+    /// Transfer tensors are copied unchanged so rank is exactly preserved.
     pub fn fft_leaves(&self) -> HtTensor3DComplex {
         use rustfft::FftPlanner;
         use rustfft::num_complex::Complex64;
@@ -1414,8 +1457,8 @@ impl HtTensor3D {
         }
     }
 
-    /// Apply 1D FFT to each leaf column using precomputed plans.
-    /// Plans must match padded leaf sizes: plans[d] handles frame nrows for leaf d.
+    /// Apply 1D forward FFT to each leaf column using precomputed `rustfft` plans.
+    /// `plans[d]` must match the number of rows in leaf d's frame.
     pub fn fft_leaves_with_plans(
         &self,
         plans: &[std::sync::Arc<dyn rustfft::Fft<f64>>; 3],
@@ -1473,8 +1516,8 @@ impl HtTensor3D {
         }
     }
 
-    /// Like [`fft_leaves_with_plans`](Self::fft_leaves_with_plans) but
-    /// consumes `self`, moving transfer tensors instead of cloning them.
+    /// Consuming variant of [`fft_leaves_with_plans`](Self::fft_leaves_with_plans) that moves
+    /// transfer tensors instead of cloning them.
     pub fn into_fft_with_plans(
         self,
         plans: &[std::sync::Arc<dyn rustfft::Fft<f64>>; 3],
@@ -1532,8 +1575,8 @@ impl HtTensor3D {
         }
     }
 
-    /// Construct a rank-1 HT3D tensor from three 1D vectors:
-    /// T[i,j,k] = v0[i] * v1[j] * v2[k].
+    /// Construct a rank-1 HT3D tensor from three 1D vectors as an outer product:
+    /// `T[i, j, k] = v0[i] * v1[j] * v2[k]`.
     pub fn from_rank1(v0: &[f64], v1: &[f64], v2: &[f64], dx: [f64; 3]) -> Self {
         let shape = [v0.len(), v1.len(), v2.len()];
         let mut nodes = Vec::with_capacity(NUM_NODES_3D);
@@ -1569,7 +1612,8 @@ impl HtTensor3D {
 }
 
 impl HtTensor3DComplex {
-    /// Apply 1D inverse FFT to each column of each leaf frame, returning real HT3D.
+    /// Apply 1D inverse FFT to each leaf column, returning a real HT3D.
+    /// Includes the 1/N normalization factor.
     pub fn ifft_leaves(&self) -> HtTensor3D {
         use rustfft::FftPlanner;
         use rustfft::num_complex::Complex64;
@@ -1626,7 +1670,8 @@ impl HtTensor3DComplex {
         }
     }
 
-    /// Apply 1D inverse FFT to each leaf column using precomputed plans.
+    /// Apply 1D inverse FFT to each leaf column using precomputed `rustfft` plans.
+    /// `plans[d]` must be inverse FFT plans matching leaf d's frame row count.
     pub fn ifft_leaves_with_plans(
         &self,
         plans: &[std::sync::Arc<dyn rustfft::Fft<f64>>; 3],
@@ -1683,8 +1728,8 @@ impl HtTensor3DComplex {
         }
     }
 
-    /// Like [`ifft_leaves_with_plans`](Self::ifft_leaves_with_plans) but
-    /// consumes `self`, moving transfer tensors instead of cloning them.
+    /// Consuming variant of [`ifft_leaves_with_plans`](Self::ifft_leaves_with_plans) that moves
+    /// transfer tensors instead of cloning them.
     pub fn into_ifft_with_plans(
         self,
         plans: &[std::sync::Arc<dyn rustfft::Fft<f64>>; 3],

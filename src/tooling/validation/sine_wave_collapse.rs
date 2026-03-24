@@ -124,7 +124,9 @@ fn run_sine_wave(n_spatial: usize, n_velocity: usize, t_final: f64) -> SineWaveR
     let n_steps = (t_final / dt).ceil() as usize;
 
     for step in 0..n_steps {
-        integrator.advance(&mut grid, &poisson, &advector, dt).unwrap();
+        integrator
+            .advance(&mut grid, &poisson, &advector, dt)
+            .unwrap();
 
         // Mid-run NaN check
         if step == n_steps / 2 {

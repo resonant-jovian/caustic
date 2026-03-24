@@ -95,9 +95,9 @@ pub use tooling::core::types::*;
 pub use tooling::core::algos::ht::HtTensor;
 pub use tooling::core::algos::lagrangian::SemiLagrangian;
 pub use tooling::core::conditions::{
-    CasimirDriftCondition, CausticFormationCondition, CflViolationCondition,
-    EnergyDriftCondition, ExitCondition, MassLossCondition, SteadyStateCondition,
-    TimeLimitCondition, VirialRelaxedCondition, WallClockCondition,
+    CasimirDriftCondition, CausticFormationCondition, CflViolationCondition, EnergyDriftCondition,
+    ExitCondition, MassLossCondition, SteadyStateCondition, TimeLimitCondition,
+    VirialRelaxedCondition, WallClockCondition,
 };
 pub use tooling::core::diagnostics::GlobalDiagnostics;
 pub use tooling::core::init::arbitrary::CustomICArray;

@@ -435,6 +435,7 @@ impl FlowMapRepr {
 }
 
 impl PhaseSpaceRepr for FlowMapRepr {
+    /// Register a progress reporter for intra-step progress updates.
     fn set_progress(&mut self, p: Arc<super::super::progress::StepProgress>) {
         self.progress = Some(p);
     }
@@ -534,7 +535,7 @@ impl PhaseSpaceRepr for FlowMapRepr {
         }
     }
 
-    /// Drift sub-step: X[i] += V[i] * dt for each tracer. Exact — no interpolation.
+    /// Drift sub-step: `X[i] += V[i] * dt` for each tracer. Exact -- no interpolation.
     ///
     /// For periodic domains, positions are wrapped into [-L, L].
     fn advect_x(&mut self, _displacement: &DisplacementField, dt: f64) {
@@ -576,7 +577,7 @@ impl PhaseSpaceRepr for FlowMapRepr {
             });
     }
 
-    /// Kick sub-step: V[i] += g(X[i]) * dt for each tracer.
+    /// Kick sub-step: `V[i] += g(X[i]) * dt` for each tracer.
     ///
     /// The acceleration at each tracer's current position is obtained by trilinear
     /// interpolation of the acceleration field.
@@ -811,7 +812,7 @@ impl PhaseSpaceRepr for FlowMapRepr {
             .collect()
     }
 
-    /// Total kinetic energy T = sum of 0.5 * mass[i] * |V[i]|^2.
+    /// Total kinetic energy `T = sum of 0.5 * mass[i] * |V[i]|^2`.
     fn total_kinetic_energy(&self) -> Option<f64> {
         let n = self.num_tracers();
         Some(
@@ -997,14 +998,17 @@ impl PhaseSpaceRepr for FlowMapRepr {
         })
     }
 
+    /// Downcast to `&dyn Any` for runtime type queries.
     fn as_any(&self) -> &dyn Any {
         self
     }
 
+    /// Downcast to `&mut dyn Any` for runtime type queries.
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 
+    /// Heap memory used by position, velocity, f0, and mass arrays.
     fn memory_bytes(&self) -> usize {
         let n = self.num_tracers();
         // positions (3*n f64) + velocities (3*n f64) + f0_values (n f64) + masses (n f64)

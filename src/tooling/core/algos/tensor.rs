@@ -125,7 +125,7 @@ impl TtCore {
 /// The TT decomposition factors a 6D tensor into a chain of d=6 three-way
 /// cores with TT ranks r_0=1, r_1, r_2, r_3, r_4, r_5, r_6=1.
 pub struct TensorTrain {
-    /// The 6 TT cores. cores[k] has shape (ranks[k], shape[k], ranks[k+1]).
+    /// The 6 TT cores. `cores[k]` has shape `(ranks[k], shape[k], ranks[k+1])`.
     pub cores: Vec<TtCore>,
     /// Grid sizes: [nx1, nx2, nx3, nv1, nv2, nv3].
     pub shape: [usize; 6],
@@ -327,7 +327,7 @@ impl TensorTrain {
 
     /// Evaluate f at a single 6D index by left-to-right contraction of all cores.
     ///
-    /// f(i0, i1, i2, i3, i4, i5) = G0[:,i0,:] * G1[:,i1,:] * ... * G5[:,i5,:]
+    /// `f(i0, i1, i2, i3, i4, i5) = G0[:,i0,:] * G1[:,i1,:] * ... * G5[:,i5,:]`
     #[inline]
     pub fn evaluate(&self, indices: [usize; 6]) -> f64 {
         // Start with vec = [1.0] (r_0 = 1)

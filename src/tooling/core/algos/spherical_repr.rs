@@ -1,12 +1,15 @@
 //! Spherical phase-space representation f(r, v_r, L).
 //!
-//! Reduces the 6D problem to effective 3D for spherically symmetric systems,
-//! enabling ultra-high-resolution halo studies. Uses coordinates:
+//! Reduces the full 6D Vlasov problem to an effective 3D grid for spherically
+//! symmetric systems, enabling ultra-high-resolution halo studies at a fraction
+//! of the memory cost. Uses coordinates:
 //! - r: radial distance
 //! - v_r: radial velocity
-//! - L: angular momentum magnitude
+//! - L: angular momentum magnitude (conserved exactly along characteristics)
 //!
-//! The centrifugal pseudo-force L²/(r³·m²) is included in the velocity kick.
+//! Because L is a constant of motion in a spherical potential, the grid only
+//! advects along the r and v_r dimensions. The centrifugal pseudo-force
+//! L^2 / r^3 is included in the velocity kick sub-step.
 
 use super::super::{init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
 use std::any::Any;
@@ -32,6 +35,9 @@ pub struct SphericalRepr {
 }
 
 impl SphericalRepr {
+    /// Create a new spherical representation with zero-initialized f.
+    ///
+    /// `r_min` is set to `r_max / nr` to avoid the r=0 coordinate singularity.
     pub fn new(
         domain: Domain,
         nr: usize,
@@ -77,7 +83,7 @@ impl SphericalRepr {
         self.l_range.0 + (il as f64 + 0.5) * self.dl
     }
 
-    /// Flat index.
+    /// Flat index into the data array for grid point (ir, iv, il).
     #[inline]
     pub fn index(&self, ir: usize, iv: usize, il: usize) -> usize {
         ir * self.shape[1] * self.shape[2] + iv * self.shape[2] + il
@@ -87,6 +93,7 @@ impl SphericalRepr {
 impl PhaseSpaceRepr for SphericalRepr {
     fn set_progress(&mut self, _p: std::sync::Arc<super::super::progress::StepProgress>) {}
 
+    /// Compute spherically averaged density rho(r) by integrating f over v_r and L.
     fn compute_density(&self) -> DensityField {
         // Compute spherically averaged density rho(r) = integral f dv_r dL * 4*pi*r^2
         let [nr, nv, nl] = self.shape;
@@ -110,6 +117,7 @@ impl PhaseSpaceRepr for SphericalRepr {
         }
     }
 
+    /// Radial drift sub-step: semi-Lagrangian shift along r with dr/dt = v_r.
     fn advect_x(&mut self, _displacement: &DisplacementField, dt: f64) {
         // Radial advection: dr/dt = v_r
         let [nr, nv, nl] = self.shape;
@@ -141,6 +149,8 @@ impl PhaseSpaceRepr for SphericalRepr {
         }
     }
 
+    /// Velocity kick sub-step: semi-Lagrangian shift along v_r with
+    /// dv_r/dt = -dPhi/dr + L^2/r^3 (gravitational + centrifugal acceleration).
     fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
         // Velocity kick: dv_r/dt = -dPhi/dr + L^2/(r^3)
         let [nr, nv, nl] = self.shape;
@@ -180,6 +190,7 @@ impl PhaseSpaceRepr for SphericalRepr {
         }
     }
 
+    /// Velocity moment (stub -- returns an empty tensor).
     fn moment(&self, _position: &[f64; 3], _order: usize) -> Tensor {
         Tensor {
             data: vec![],
@@ -188,6 +199,7 @@ impl PhaseSpaceRepr for SphericalRepr {
         }
     }
 
+    /// Total mass by integrating f over the (r, v_r, L) grid with 4*pi*r^2 Jacobian.
     fn total_mass(&self) -> f64 {
         let [nr, nv, nl] = self.shape;
         let mut mass = 0.0;
@@ -209,6 +221,7 @@ impl PhaseSpaceRepr for SphericalRepr {
         mass
     }
 
+    /// Casimir C2 = integral of f^2 over the reduced phase space.
     fn casimir_c2(&self) -> f64 {
         let [nr, nv, nl] = self.shape;
         let dphase = self.dr * self.dv * self.dl;
@@ -226,6 +239,7 @@ impl PhaseSpaceRepr for SphericalRepr {
         c2
     }
 
+    /// Entropy S = -integral of f ln f over the reduced phase space.
     fn entropy(&self) -> f64 {
         let [nr, nv, nl] = self.shape;
         let dphase = self.dr * self.dv * self.dl;
@@ -245,6 +259,7 @@ impl PhaseSpaceRepr for SphericalRepr {
         s
     }
 
+    /// Stream count (stub -- returns zeros; not applicable in spherical coords).
     fn stream_count(&self) -> StreamCountField {
         StreamCountField {
             data: vec![0; self.shape[0]],
@@ -252,10 +267,12 @@ impl PhaseSpaceRepr for SphericalRepr {
         }
     }
 
+    /// Local velocity distribution (stub -- returns empty; use radial profiles instead).
     fn velocity_distribution(&self, _position: &[f64; 3]) -> Vec<f64> {
         vec![]
     }
 
+    /// Total kinetic energy T = 0.5 * integral of f*(v_r^2 + L^2/r^2) over phase space.
     fn total_kinetic_energy(&self) -> Option<f64> {
         let [nr, nv, nl] = self.shape;
         let dphase = self.dr * self.dv * self.dl;
@@ -281,6 +298,7 @@ impl PhaseSpaceRepr for SphericalRepr {
         Some(t)
     }
 
+    /// Serialize the 3D grid into a `PhaseSpaceSnapshot` for checkpointing.
     fn to_snapshot(&self, time: f64) -> Option<PhaseSpaceSnapshot> {
         Some(PhaseSpaceSnapshot {
             data: self.data.clone(),
@@ -289,19 +307,23 @@ impl PhaseSpaceRepr for SphericalRepr {
         })
     }
 
+    /// Restore the grid data from a previously saved snapshot.
     fn load_snapshot(&mut self, snap: PhaseSpaceSnapshot) -> Result<(), crate::CausticError> {
         self.data = snap.data;
         Ok(())
     }
 
+    /// Downcast to `&dyn Any` for runtime type queries.
     fn as_any(&self) -> &dyn Any {
         self
     }
 
+    /// Downcast to `&mut dyn Any` for runtime type queries.
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 
+    /// Heap memory used by the distribution function data array.
     fn memory_bytes(&self) -> usize {
         self.data.len() * std::mem::size_of::<f64>()
     }

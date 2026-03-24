@@ -1,5 +1,12 @@
-//! Hybrid representation: SheetTracker in single-stream regions, UniformGrid6D in
-//! multi-stream (halo interior). Switches at caustic surfaces.
+//! Hybrid sheet/grid phase-space representation.
+//!
+//! Combines a Lagrangian `SheetTracker` with an Eulerian `UniformGrid6D`.
+//! A per-cell spatial mask selects between the two: cells where the stream
+//! count is at or below a threshold use the sheet (zero numerical diffusion),
+//! while multi-stream cells that have undergone caustic formation are handled
+//! by the 6D grid (which captures velocity dispersion). The interface is
+//! updated after every advection sub-step via CIC deposition of sheet
+//! particles into newly transitioned grid cells.
 
 use super::super::{init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
 use super::{sheet::SheetTracker, uniform::UniformGrid6D};
@@ -14,15 +21,20 @@ use std::any::Any;
 ///
 /// The `mask` vector marks each spatial cell: `true` = grid mode, `false` = sheet mode.
 pub struct HybridRepr {
+    /// Lagrangian sheet tracker for single-stream regions.
     pub sheet: SheetTracker,
+    /// Eulerian 6D grid for multi-stream regions.
     pub grid: UniformGrid6D,
+    /// Simulation domain (spatial and velocity extents, boundary conditions).
     pub domain: Domain,
+    /// Stream count above which a cell transitions from sheet to grid mode.
     pub stream_threshold: u32,
     /// Per spatial cell: true = grid mode (multi-stream), false = sheet mode.
     pub mask: Vec<bool>,
 }
 
 impl HybridRepr {
+    /// Create a new hybrid representation with all cells initially in sheet mode.
     pub fn new(domain: Domain) -> Self {
         let sheet = SheetTracker::new(domain.clone());
         let grid = UniformGrid6D::new(domain.clone());
@@ -237,6 +249,7 @@ impl HybridRepr {
 }
 
 impl PhaseSpaceRepr for HybridRepr {
+    /// Compute density by selecting grid or sheet density per cell via the mask.
     fn compute_density(&self) -> DensityField {
         let sheet_density = self.sheet.compute_density();
         let grid_density = self.grid.compute_density();
@@ -257,6 +270,7 @@ impl PhaseSpaceRepr for HybridRepr {
         }
     }
 
+    /// Spatial drift: advance both sheet and grid, then update the interface mask.
     fn advect_x(&mut self, displacement: &DisplacementField, dt: f64) {
         // Advect sheet particles everywhere (cheap, just x += v*dt)
         self.sheet.advect_x(displacement, dt);
@@ -266,6 +280,7 @@ impl PhaseSpaceRepr for HybridRepr {
         self.update_interface();
     }
 
+    /// Velocity kick: advance both sheet and grid, then update the interface mask.
     fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
         // Advect sheet particles everywhere (v += a*dt via trilinear interp)
         self.sheet.advect_v(acceleration, dt);
@@ -275,6 +290,7 @@ impl PhaseSpaceRepr for HybridRepr {
         self.update_interface();
     }
 
+    /// Velocity moment dispatched to grid or sheet depending on the cell mask.
     fn moment(&self, position: &[f64; 3], order: usize) -> Tensor {
         match self.cell_index_3d(position) {
             Some(flat) if self.mask[flat] => self.grid.moment(position, order),
@@ -282,6 +298,7 @@ impl PhaseSpaceRepr for HybridRepr {
         }
     }
 
+    /// Total mass summed over grid-mode and sheet-mode cells according to the mask.
     fn total_mass(&self) -> f64 {
         let sheet_density = self.sheet.compute_density();
         let grid_density = self.grid.compute_density();
@@ -304,6 +321,8 @@ impl PhaseSpaceRepr for HybridRepr {
         total
     }
 
+    /// Casimir C2 invariant. Returns infinity if any cells are still in sheet mode
+    /// (the sheet's delta-function f makes C2 diverge).
     fn casimir_c2(&self) -> f64 {
         // If any cells are in sheet mode, the sheet has delta-function f → C₂ diverges.
         if self.mask.iter().any(|&m| !m) {
@@ -313,6 +332,7 @@ impl PhaseSpaceRepr for HybridRepr {
         self.grid.casimir_c2()
     }
 
+    /// Entropy. Sheet cells contribute zero; grid cells contribute normally.
     fn entropy(&self) -> f64 {
         // Sheet cells have zero entropy; grid cells contribute normally.
         if self.mask.iter().all(|&m| !m) {
@@ -325,6 +345,7 @@ impl PhaseSpaceRepr for HybridRepr {
         self.grid.entropy()
     }
 
+    /// Stream count derived from the sheet tracker regardless of the cell mask.
     fn stream_count(&self) -> StreamCountField {
         let sheet_streams = self.sheet.detect_caustics();
         let [nx, ny, nz] = sheet_streams.shape;
@@ -339,6 +360,7 @@ impl PhaseSpaceRepr for HybridRepr {
         }
     }
 
+    /// Local velocity distribution dispatched to grid or sheet by cell mask.
     fn velocity_distribution(&self, position: &[f64; 3]) -> Vec<f64> {
         match self.cell_index_3d(position) {
             Some(flat) if self.mask[flat] => self.grid.velocity_distribution(position),
@@ -346,6 +368,7 @@ impl PhaseSpaceRepr for HybridRepr {
         }
     }
 
+    /// Total kinetic energy. Uses the grid in all-grid mode, otherwise the sheet.
     fn total_kinetic_energy(&self) -> Option<f64> {
         // Sheet particles carry kinetic energy in all regions.
         // Grid cells carry kinetic energy only in grid-mode regions.
@@ -365,10 +388,12 @@ impl PhaseSpaceRepr for HybridRepr {
         }
     }
 
+    /// Downcast to `&dyn Any` for runtime type queries.
     fn as_any(&self) -> &dyn Any {
         self
     }
 
+    /// Downcast to `&mut dyn Any` for runtime type queries.
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }

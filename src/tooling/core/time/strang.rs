@@ -1,5 +1,13 @@
-//! Strang splitting time integrator. 2nd-order symmetric:
-//! drift(Δt/2) → kick(Δt) → drift(Δt/2). Naturally symplectic.
+//! Strang splitting time integrator for the Vlasov--Poisson system.
+//!
+//! Applies second-order symmetric operator splitting:
+//!   drift(dt/2) -> kick(dt) -> drift(dt/2)
+//! where "drift" is spatial advection (v * grad_x f = 0) and "kick" is velocity
+//! advection (grad_Phi * grad_v f = 0) after solving the Poisson equation for Phi.
+//!
+//! The splitting is time-reversible and symplectic, making it the default integrator
+//! for most simulations. For higher accuracy use [`YoshidaSplitting`](super::yoshida::YoshidaSplitting).
+//! When the representation is `SpectralV`, hypercollision damping is applied after the kick.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -14,14 +22,21 @@ use super::super::{
 };
 use crate::CausticError;
 
-/// Strang splitting: drift(Δt/2) → kick(Δt) → drift(Δt/2).
+/// Second-order symplectic time integrator via Strang splitting.
+///
+/// Executes drift(dt/2) -> Poisson solve -> kick(dt) -> drift(dt/2) each step.
+/// After the kick, applies hypercollision damping when the representation is `SpectralV`.
 pub struct StrangSplitting {
+    /// Gravitational constant G used when solving the Poisson equation.
     pub g: f64,
+    /// Timing breakdown from the most recent step (drift, kick, Poisson, density).
     last_timings: StepTimings,
+    /// Optional progress reporter for intra-step phase tracking by the TUI.
     progress: Option<Arc<StepProgress>>,
 }
 
 impl StrangSplitting {
+    /// Create a new Strang splitting integrator with the given gravitational constant.
     pub fn new(g: f64) -> Self {
         Self {
             g,
@@ -32,6 +47,10 @@ impl StrangSplitting {
 }
 
 impl TimeIntegrator for StrangSplitting {
+    /// Advance the phase-space representation by one time step dt using Strang splitting.
+    ///
+    /// Sequence: drift(dt/2) -> Poisson solve -> kick(dt) -> \[hypercollision\] -> drift(dt/2).
+    /// Returns the end-of-step density, potential, and acceleration for reuse by diagnostics.
     fn advance(
         &mut self,
         repr: &mut dyn PhaseSpaceRepr,
@@ -116,9 +135,14 @@ impl TimeIntegrator for StrangSplitting {
 
         self.last_timings = timings;
 
-        Ok(StepProducts { density, potential, acceleration })
+        Ok(StepProducts {
+            density,
+            potential,
+            acceleration,
+        })
     }
 
+    /// Estimate the maximum stable time step from the dynamical time t_dyn = 1/sqrt(G*rho_max).
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
         let density = repr.compute_density();
         let rho_max = density.data.iter().cloned().fold(0.0_f64, f64::max);
@@ -129,10 +153,12 @@ impl TimeIntegrator for StrangSplitting {
         cfl_factor * t_dyn
     }
 
+    /// Return the timing breakdown from the most recent step.
     fn last_step_timings(&self) -> Option<&StepTimings> {
         Some(&self.last_timings)
     }
 
+    /// Attach a shared progress reporter for intra-step phase tracking.
     fn set_progress(&mut self, progress: Arc<StepProgress>) {
         self.progress = Some(progress);
     }
@@ -188,7 +214,9 @@ mod tests {
         let advector = SemiLagrangian::new();
         let mut integrator = StrangSplitting::new(1.0);
 
-        integrator.advance(&mut spec, &poisson, &advector, 0.1).unwrap();
+        integrator
+            .advance(&mut spec, &poisson, &advector, 0.1)
+            .unwrap();
 
         // The high mode (3,3,3) should be significantly damped.
         // Damping factor for mode (3,3,3) with nu=1.0, order=2, dt=0.1:

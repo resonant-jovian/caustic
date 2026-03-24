@@ -1,8 +1,19 @@
 //! Basis Update & Galerkin (BUG) integrator for Hierarchical Tucker format.
 //!
-//! Evolves solutions directly on the low-rank manifold instead of the
-//! step-and-truncate (SAT) approach. Provides controlled memory usage,
-//! automatic rank adaptation, and robust stability.
+//! BUG is a dynamical low-rank integrator that updates the HT tensor factors
+//! (leaf frames and transfer tensors) directly without ever materializing the
+//! full 6D grid. Each timestep consists of three conceptual stages:
+//!
+//! - **K-step:** Update spatial (drift) or velocity (kick) leaf bases by
+//!   semi-Lagrangian shifting, then QR-decompose to maintain orthonormality.
+//! - **L-step:** Recompute the gravitational acceleration from the updated
+//!   density projection and apply the velocity kick.
+//! - **S-step:** Update the transfer tensors to absorb the basis change
+//!   coefficients (the R matrices from QR), optionally augmenting rank.
+//!
+//! This avoids the step-and-truncate (SAT) approach where the full tensor is
+//! advanced and then re-compressed, providing controlled memory usage,
+//! automatic rank adaptation, and robust stability on the low-rank manifold.
 //!
 //! Algorithm (rank-adaptive BUG, one step):
 //! 1. **K-step:** For each active leaf, shift basis by semi-Lagrangian,
@@ -454,16 +465,19 @@ pub(crate) fn truncation_rank(sv: &[f64], eps: f64) -> usize {
 /// BUG (Basis Update & Galerkin) integrator for low-rank tensor formats.
 ///
 /// When the representation is an `HtTensor`, this integrator evolves the
-/// solution directly on the low-rank manifold. For other representations,
-/// it falls back to standard Strang splitting.
+/// solution directly on the low-rank manifold via K/L/S-step updates.
+/// For other representations, it falls back to standard Strang splitting.
 pub struct BugIntegrator {
+    /// BUG algorithm parameters (tolerance, max rank, midpoint, conservative).
     pub config: BugConfig,
+    /// Gravitational constant G used for the Poisson solve.
     pub g: f64,
     last_timings: StepTimings,
     progress: Option<Arc<StepProgress>>,
 }
 
 impl BugIntegrator {
+    /// Create a new BUG integrator with the given gravitational constant and configuration.
     pub fn new(g: f64, config: BugConfig) -> Self {
         Self {
             config,
@@ -646,6 +660,10 @@ impl BugIntegrator {
 }
 
 impl TimeIntegrator for BugIntegrator {
+    /// Advance the distribution by one timestep `dt`.
+    ///
+    /// If the representation is `HtTensor`, performs a BUG step (standard or midpoint
+    /// depending on config). Otherwise falls back to Strang splitting.
     fn advance(
         &mut self,
         repr: &mut dyn PhaseSpaceRepr,
@@ -686,9 +704,14 @@ impl TimeIntegrator for BugIntegrator {
 
         self.last_timings = timings;
 
-        Ok(StepProducts { density, potential, acceleration })
+        Ok(StepProducts {
+            density,
+            potential,
+            acceleration,
+        })
     }
 
+    /// Dynamical-time CFL: dt <= cfl_factor / sqrt(G * rho_max).
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
         let density = repr.compute_density();
         let rho_max = density.data.iter().cloned().fold(0.0_f64, f64::max);
@@ -699,10 +722,12 @@ impl TimeIntegrator for BugIntegrator {
         cfl_factor * t_dyn
     }
 
+    /// Return timing breakdown from the most recent step.
     fn last_step_timings(&self) -> Option<&StepTimings> {
         Some(&self.last_timings)
     }
 
+    /// Attach a progress reporter for intra-step TUI updates.
     fn set_progress(&mut self, progress: Arc<StepProgress>) {
         self.progress = Some(progress);
     }

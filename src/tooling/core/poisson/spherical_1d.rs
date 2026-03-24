@@ -1,17 +1,27 @@
-//! 1D spherical Poisson solver for radially symmetric density.
+//! 1D radial Poisson solver for spherically symmetric density.
 //!
-//! Solves d²(r·Φ)/dr² = 4πG·r·ρ(r) via tridiagonal matrix solve.
+//! Solves the Poisson equation in a single radial coordinate by
+//! substituting u = r*Phi to reduce the radial ODE
+//! d²(r·Phi)/dr² = 4*pi*G*r*rho(r) to a standard second-order form,
+//! then solves the resulting tridiagonal system via the Thomas algorithm.
+//!
+//! Designed for use with `SphericalRepr` where the density is purely
+//! radial, avoiding the cost of a full 3D solve.
 
 use super::super::{solver::PoissonSolver, types::*};
 
-/// 1D Poisson solver for spherically symmetric density.
+/// 1D Poisson solver for spherically symmetric density on a uniform radial grid.
 pub struct Spherical1DPoisson {
+    /// Number of radial grid cells.
     pub nr: usize,
+    /// Radial cell spacing.
     pub dr: f64,
+    /// Inner edge of the radial grid.
     pub r_min: f64,
 }
 
 impl Spherical1DPoisson {
+    /// Create a solver for `nr` radial cells of width `dr` starting at `r_min`.
     pub fn new(nr: usize, dr: f64, r_min: f64) -> Self {
         Self { nr, dr, r_min }
     }
@@ -26,6 +36,7 @@ impl Spherical1DPoisson {
 impl PoissonSolver for Spherical1DPoisson {
     fn set_progress(&mut self, _p: std::sync::Arc<super::super::progress::StepProgress>) {}
 
+    /// Solve for the radial potential via the Thomas algorithm on the tridiagonal system.
     fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
         let nr = density.data.len();
         let four_pi_g = 4.0 * std::f64::consts::PI * g;
@@ -82,6 +93,7 @@ impl PoissonSolver for Spherical1DPoisson {
         }
     }
 
+    /// Compute radial gravitational acceleration via centered finite differences.
     fn compute_acceleration(&self, potential: &PotentialField) -> AccelerationField {
         let nr = potential.data.len();
         let mut gr = vec![0.0f64; nr];

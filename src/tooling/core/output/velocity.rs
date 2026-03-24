@@ -1,15 +1,27 @@
-//! Velocity moment fields derived from f: density, mean velocity, dispersion tensor,
-//! kinetic energy density, heat flux.
+//! Velocity moment fields derived from the distribution function f(x,v,t).
+//!
+//! Computes the first few velocity moments on the spatial grid: zeroth (density),
+//! first (mean bulk velocity), second (velocity dispersion tensor and kinetic
+//! energy density), and third (heat flux, currently zeroed). These are the
+//! standard fluid-like observables of a collisionless system and are used for
+//! radial profile construction, anisotropy measurement, and dark-matter
+//! observables such as the J-factor and projected surface density.
 
 use super::super::{init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
 use rayon::prelude::*;
 
-/// All velocity moments of the distribution function.
+/// All velocity moments of the distribution function on the spatial grid.
 pub struct VelocityMoments {
+    /// Zeroth moment: mass density rho(x) = integral f dv^3.
     pub density: DensityField,
+    /// First moment: mean bulk velocity u_i(x) per spatial cell, indexed [component][cell].
     pub mean_velocity: [Vec<f64>; 3],
+    /// Second central moment: velocity dispersion sigma_{ij}(x), stored as a flat
+    /// 3x3 tensor per cell, indexed [i*3+j][cell].
     pub dispersion_tensor: [Vec<f64>; 9],
+    /// Kinetic energy density 0.5 * rho * (Tr(sigma) + |u|^2) per cell.
     pub kinetic_energy_density: Vec<f64>,
+    /// Third moment: heat flux q_i(x) per cell (currently zero -- requires third-order moment).
     pub heat_flux: [Vec<f64>; 3],
 }
 

@@ -1,9 +1,19 @@
 //! Caustic surface detection, analysis, and tracking.
+//!
+//! Caustics form where phase-space sheets fold back on themselves, producing
+//! discontinuities in the stream count field. [`CausticDetector`] locates these
+//! surfaces by scanning for adjacent cells with differing stream counts,
+//! records the physical positions of the inter-cell faces, and provides helpers
+//! to query the local density at those positions and to determine the first
+//! timestep at which a caustic appears.
 
 use super::super::{init::domain::Domain, types::*};
 use rayon::prelude::*;
 
-/// Tracks formation and evolution of caustic surfaces.
+/// Stateless helper for detecting and analysing caustic surfaces in the stream-count field.
+///
+/// All methods are associated functions (no instance state) and are parallelised
+/// with rayon where beneficial.
 pub struct CausticDetector;
 
 impl CausticDetector {
@@ -57,7 +67,9 @@ impl CausticDetector {
             .collect()
     }
 
-    /// First timestep index where max stream count > 1.
+    /// Index of the first timestep where any cell has stream count > 1.
+    ///
+    /// Returns the timestep index as `f64`, or `None` if no caustic ever forms.
     pub fn first_caustic_time(history: &[StreamCountField]) -> Option<f64> {
         for (i, sc) in history.iter().enumerate() {
             if sc.data.iter().any(|&c| c > 1) {

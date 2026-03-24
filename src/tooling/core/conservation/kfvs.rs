@@ -86,7 +86,7 @@ pub struct KfvsSolver {
 }
 
 impl KfvsSolver {
-    /// Create a KFVS solver from initial macroscopic moments.
+    /// Create a KFVS solver for the given spatial grid, initialized to zero state.
     pub fn new(shape: [usize; 3], dx: [f64; 3]) -> Self {
         let n = shape[0] * shape[1] * shape[2];
         let state = vec![
@@ -100,7 +100,7 @@ impl KfvsSolver {
         Self { shape, dx, state }
     }
 
-    /// Initialize from kinetic moments computed from the distribution function.
+    /// Populate the macroscopic state from per-cell kinetic moments (flat arrays of length N).
     pub fn initialize_from_moments(
         &mut self,
         density: &[f64],
@@ -291,12 +291,12 @@ impl KfvsSolver {
             });
     }
 
-    /// Extract density field from macroscopic state.
+    /// Extract the density field as a flat array from the macroscopic state.
     pub fn density_field(&self) -> Vec<f64> {
         self.state.iter().map(|s| s.density).collect()
     }
 
-    /// Extract momentum field components.
+    /// Extract the three momentum-density components [Jx, Jy, Jz] as flat arrays.
     pub fn momentum_field(&self) -> [Vec<f64>; 3] {
         let n = self.state.len();
         let mut mx = vec![0.0; n];
@@ -310,7 +310,7 @@ impl KfvsSolver {
         [mx, my, mz]
     }
 
-    /// Extract energy field.
+    /// Extract the energy-density field as a flat array from the macroscopic state.
     pub fn energy_field(&self) -> Vec<f64> {
         self.state.iter().map(|s| s.energy).collect()
     }

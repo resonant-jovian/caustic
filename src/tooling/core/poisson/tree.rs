@@ -1,8 +1,13 @@
-//! Barnes-Hut tree code Poisson solver. O(N log N) per solve.
+//! Barnes-Hut tree code Poisson solver for the gravitational potential.
 //!
-//! Builds an adaptive octree from the density field and computes the gravitational
-//! potential at each grid point via a tree walk with the opening-angle criterion.
-//! Far cells are approximated as monopoles; nearby cells are recursed into.
+//! Builds an adaptive octree from the density field and evaluates the potential
+//! at each grid point via a recursive tree walk governed by the opening-angle
+//! parameter θ. Nodes subtending an angle smaller than θ are approximated as
+//! monopoles; otherwise the walk descends into children. Plummer softening
+//! prevents the 1/r singularity at short range.
+//!
+//! Complexity: O(N log N) per solve. All grid-point evaluations are parallelised
+//! with rayon. Accuracy improves as θ → 0 (recovering direct O(N²) summation).
 
 use rayon::prelude::*;
 use std::sync::Arc;
@@ -285,10 +290,13 @@ impl TreePoisson {
 }
 
 impl PoissonSolver for TreePoisson {
+    /// Register a shared progress handle for intra-step reporting to the TUI.
     fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
         self.progress = Some(p);
     }
 
+    /// Solve for the gravitational potential Φ by building an octree and performing
+    /// an O(N log N) tree walk at each grid point.
     fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
         let _span = tracing::info_span!("tree_poisson_solve").entered();
         let [nx, ny, nz] = density.shape;
@@ -342,6 +350,7 @@ impl PoissonSolver for TreePoisson {
         }
     }
 
+    /// Compute gravitational acceleration g = -∇Φ via second-order centered finite differences.
     fn compute_acceleration(&self, potential: &PotentialField) -> AccelerationField {
         super::utils::finite_difference_acceleration(potential, &self.domain.dx())
     }

@@ -1,4 +1,10 @@
 //! Standardised exit output package produced at simulation termination.
+//!
+//! When [`Simulation::run()`](crate::sim::Simulation::run) completes, it returns an [`ExitPackage`] that
+//! bundles the final phase-space snapshot, the full diagnostics history,
+//! conservation error summaries, and performance statistics. The package can
+//! be persisted to disk via [`ExitPackage::save()`] or printed as a
+//! human-readable summary via [`ExitPackage::print_summary()`].
 
 use super::super::super::{
     conditions::ExitReason,
@@ -9,19 +15,31 @@ use super::super::super::{
 };
 
 /// Complete output produced upon simulation exit, as specified in Section 4.3 of the spec.
+///
+/// Returned by [`Simulation::run()`](crate::sim::Simulation::run) and also serialisable via [`save()`](Self::save).
 pub struct ExitPackage {
+    /// The last phase-space snapshot at the moment of termination.
     pub final_snapshot: PhaseSpaceSnapshot,
+    /// Full per-step diagnostics history (energy, momentum, Casimirs, etc.).
     pub diagnostics_history: Vec<GlobalDiagnostics>,
+    /// Why the simulation stopped (time limit, drift exceeded, etc.).
     pub exit_reason: ExitReason,
+    /// Human-readable description of the exit condition.
     pub exit_message: String,
+    /// Total wall-clock time spent in the solver loop.
     pub wall_clock_seconds: f64,
+    /// Number of time steps completed.
     pub total_steps: u64,
+    /// Peak resident memory observed during the run (bytes).
     pub peak_memory_bytes: usize,
+    /// Worst-case conservation errors computed over the diagnostics history.
     pub conservation_summary: ConservationSummary,
 }
 
 impl ExitPackage {
     /// Assemble the exit package from all components at simulation end.
+    ///
+    /// Computes `ConservationSummary` from the diagnostics history automatically.
     pub fn assemble(
         snapshot: PhaseSpaceSnapshot,
         history: Vec<GlobalDiagnostics>,
@@ -79,7 +97,7 @@ impl ExitPackage {
         Ok(())
     }
 
-    /// Print human-readable conservation errors and performance statistics.
+    /// Print human-readable conservation errors and performance statistics to stdout.
     pub fn print_summary(&self) {
         println!("Exit: {:?}", self.exit_reason);
         println!(

@@ -87,7 +87,9 @@ fn cold_collapse_1d() {
     // Track density peak growth (collapse should increase peak density)
     let mut density_peaks = vec![rho_max_init];
     for step in 0..n_steps {
-        integrator.advance(&mut grid, &poisson, &advector, dt).unwrap();
+        integrator
+            .advance(&mut grid, &poisson, &advector, dt)
+            .unwrap();
 
         if (step + 1) % 10 == 0 {
             let rho = grid.compute_density();

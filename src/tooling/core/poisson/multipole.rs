@@ -1,10 +1,14 @@
-//! Multipole expansion for far-field boundary conditions.
+//! Multipole expansion of the gravitational potential using real spherical harmonics.
 //!
-//! Computes multipole moments q_lm from the density field and provides
-//! Dirichlet boundary values via:
-//!   Phi(x_boundary) = -G * sum_{l,m} [4pi/(2l+1)] * q_lm * Y_lm(theta,phi) / r^{l+1}
+//! Computes multipole moments q_lm from the density field and evaluates
+//! the far-field potential via:
+//!   Phi(x) = -G * sum_{l,m} [4pi/(2l+1)] * q_lm * Y_lm(theta,phi) / r^{l+1}
 //!
-//! Uses real spherical harmonics up to configurable l_max (typically 4-8).
+//! Cost is O(l_max^2 * N) for moment computation and O(l_max^2) per
+//! evaluation point, making it efficient for providing Dirichlet boundary
+//! values on box faces. Uses real spherical harmonics up to a configurable
+//! l_max (currently l <= 2 is implemented; typically 4-8 is sufficient for
+//! gravitational applications).
 
 use super::super::types::DensityField;
 
@@ -13,10 +17,11 @@ pub struct BoundaryValues {
     /// Potential values on each face: [x_lo, x_hi, y_lo, y_hi, z_lo, z_hi].
     /// Each face is a 2D array stored row-major.
     pub faces: [Vec<f64>; 6],
+    /// Grid shape [nx, ny, nz] used to index the face arrays.
     pub shape: [usize; 3],
 }
 
-/// Multipole expansion calculator.
+/// Multipole expansion calculator for computing far-field boundary conditions.
 pub struct MultipoleExpansion {
     /// Maximum angular momentum quantum number.
     pub l_max: usize,
@@ -27,6 +32,7 @@ pub struct MultipoleExpansion {
 }
 
 impl MultipoleExpansion {
+    /// Create a multipole expansion calculator for the given grid geometry.
     pub fn new(shape: [usize; 3], dx: [f64; 3], l_max: usize) -> Self {
         Self { l_max, dx, shape }
     }

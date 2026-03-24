@@ -37,12 +37,10 @@ pub fn finite_difference_acceleration(
                     slab[iy * nz + iz] = if ix == 0 {
                         -(potential.data[idx(1, iy, iz)] - potential.data[idx(0, iy, iz)]) / dx[0]
                     } else if ix == nx - 1 {
-                        -(potential.data[idx(nx - 1, iy, iz)]
-                            - potential.data[idx(nx - 2, iy, iz)])
+                        -(potential.data[idx(nx - 1, iy, iz)] - potential.data[idx(nx - 2, iy, iz)])
                             / dx[0]
                     } else {
-                        -(potential.data[idx(ix + 1, iy, iz)]
-                            - potential.data[idx(ix - 1, iy, iz)])
+                        -(potential.data[idx(ix + 1, iy, iz)] - potential.data[idx(ix - 1, iy, iz)])
                             / (2.0 * dx[0])
                     };
                 }
@@ -57,12 +55,10 @@ pub fn finite_difference_acceleration(
                     slab[iy * nz + iz] = if iy == 0 {
                         -(potential.data[idx(ix, 1, iz)] - potential.data[idx(ix, 0, iz)]) / dx[1]
                     } else if iy == ny - 1 {
-                        -(potential.data[idx(ix, ny - 1, iz)]
-                            - potential.data[idx(ix, ny - 2, iz)])
+                        -(potential.data[idx(ix, ny - 1, iz)] - potential.data[idx(ix, ny - 2, iz)])
                             / dx[1]
                     } else {
-                        -(potential.data[idx(ix, iy + 1, iz)]
-                            - potential.data[idx(ix, iy - 1, iz)])
+                        -(potential.data[idx(ix, iy + 1, iz)] - potential.data[idx(ix, iy - 1, iz)])
                             / (2.0 * dx[1])
                     };
                 }
@@ -77,12 +73,10 @@ pub fn finite_difference_acceleration(
                     slab[iy * nz + iz] = if iz == 0 {
                         -(potential.data[idx(ix, iy, 1)] - potential.data[idx(ix, iy, 0)]) / dx[2]
                     } else if iz == nz - 1 {
-                        -(potential.data[idx(ix, iy, nz - 1)]
-                            - potential.data[idx(ix, iy, nz - 2)])
+                        -(potential.data[idx(ix, iy, nz - 1)] - potential.data[idx(ix, iy, nz - 2)])
                             / dx[2]
                     } else {
-                        -(potential.data[idx(ix, iy, iz + 1)]
-                            - potential.data[idx(ix, iy, iz - 1)])
+                        -(potential.data[idx(ix, iy, iz + 1)] - potential.data[idx(ix, iy, iz - 1)])
                             / (2.0 * dx[2])
                     };
                 }

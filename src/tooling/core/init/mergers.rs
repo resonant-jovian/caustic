@@ -1,5 +1,10 @@
 //! Two-body merger / interaction initial conditions.
-//! Superposition of two isolated equilibria displaced and boosted.
+//!
+//! Sets up a binary merger by superposing two isolated equilibria (e.g. Plummer + Plummer,
+//! King + Hernquist) with offset positions and relative velocities in the centre-of-mass
+//! frame. The combined distribution function is f(x,v) = f1(x-x1, v-v1) + f2(x-x2, v-v2),
+//! which is exact for collisionless systems before the halos begin to overlap. An impact
+//! parameter controls whether the encounter is head-on or off-axis.
 
 use super::super::types::PhaseSpaceSnapshot;
 use super::domain::Domain;
@@ -8,15 +13,24 @@ use rayon::prelude::*;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 
-/// f(x,v,t₀) = f₁(x−x₁, v−v₁) + f₂(x−x₂, v−v₂).
-/// Exact for collisionless systems before interaction begins.
+/// Binary merger initial conditions: two displaced and boosted equilibria.
+///
+/// The combined distribution is f(x,v) = f1(x-x1, v-v1) + f2(x-x2, v-v2),
+/// exact for collisionless systems before the halos begin to interact.
 pub struct MergerIC {
+    /// First body's equilibrium distribution (e.g. Plummer, King, NFW).
     pub body1: Box<dyn IsolatedEquilibrium>,
+    /// Total mass of the first body.
     pub mass1: Decimal,
+    /// Second body's equilibrium distribution.
     pub body2: Box<dyn IsolatedEquilibrium>,
+    /// Total mass of the second body.
     pub mass2: Decimal,
+    /// Initial separation vector between the two centres (body2 - body1).
     pub separation: [f64; 3],
+    /// Relative velocity of body 2 with respect to body 1.
     pub relative_velocity: [f64; 3],
+    /// Transverse offset for off-axis encounters; zero gives a head-on merger.
     pub impact_parameter: Decimal,
     // Cached f64 values for hot-path computation
     mass1_f64: f64,

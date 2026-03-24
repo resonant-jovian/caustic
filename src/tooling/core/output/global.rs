@@ -1,12 +1,22 @@
-//! Global time-series diagnostics output. Provides formatted output functions.
+//! Global time-series diagnostics output.
+//!
+//! Provides functions for serialising the per-step [`GlobalDiagnostics`] history
+//! to CSV and for computing summary statistics of conservation-law drift over an
+//! entire simulation run. The CSV columns cover total energy (E, T, W), virial
+//! ratio, linear and angular momentum components, Casimir C2, entropy, and
+//! enclosed mass -- everything needed for post-hoc validation of a run.
 
 use super::super::diagnostics::GlobalDiagnostics;
 
 /// Summary of maximum conservation drifts over the full simulation.
 pub struct ConservationSummary {
+    /// Largest relative change in total energy |E(t) - E(0)| / |E(0)|.
     pub max_energy_drift: f64,
+    /// Largest relative change in total linear momentum magnitude.
     pub max_momentum_drift: f64,
+    /// Largest relative change in total angular momentum magnitude.
     pub max_angular_momentum_drift: f64,
+    /// Largest relative change in the Casimir invariant C2 = integral of f^2.
     pub max_casimir_drift: f64,
 }
 

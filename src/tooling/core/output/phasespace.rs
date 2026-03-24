@@ -1,18 +1,34 @@
 //! Phase-space structure diagnostics: stream count, caustic surfaces, power spectrum,
-//! growth rates.
+//! and growth rates.
+//!
+//! [`PhaseSpaceDiagnostics`] aggregates per-cell stream-count data from the
+//! representation, identifies multi-stream (caustic) cells, and provides static
+//! helpers for Fourier-space analysis. [`PhaseSpaceDiagnostics::power_spectrum`]
+//! computes the density power spectrum P(k) = |rho_hat(k)|^2 binned by
+//! wavenumber magnitude, while [`field_energy_spectrum`] gives the gravitational
+//! field energy E(k) = |k|^2 |Phi_hat(k)|^2. Growth-rate fitting via
+//! [`PhaseSpaceDiagnostics::growth_rates`] enables validation against analytic
+//! dispersion relations (Jeans, Landau, two-stream).
 
 use super::super::{phasespace::PhaseSpaceRepr, types::*};
 use rayon::prelude::*;
 use rustfft::{FftPlanner, num_complex::Complex};
 
-/// Phase-space structure diagnostic outputs.
+/// Collected phase-space structure diagnostics for a single time step.
 pub struct PhaseSpaceDiagnostics {
+    /// Number of overlapping phase-space streams in each spatial cell.
     pub stream_count: StreamCountField,
+    /// Per-cell Boltzmann entropy (currently unpopulated; requires grid-level access).
     pub local_entropy: Vec<f64>,
+    /// Grid indices `[ix1, ix2, ix3]` of cells with stream count > 1 (caustic locations).
     pub caustic_cells: Vec<[usize; 3]>,
 }
 
 impl PhaseSpaceDiagnostics {
+    /// Build diagnostics from the current phase-space representation.
+    ///
+    /// Queries the stream-count field and marks every cell with count > 1 as a
+    /// caustic location.
     pub fn compute(repr: &dyn PhaseSpaceRepr) -> Self {
         let stream_count = repr.stream_count();
         let [nx1, nx2, nx3] = stream_count.shape;

@@ -1129,7 +1129,12 @@ fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64 + Sync>(
     } else {
         // Random sampling: draw n_eval complementary multi-indices
         (0..n_eval)
-            .map(|_| comp_dims.iter().map(|&d| rng.next_usize(shape[d])).collect())
+            .map(|_| {
+                comp_dims
+                    .iter()
+                    .map(|&d| rng.next_usize(shape[d]))
+                    .collect()
+            })
             .collect()
     };
 

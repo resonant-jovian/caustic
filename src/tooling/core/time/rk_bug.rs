@@ -49,15 +49,21 @@ impl Default for RkBugConfig {
     }
 }
 
-/// RK-BUG integrator: Runge-Kutta method with BUG sub-steps.
+/// RK-BUG integrator: classical Runge-Kutta time stepping with BUG tensor updates.
+///
+/// Uses SSP-RK3 for the macro time step and BUG for the HT factor updates at each
+/// stage. Falls back to standard Strang splitting for non-HT representations.
 pub struct RkBugIntegrator {
+    /// BUG truncation, rank, and conservation settings.
     pub config: RkBugConfig,
+    /// Gravitational constant G.
     pub g: f64,
     last_timings: StepTimings,
     progress: Option<Arc<StepProgress>>,
 }
 
 impl RkBugIntegrator {
+    /// Create a new RK-BUG integrator with the given gravitational constant and config.
     pub fn new(g: f64, config: RkBugConfig) -> Self {
         Self {
             config,
@@ -242,7 +248,11 @@ impl TimeIntegrator for RkBugIntegrator {
 
         self.last_timings = timings;
 
-        Ok(StepProducts { density, potential, acceleration })
+        Ok(StepProducts {
+            density,
+            potential,
+            acceleration,
+        })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

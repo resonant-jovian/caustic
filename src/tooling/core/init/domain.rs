@@ -1,57 +1,90 @@
-//! Domain specification structs: spatial/velocity extents, resolutions, boundary conditions.
-//! All extent/time fields use `rust_decimal::Decimal` for exact arithmetic.
+//! Domain specification for the 6D Vlasov--Poisson computational box.
+//!
+//! Defines spatial extents, velocity extents, grid resolutions, boundary
+//! conditions, and the simulation time range.  All configuration-facing
+//! lengths and times are stored as `rust_decimal::Decimal` for exact
+//! arithmetic; hot-path accessors (`dx()`, `dv()`, `lx()`, `lv()`) return
+//! cached `f64` values computed once at construction.  Use
+//! [`DomainBuilder`] for ergonomic construction with validation.
 
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 
-/// Spatial extent of the simulation domain in each dimension.
+/// Spatial half-extents of the simulation domain in each dimension.
+///
+/// The domain spans `[-neg_xi, xi]` along axis i when `neg_xi` is `Some`,
+/// or `[0, xi]` when `neg_xi` is `None`.
 #[derive(Clone)]
 pub struct SpatialDom {
+    /// Positive half-extent along the first spatial axis.
     pub x1: Decimal,
+    /// Positive half-extent along the second spatial axis.
     pub x2: Decimal,
+    /// Positive half-extent along the third spatial axis.
     pub x3: Decimal,
+    /// Negative half-extent along x1; `None` means the domain starts at 0.
     pub neg_x1: Option<Decimal>,
+    /// Negative half-extent along x2; `None` means the domain starts at 0.
     pub neg_x2: Option<Decimal>,
+    /// Negative half-extent along x3; `None` means the domain starts at 0.
     pub neg_x3: Option<Decimal>,
 }
 
-/// Velocity extent of the simulation domain in each dimension.
+/// Velocity half-extents of the simulation domain in each dimension.
+///
+/// Layout mirrors [`SpatialDom`]: the domain spans `[-neg_vi, vi]` when
+/// the negative extent is `Some`.
 #[derive(Clone)]
 pub struct VelocityDom {
+    /// Positive half-extent along the first velocity axis.
     pub v1: Decimal,
+    /// Positive half-extent along the second velocity axis.
     pub v2: Decimal,
+    /// Positive half-extent along the third velocity axis.
     pub v3: Decimal,
+    /// Negative half-extent along v1; `None` means the domain starts at 0.
     pub neg_v1: Option<Decimal>,
+    /// Negative half-extent along v2; `None` means the domain starts at 0.
     pub neg_v2: Option<Decimal>,
+    /// Negative half-extent along v3; `None` means the domain starts at 0.
     pub neg_v3: Option<Decimal>,
 }
 
 /// Number of grid cells in each spatial dimension.
 #[derive(Clone)]
 pub struct SpatialRes {
+    /// Cell count along the first spatial axis.
     pub x1: i128,
+    /// Cell count along the second spatial axis.
     pub x2: i128,
+    /// Cell count along the third spatial axis.
     pub x3: i128,
 }
 
 /// Number of grid cells in each velocity dimension.
 #[derive(Clone)]
 pub struct VelocityRes {
+    /// Cell count along the first velocity axis.
     pub v1: i128,
+    /// Cell count along the second velocity axis.
     pub v2: i128,
+    /// Cell count along the third velocity axis.
     pub v3: i128,
 }
 
 /// Time range for the simulation.
 #[derive(Clone)]
 pub struct TimeRange {
+    /// Initial simulation time (usually 0).
     pub t0: Decimal,
+    /// Final simulation time; the integrator advances until `t >= t_final`.
     pub t_final: Decimal,
 }
 
-/// Integration timestep. May be adaptive (use OptionalParams) or fixed.
+/// Integration timestep. May be adaptive (use `OptionalParams`) or fixed.
 #[derive(Clone)]
 pub struct Timestep {
+    /// Fixed time-step size; ignored when adaptive stepping is enabled.
     pub delta_t: Decimal,
 }
 
@@ -77,15 +110,27 @@ pub enum VelocityBoundType {
     Truncated,
 }
 
-/// Complete computational domain specification, ready for use by solver components.
+/// Complete 6D computational domain specification, ready for use by solver components.
+///
+/// Combines spatial/velocity extents, resolutions, boundary conditions, and the
+/// time range.  Construct via [`DomainBuilder`] (see [`Domain::builder`]).
+/// Frequently-needed floating-point quantities (`dx`, `dv`, `lx`, `lv`) are
+/// cached at construction time to avoid repeated `Decimal`-to-`f64` conversion.
 #[derive(Clone)]
 pub struct Domain {
+    /// Spatial half-extents (Decimal).
     pub spatial: SpatialDom,
+    /// Velocity half-extents (Decimal).
     pub velocity: VelocityDom,
+    /// Spatial grid resolution (cell counts per axis).
     pub spatial_res: SpatialRes,
+    /// Velocity grid resolution (cell counts per axis).
     pub velocity_res: VelocityRes,
+    /// Simulation start and end times.
     pub time_range: TimeRange,
+    /// Boundary condition applied along spatial axes.
     pub spatial_bc: SpatialBoundType,
+    /// Boundary condition applied along velocity axes.
     pub velocity_bc: VelocityBoundType,
     // Cached f64 conversions (computed once at construction)
     cached_dx: [f64; 3],
@@ -164,7 +209,12 @@ impl Domain {
     }
 }
 
-/// Builder for `Domain` following a fluent API.
+/// Fluent builder for [`Domain`].
+///
+/// All fields are mandatory; calling [`build`](DomainBuilder::build) returns
+/// an error if any are missing.  Symmetric helpers (e.g. `spatial_extent`)
+/// set all three axes to the same value; for anisotropic boxes construct
+/// `SpatialDom` / `VelocityDom` directly.
 pub struct DomainBuilder {
     spatial: Option<SpatialDom>,
     velocity: Option<VelocityDom>,
@@ -182,6 +232,7 @@ impl Default for DomainBuilder {
 }
 
 impl DomainBuilder {
+    /// Create a new builder with all fields unset.
     pub fn new() -> Self {
         DomainBuilder {
             spatial: None,
@@ -298,7 +349,10 @@ impl DomainBuilder {
         self
     }
 
-    /// Validate and construct the `Domain`.
+    /// Validate that all fields are set and construct the [`Domain`].
+    ///
+    /// Returns an error if any required field (spatial extent, velocity extent,
+    /// resolutions, t_final, or boundary conditions) has not been provided.
     pub fn build(self) -> anyhow::Result<Domain> {
         let spatial = self
             .spatial

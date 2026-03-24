@@ -1,5 +1,13 @@
-//! Adaptive mesh refinement in 6D phase space. Refines cells where f is large or has steep
-//! gradients. Each cell can subdivide into 2^6 = 64 children, forming an octree in 6D.
+//! Octree-based adaptive mesh refinement (AMR) for 6D phase space.
+//!
+//! The domain is covered by a single root cell in (x, v) space. Cells where the
+//! distribution function f exceeds a refinement threshold are recursively subdivided
+//! into 2^6 = 64 children (bisection in all 6 dimensions). Coarsening merges children
+//! back when their values become nearly uniform, and sparse velocity cleanup removes
+//! blocks where f is negligible.
+//!
+//! For Poisson coupling, leaf cell values are deposited onto a uniform spatial grid
+//! via nearest-cell assignment, producing a standard [`DensityField`].
 
 use super::super::{
     init::domain::{Domain, SpatialBoundType},
@@ -196,8 +204,11 @@ impl AmrCell {
     }
 }
 
-/// Adaptive mesh refinement grid in 6D phase space. The root cell spans the full domain;
-/// cells are refined where the distribution function is significant.
+/// Adaptive mesh refinement grid in 6D phase space.
+///
+/// The root cell spans the full domain. Cells are refined where the distribution
+/// function is significant and coarsened when values become uniform. Implements
+/// [`PhaseSpaceRepr`] by depositing leaf values onto a uniform spatial grid.
 pub struct AmrGrid {
     /// Root cell of the tree, spanning the entire 6D domain.
     pub root: AmrCell,
@@ -218,6 +229,9 @@ pub struct AmrGrid {
 
 impl AmrGrid {
     /// Create a new AmrGrid with a single root cell spanning the full 6D domain.
+    ///
+    /// - `refinement_threshold`: cells with |f| above this are subdivided.
+    /// - `max_levels`: maximum tree depth (0 = root only, no refinement).
     pub fn new(domain: Domain, refinement_threshold: f64, max_levels: usize) -> Self {
         let lx = domain.lx();
         let lv = domain.lv();
