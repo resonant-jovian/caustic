@@ -75,8 +75,11 @@ impl TimeIntegrator for StrangSplitting {
 
         let accel = {
             let _s = tracing::info_span!("poisson_solve").entered();
-            let (density, potential, accel) =
-                helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, solver, self.g));
+            let (density, potential, accel) = helpers::time_ms!(
+                timings,
+                poisson_ms,
+                helpers::solve_poisson(repr, solver, self.g)
+            );
             let _ = (density, potential);
             accel
         };
@@ -101,8 +104,11 @@ impl TimeIntegrator for StrangSplitting {
         helpers::report_phase!(self.progress, StepPhase::StepComplete, 4, 5);
 
         // Compute end-of-step products for caller reuse
-        let (density, potential, acceleration) =
-            helpers::time_ms!(timings, density_ms, helpers::solve_poisson(repr, solver, self.g));
+        let (density, potential, acceleration) = helpers::time_ms!(
+            timings,
+            density_ms,
+            helpers::solve_poisson(repr, solver, self.g)
+        );
 
         self.last_timings = timings;
 

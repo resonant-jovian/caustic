@@ -105,8 +105,11 @@ impl TimeIntegrator for BlanesMoanSplitting {
                 helpers::report_phase!(self.progress, StepPhase::Kick, 2 * i as u8 + 1, n_sub);
                 {
                     let _s = tracing::info_span!("bm4_kick", stage = i).entered();
-                    let (_density, _potential, accel) =
-                        helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, solver, self.g));
+                    let (_density, _potential, accel) = helpers::time_ms!(
+                        timings,
+                        poisson_ms,
+                        helpers::solve_poisson(repr, solver, self.g)
+                    );
                     helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, BM4_B[i] * dt));
                 }
             }
@@ -115,8 +118,11 @@ impl TimeIntegrator for BlanesMoanSplitting {
         helpers::report_phase!(self.progress, StepPhase::StepComplete, n_sub, n_sub);
 
         // Compute end-of-step products for caller reuse
-        let (density, potential, acceleration) =
-            helpers::time_ms!(timings, density_ms, helpers::solve_poisson(repr, solver, self.g));
+        let (density, potential, acceleration) = helpers::time_ms!(
+            timings,
+            density_ms,
+            helpers::solve_poisson(repr, solver, self.g)
+        );
 
         self.last_timings = timings;
 

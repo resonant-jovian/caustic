@@ -3,15 +3,14 @@
 
 #[test]
 fn isochrone_equilibrium() {
-    use crate::sim::Simulation;
-    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::init::{
         domain::{Domain, SpatialBoundType, VelocityBoundType},
         isolated::{IsochroneIC, sample_on_grid},
     };
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
-    use crate::tooling::core::poisson::fft::FftPoisson;
-    use crate::tooling::core::time::strang::StrangSplitting;
+    use crate::tooling::validation::helpers::{
+        assert_valid_output, build_standard_sim, density_mass, relative_drift, snapshot_density,
+    };
 
     // Isochrone: M=1, b=1, G=1.
     // Escape velocity at r=0: v_esc = sqrt(2GM/b) = sqrt(2) ~ 1.41
@@ -46,68 +45,31 @@ fn isochrone_equilibrium() {
     );
 
     // Compute initial density profile
-    let initial_grid = crate::tooling::core::algos::uniform::UniformGrid6D::from_snapshot(
-        crate::tooling::core::types::PhaseSpaceSnapshot {
-            data: snap.data.clone(),
-            shape: snap.shape,
-            time: 0.0,
-        },
-        domain.clone(),
-    );
-    let initial_density = initial_grid.compute_density();
+    let initial_density = snapshot_density(&snap, &domain);
 
-    let poisson = FftPoisson::new(&domain);
-    let mut sim = Simulation::builder()
-        .domain(domain)
-        .poisson_solver(poisson)
-        .advector(SemiLagrangian::new())
-        .integrator(StrangSplitting::new(1.0))
-        .initial_conditions(snap)
-        .time_final(4.0)
-        .build()
-        .unwrap();
+    let mut sim = build_standard_sim(domain, snap, 4.0);
 
     let pkg = sim.run().unwrap();
     let final_density = sim.repr.compute_density();
 
     let dx = sim.domain.dx();
-    let dx3 = dx[0] * dx[1] * dx[2];
-    let m_init: f64 = initial_density.data.iter().sum::<f64>() * dx3;
-    let m_final: f64 = final_density.data.iter().sum::<f64>() * dx3;
+    let m_init = density_mass(&initial_density, dx);
+    let m_final = density_mass(&final_density, dx);
 
     assert!(m_final > 0.0, "Final mass should be positive");
-    assert!(
-        !final_density.data.iter().any(|x| x.is_nan()),
-        "Final density contains NaN values"
-    );
-    assert!(
-        pkg.diagnostics_history.len() >= 2,
-        "Should have at least 2 diagnostic entries"
-    );
+    assert_valid_output(&final_density, pkg.diagnostics_history.len());
 
     // Check energy conservation
     let e0 = pkg.diagnostics_history[0].total_energy;
     let e_final = pkg.diagnostics_history.last().unwrap().total_energy;
-    let e_drift = if e0.abs() > 1e-30 {
-        (e_final - e0).abs() / e0.abs()
-    } else {
-        0.0
-    };
+    let e_drift = relative_drift(e_final, e0);
 
     // Check Casimir C2 preservation
     let c2_0 = pkg.diagnostics_history[0].casimir_c2;
     let c2_f = pkg.diagnostics_history.last().unwrap().casimir_c2;
-    let c2_drift = if c2_0.abs() > 1e-30 {
-        (c2_f - c2_0).abs() / c2_0.abs()
-    } else {
-        0.0
-    };
+    let c2_drift = relative_drift(c2_f, c2_0);
 
-    let mass_drift = if m_init > 1e-30 {
-        (m_final - m_init).abs() / m_init
-    } else {
-        0.0
-    };
+    let mass_drift = relative_drift(m_final, m_init);
 
     println!(
         "Isochrone equilibrium: m_init={:.4}, m_final={:.4}, mass_drift={:.2}%, E_drift={:.2e}, C2_drift={:.2e}, steps={}",

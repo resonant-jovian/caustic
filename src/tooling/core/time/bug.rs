@@ -498,8 +498,11 @@ impl BugIntegrator {
     ) {
         helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / 2.0));
 
-        let (_, _, accel) =
-            helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, solver, self.g));
+        let (_, _, accel) = helpers::time_ms!(
+            timings,
+            poisson_ms,
+            helpers::solve_poisson(repr, solver, self.g)
+        );
 
         helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, dt));
 
@@ -526,15 +529,30 @@ impl BugIntegrator {
         };
 
         helpers::report_phase!(self.progress, StepPhase::BugKStep, 0, 4);
-        helpers::time_ms!(timings, drift_ms, bug_drift_substep(ht, dt / 2.0, &self.config));
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            bug_drift_substep(ht, dt / 2.0, &self.config)
+        );
 
         helpers::report_phase!(self.progress, StepPhase::BugLStep, 1, 4);
-        let (_, _, accel) =
-            helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(ht, solver, self.g));
+        let (_, _, accel) = helpers::time_ms!(
+            timings,
+            poisson_ms,
+            helpers::solve_poisson(ht, solver, self.g)
+        );
 
-        helpers::time_ms!(timings, kick_ms, bug_kick_substep(ht, &accel, dt, &self.config));
+        helpers::time_ms!(
+            timings,
+            kick_ms,
+            bug_kick_substep(ht, &accel, dt, &self.config)
+        );
 
-        helpers::time_ms!(timings, drift_ms, bug_drift_substep(ht, dt / 2.0, &self.config));
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            bug_drift_substep(ht, dt / 2.0, &self.config)
+        );
 
         helpers::report_phase!(self.progress, StepPhase::BugSStep, 2, 4);
         if let Some(ref dens) = density_before {
@@ -565,14 +583,29 @@ impl BugIntegrator {
 
         // Predict midpoint with half-step
         let saved = ht.clone();
-        helpers::time_ms!(timings, drift_ms, bug_drift_substep(ht, dt / 4.0, &self.config));
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            bug_drift_substep(ht, dt / 4.0, &self.config)
+        );
 
-        let (_, _, accel) =
-            helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(ht, solver, self.g));
+        let (_, _, accel) = helpers::time_ms!(
+            timings,
+            poisson_ms,
+            helpers::solve_poisson(ht, solver, self.g)
+        );
 
-        helpers::time_ms!(timings, kick_ms, bug_kick_substep(ht, &accel, dt / 2.0, &self.config));
+        helpers::time_ms!(
+            timings,
+            kick_ms,
+            bug_kick_substep(ht, &accel, dt / 2.0, &self.config)
+        );
 
-        helpers::time_ms!(timings, drift_ms, bug_drift_substep(ht, dt / 4.0, &self.config));
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            bug_drift_substep(ht, dt / 4.0, &self.config)
+        );
 
         // ht is now at midpoint — restore and do full step
         helpers::report_phase!(self.progress, StepPhase::BugLStep, 1, 4);
@@ -589,14 +622,29 @@ impl BugIntegrator {
             }
         };
 
-        helpers::time_ms!(timings, drift_ms, bug_drift_substep(ht, dt / 2.0, &aug_config));
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            bug_drift_substep(ht, dt / 2.0, &aug_config)
+        );
 
-        let (_, _, accel) =
-            helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(ht, solver, self.g));
+        let (_, _, accel) = helpers::time_ms!(
+            timings,
+            poisson_ms,
+            helpers::solve_poisson(ht, solver, self.g)
+        );
 
-        helpers::time_ms!(timings, kick_ms, bug_kick_substep(ht, &accel, dt, &aug_config));
+        helpers::time_ms!(
+            timings,
+            kick_ms,
+            bug_kick_substep(ht, &accel, dt, &aug_config)
+        );
 
-        helpers::time_ms!(timings, drift_ms, bug_drift_substep(ht, dt / 2.0, &aug_config));
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            bug_drift_substep(ht, dt / 2.0, &aug_config)
+        );
 
         helpers::report_phase!(self.progress, StepPhase::BugSStep, 2, 4);
         if let Some(ref dens) = density_before {
@@ -639,8 +687,11 @@ impl TimeIntegrator for BugIntegrator {
         helpers::report_phase!(self.progress, StepPhase::StepComplete, 3, 4);
 
         // Compute end-of-step products for caller reuse
-        let (density, potential, acceleration) =
-            helpers::time_ms!(timings, density_ms, helpers::solve_poisson(repr, solver, self.g));
+        let (density, potential, acceleration) = helpers::time_ms!(
+            timings,
+            density_ms,
+            helpers::solve_poisson(repr, solver, self.g)
+        );
 
         self.last_timings = timings;
 

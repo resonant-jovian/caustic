@@ -221,8 +221,11 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
 
         // Poisson solve + kick
         helpers::report_phase!(self.progress, StepPhase::PoissonSolve, 1, 5);
-        let (_density, _potential, accel) =
-            helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, solver, self.inner.g));
+        let (_density, _potential, accel) = helpers::time_ms!(
+            timings,
+            poisson_ms,
+            helpers::solve_poisson(repr, solver, self.inner.g)
+        );
         helpers::report_phase!(self.progress, StepPhase::Kick, 2, 5);
         helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, dt));
         diag.post_kick_ranks = extract_ranks(&*repr);
@@ -290,8 +293,11 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
 
         helpers::report_phase!(self.progress, StepPhase::StepComplete, 4, 5);
 
-        let (density, potential, acceleration) =
-            helpers::time_ms!(timings, density_ms, helpers::solve_poisson(repr, solver, self.inner.g));
+        let (density, potential, acceleration) = helpers::time_ms!(
+            timings,
+            density_ms,
+            helpers::solve_poisson(repr, solver, self.inner.g)
+        );
 
         self.last_diagnostics = diag;
         self.last_timings = timings;

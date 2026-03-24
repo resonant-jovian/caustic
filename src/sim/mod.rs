@@ -71,6 +71,8 @@ pub struct Simulation {
     pub cached_density: Option<DensityField>,
     /// Cached potential from the most recent step, for TUI reuse.
     pub cached_potential: Option<PotentialField>,
+    /// Cached acceleration from the most recent step, for TUI reuse.
+    pub cached_acceleration: Option<AccelerationField>,
     /// Optional shared progress state for intra-step TUI visibility.
     progress: Option<Arc<StepProgress>>,
 }
@@ -287,9 +289,12 @@ impl Simulation {
 
         self.last_step_timings = timings;
 
-        // Cache density and potential for TUI reuse (avoids redundant recomputation)
+        // Cache density, potential, and acceleration for TUI reuse
+        // (avoids redundant recomputation)
+        let accel = self.poisson.compute_acceleration(&potential);
         self.cached_density = Some(density);
         self.cached_potential = Some(potential);
+        self.cached_acceleration = Some(accel);
 
         if let Some(ref p) = self.progress {
             p.set_phase(StepPhase::StepComplete);
@@ -625,6 +630,7 @@ impl SimulationBuilder {
             last_step_timings: StepTimings::default(),
             cached_density: None,
             cached_potential: None,
+            cached_acceleration: None,
             progress: None,
         })
     }

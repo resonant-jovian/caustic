@@ -196,8 +196,11 @@ impl ParallelBugIntegrator {
 
         // Poisson solve at midpoint
         helpers::report_phase!(self.progress, StepPhase::BugLStep, 1, 5);
-        let (_, _, accel) =
-            helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(ht, solver, self.g));
+        let (_, _, accel) = helpers::time_ms!(
+            timings,
+            poisson_ms,
+            helpers::solve_poisson(ht, solver, self.g)
+        );
 
         // Phase 2: Full kick — parallel K-steps for velocity leaves
         helpers::report_phase!(self.progress, StepPhase::BugLStep, 2, 5);
@@ -287,8 +290,11 @@ impl ParallelBugIntegrator {
     ) {
         helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / 2.0));
 
-        let (_, _, accel) =
-            helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, solver, self.g));
+        let (_, _, accel) = helpers::time_ms!(
+            timings,
+            poisson_ms,
+            helpers::solve_poisson(repr, solver, self.g)
+        );
 
         helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, dt));
 
@@ -322,8 +328,11 @@ impl TimeIntegrator for ParallelBugIntegrator {
         helpers::report_phase!(self.progress, StepPhase::StepComplete, 5, 5);
 
         // Compute end-of-step products for caller reuse
-        let (density, potential, acceleration) =
-            helpers::time_ms!(timings, density_ms, helpers::solve_poisson(repr, solver, self.g));
+        let (density, potential, acceleration) = helpers::time_ms!(
+            timings,
+            density_ms,
+            helpers::solve_poisson(repr, solver, self.g)
+        );
 
         self.last_timings = timings;
 

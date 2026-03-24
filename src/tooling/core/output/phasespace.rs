@@ -277,11 +277,23 @@ pub fn potential_power_spectrum(potential: &PotentialField, dx: [f64; 3]) -> Vec
     let norm = 1.0 / (n as f64 * n as f64);
 
     for ikx in 0..nx {
-        let kx = if ikx <= nx / 2 { ikx as f64 } else { ikx as f64 - nx as f64 } * dk[0];
+        let kx = if ikx <= nx / 2 {
+            ikx as f64
+        } else {
+            ikx as f64 - nx as f64
+        } * dk[0];
         for iky in 0..ny {
-            let ky = if iky <= ny / 2 { iky as f64 } else { iky as f64 - ny as f64 } * dk[1];
+            let ky = if iky <= ny / 2 {
+                iky as f64
+            } else {
+                iky as f64 - ny as f64
+            } * dk[1];
             for ikz in 0..nz {
-                let kz = if ikz <= nz / 2 { ikz as f64 } else { ikz as f64 - nz as f64 } * dk[2];
+                let kz = if ikz <= nz / 2 {
+                    ikz as f64
+                } else {
+                    ikz as f64 - nz as f64
+                } * dk[2];
                 let k_mag = (kx * kx + ky * ky + kz * kz).sqrt();
                 if k_mag < 1e-14 {
                     continue;

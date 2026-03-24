@@ -5,13 +5,12 @@
 /// At fixed velocity extent, finer grids should better resolve the analytic ρ(r).
 #[test]
 fn density_integration_convergence() {
-    use crate::tooling::core::algos::uniform::UniformGrid6D;
     use crate::tooling::core::diagnostics::{error_l2, estimate_convergence_order};
     use crate::tooling::core::init::{
         domain::{Domain, SpatialBoundType, VelocityBoundType},
         isolated::{PlummerIC, sample_on_grid},
     };
-    use crate::tooling::core::phasespace::PhaseSpaceRepr;
+    use crate::tooling::validation::helpers::snapshot_density;
 
     let ic = PlummerIC::new(1.0, 1.0, 1.0);
     let mut pairs = Vec::new();
@@ -29,16 +28,7 @@ fn density_integration_convergence() {
             .unwrap();
 
         let snap = sample_on_grid(&ic, &domain);
-        let grid = UniformGrid6D::from_snapshot(
-            crate::tooling::core::types::PhaseSpaceSnapshot {
-                data: snap.data.clone(),
-                shape: snap.shape,
-                time: 0.0,
-            },
-            domain.clone(),
-        );
-
-        let density = grid.compute_density();
+        let density = snapshot_density(&snap, &domain);
         let dx = domain.dx();
         let lx = domain.lx();
         let [nx_d, ny_d, nz_d] = density.shape;
@@ -106,14 +96,11 @@ fn convergence_table_structure() {
 /// Free-streaming test at two resolutions to verify error decreases.
 #[test]
 fn free_streaming_convergence() {
-    use crate::sim::Simulation;
-    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::init::{
         domain::{Domain, SpatialBoundType, VelocityBoundType},
         isolated::{PlummerIC, sample_on_grid},
     };
-    use crate::tooling::core::poisson::fft::FftPoisson;
-    use crate::tooling::core::time::strang::StrangSplitting;
+    use crate::tooling::validation::helpers::{build_standard_sim, relative_drift};
 
     let t_final = 0.5;
     let mut errors = Vec::new();
@@ -133,27 +120,14 @@ fn free_streaming_convergence() {
         let ic = PlummerIC::new(1.0, 1.0, 1.0);
         let snap = sample_on_grid(&ic, &domain);
 
-        let poisson = FftPoisson::new(&domain);
-        let mut sim = Simulation::builder()
-            .domain(domain.clone())
-            .poisson_solver(poisson)
-            .advector(SemiLagrangian::new())
-            .integrator(StrangSplitting::new(1.0))
-            .initial_conditions(snap)
-            .time_final(t_final)
-            .build()
-            .unwrap();
+        let mut sim = build_standard_sim(domain, snap, t_final);
 
         let pkg = sim.run().unwrap();
 
         // Measure energy drift as a proxy for error at this resolution
         let e0 = pkg.diagnostics_history[0].total_energy;
         let e_final = pkg.diagnostics_history.last().unwrap().total_energy;
-        let energy_err = if e0.abs() > 1e-30 {
-            (e_final - e0).abs() / e0.abs()
-        } else {
-            0.0
-        };
+        let energy_err = relative_drift(e_final, e0);
 
         println!(
             "Free streaming convergence: N={n}, energy_drift={energy_err:.4e}, steps={}",
@@ -473,11 +447,7 @@ fn strang_temporal_convergence_order_2() {
 
         let e0 = pkg.diagnostics_history[0].total_energy;
         let e_final = pkg.diagnostics_history.last().unwrap().total_energy;
-        let energy_err = if e0.abs() > 1e-30 {
-            (e_final - e0).abs() / e0.abs()
-        } else {
-            0.0
-        };
+        let energy_err = crate::tooling::validation::helpers::relative_drift(e_final, e0);
 
         // Effective dt is proportional to CFL factor
         println!(
@@ -519,15 +489,12 @@ fn strang_temporal_convergence_order_2() {
 /// extrapolation to estimate spatial convergence order.
 #[test]
 fn spatial_convergence_free_streaming_3_resolutions() {
-    use crate::sim::Simulation;
-    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::diagnostics::estimate_convergence_order;
     use crate::tooling::core::init::{
         domain::{Domain, SpatialBoundType, VelocityBoundType},
         isolated::{PlummerIC, sample_on_grid},
     };
-    use crate::tooling::core::poisson::fft::FftPoisson;
-    use crate::tooling::core::time::strang::StrangSplitting;
+    use crate::tooling::validation::helpers::{build_standard_sim, relative_drift};
 
     let t_final = 0.5;
     let mut pairs = Vec::new();
@@ -547,30 +514,17 @@ fn spatial_convergence_free_streaming_3_resolutions() {
         let ic = PlummerIC::new(1.0, 1.0, 1.0);
         let snap = sample_on_grid(&ic, &domain);
 
-        let poisson = FftPoisson::new(&domain);
-        let mut sim = Simulation::builder()
-            .domain(domain.clone())
-            .poisson_solver(poisson)
-            .advector(SemiLagrangian::new())
-            .integrator(StrangSplitting::new(1.0))
-            .initial_conditions(snap)
-            .time_final(t_final)
-            .build()
-            .unwrap();
+        let lx = domain.lx();
+        let h = 2.0 * lx[0] / n as f64;
+
+        let mut sim = build_standard_sim(domain, snap, t_final);
 
         let pkg = sim.run().unwrap();
 
         // Measure energy drift as a proxy for error at this resolution
         let e0 = pkg.diagnostics_history[0].total_energy;
         let e_final = pkg.diagnostics_history.last().unwrap().total_energy;
-        let energy_err = if e0.abs() > 1e-30 {
-            (e_final - e0).abs() / e0.abs()
-        } else {
-            0.0
-        };
-
-        let lx = domain.lx();
-        let h = 2.0 * lx[0] / n as f64;
+        let energy_err = relative_drift(e_final, e0);
 
         println!(
             "Free streaming 3-res: N={n}, h={h:.4}, energy_drift={energy_err:.4e}, steps={}",

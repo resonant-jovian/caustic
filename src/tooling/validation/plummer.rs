@@ -3,15 +3,14 @@
 
 #[test]
 fn plummer_equilibrium() {
-    use crate::sim::Simulation;
-    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::init::{
         domain::{Domain, SpatialBoundType, VelocityBoundType},
         isolated::{PlummerIC, sample_on_grid},
     };
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
-    use crate::tooling::core::poisson::fft::FftPoisson;
-    use crate::tooling::core::time::strang::StrangSplitting;
+    use crate::tooling::validation::helpers::{
+        assert_valid_output, build_standard_sim, density_mass, relative_drift, snapshot_density,
+    };
 
     // Plummer sphere: M=1, a=1, G=1.
     // Velocity escape at r=0: v_esc = sqrt(2G*M/a) = sqrt(2) ≈ 1.41
@@ -32,31 +31,13 @@ fn plummer_equilibrium() {
     let snap = sample_on_grid(&ic, &domain);
 
     // Compute initial density profile
-    let initial_grid = crate::tooling::core::algos::uniform::UniformGrid6D::from_snapshot(
-        crate::tooling::core::types::PhaseSpaceSnapshot {
-            data: snap.data.clone(),
-            shape: snap.shape,
-            time: 0.0,
-        },
-        domain.clone(),
-    );
-    let initial_density = initial_grid.compute_density();
+    let initial_density = snapshot_density(&snap, &domain);
 
-    let poisson = FftPoisson::new(&domain);
-    let mut sim = Simulation::builder()
-        .domain(domain)
-        .poisson_solver(poisson)
-        .advector(SemiLagrangian::new())
-        .integrator(StrangSplitting::new(1.0))
-        .initial_conditions(snap)
-        .time_final(4.0)
-        .build()
-        .unwrap();
+    let mut sim = build_standard_sim(domain, snap, 4.0);
 
     // Check initial mass
     let dx_init = sim.domain.dx();
-    let dx3_init = dx_init[0] * dx_init[1] * dx_init[2];
-    let m_check = sim.repr.compute_density().data.iter().sum::<f64>() * dx3_init;
+    let m_check = density_mass(&sim.repr.compute_density(), dx_init);
     println!("Initial mass from sim.repr: {:.4}", m_check);
     println!(
         "Initial diag total_energy: {:.4}",
@@ -71,15 +52,10 @@ fn plummer_equilibrium() {
 
     // Check mass conservation: total density integral should be similar
     let dx = sim.domain.dx();
-    let dx3 = dx[0] * dx[1] * dx[2];
-    let m_init: f64 = initial_density.data.iter().sum::<f64>() * dx3;
-    let m_final: f64 = final_density.data.iter().sum::<f64>() * dx3;
+    let m_init = density_mass(&initial_density, dx);
+    let m_final = density_mass(&final_density, dx);
 
-    let mass_drift = if m_init > 1e-30 {
-        (m_final - m_init).abs() / m_init
-    } else {
-        0.0
-    };
+    let mass_drift = relative_drift(m_final, m_init);
 
     // For a coarse grid (8³×4³) over 2 t_dyn with periodic BC, allow 50% mass drift
     // (open velocity BC allows mass to leave; this is expected behaviour for this grid size)
@@ -88,14 +64,7 @@ fn plummer_equilibrium() {
         "Final mass should be positive, got m_final = {}",
         m_final
     );
-    assert!(
-        !final_density.data.iter().any(|x| x.is_nan()),
-        "Final density contains NaN values"
-    );
-    assert!(
-        pkg.diagnostics_history.len() >= 2,
-        "Should have at least 2 diagnostic entries"
-    );
+    assert_valid_output(&final_density, pkg.diagnostics_history.len());
 
     println!(
         "Plummer equilibrium: m_init={:.4}, m_final={:.4}, mass_drift={:.2}%, steps={}",

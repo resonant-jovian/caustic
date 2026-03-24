@@ -91,7 +91,11 @@ impl TimeIntegrator for LawsonRkIntegrator {
         // Step 2: RK4 kick with 4 Poisson solves
         // Stage 1: evaluate acceleration at drifted state
         helpers::report_phase!(self.progress, StepPhase::PoissonSolve, 1, 7);
-        let a1 = helpers::time_ms!(timings, poisson_ms, Self::compute_accel(repr, solver, self.g));
+        let a1 = helpers::time_ms!(
+            timings,
+            poisson_ms,
+            Self::compute_accel(repr, solver, self.g)
+        );
 
         // Stage 2: half-kick with a1, evaluate acceleration
         helpers::report_phase!(self.progress, StepPhase::PoissonSolve, 2, 7);
@@ -108,7 +112,8 @@ impl TimeIntegrator for LawsonRkIntegrator {
                 data: data.clone(),
                 shape,
                 time,
-            }).expect("Lawson-RK snapshot restore failed");
+            })
+            .expect("Lawson-RK snapshot restore failed");
             advector.kick(repr, &a2, dt / 2.0);
             Self::compute_accel(repr, solver, self.g)
         });
@@ -120,7 +125,8 @@ impl TimeIntegrator for LawsonRkIntegrator {
                 data: data.clone(),
                 shape,
                 time,
-            }).expect("Lawson-RK snapshot restore failed");
+            })
+            .expect("Lawson-RK snapshot restore failed");
             advector.kick(repr, &a3, dt);
             Self::compute_accel(repr, solver, self.g)
         });
@@ -141,8 +147,11 @@ impl TimeIntegrator for LawsonRkIntegrator {
 
         helpers::report_phase!(self.progress, StepPhase::StepComplete, 7, 7);
 
-        let (density, potential, acceleration) =
-            helpers::time_ms!(timings, density_ms, helpers::solve_poisson(repr, solver, self.g));
+        let (density, potential, acceleration) = helpers::time_ms!(
+            timings,
+            density_ms,
+            helpers::solve_poisson(repr, solver, self.g)
+        );
 
         self.last_timings = timings;
 

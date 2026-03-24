@@ -81,16 +81,27 @@ impl TimeIntegrator for YoshidaSplitting {
         helpers::report_phase!(self.progress, StepPhase::YoshidaDrift1, 0, 7);
         {
             let _s = tracing::info_span!("yoshida_drift_1").entered();
-            helpers::time_ms!(timings, drift_ms, advector.drift(repr, YOSHIDA_W1 * dt / 2.0));
+            helpers::time_ms!(
+                timings,
+                drift_ms,
+                advector.drift(repr, YOSHIDA_W1 * dt / 2.0)
+            );
         }
 
         // Substep 2: kick w1·dt
         helpers::report_phase!(self.progress, StepPhase::YoshidaKick1, 1, 7);
         {
             let _s = tracing::info_span!("yoshida_kick_1").entered();
-            let (_density, _potential, accel) =
-                helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, solver, self.g));
-            helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, YOSHIDA_W1 * dt));
+            let (_density, _potential, accel) = helpers::time_ms!(
+                timings,
+                poisson_ms,
+                helpers::solve_poisson(repr, solver, self.g)
+            );
+            helpers::time_ms!(
+                timings,
+                kick_ms,
+                advector.kick(repr, &accel, YOSHIDA_W1 * dt)
+            );
         }
 
         // Apply hypercollision damping after kick 1
@@ -100,16 +111,27 @@ impl TimeIntegrator for YoshidaSplitting {
         helpers::report_phase!(self.progress, StepPhase::YoshidaDrift2, 2, 7);
         {
             let _s = tracing::info_span!("yoshida_drift_2").entered();
-            helpers::time_ms!(timings, drift_ms, advector.drift(repr, (YOSHIDA_W1 + YOSHIDA_W0) * dt / 2.0));
+            helpers::time_ms!(
+                timings,
+                drift_ms,
+                advector.drift(repr, (YOSHIDA_W1 + YOSHIDA_W0) * dt / 2.0)
+            );
         }
 
         // Substep 4: kick w0·dt
         helpers::report_phase!(self.progress, StepPhase::YoshidaKick2, 3, 7);
         {
             let _s = tracing::info_span!("yoshida_kick_2").entered();
-            let (_density, _potential, accel) =
-                helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, solver, self.g));
-            helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, YOSHIDA_W0 * dt));
+            let (_density, _potential, accel) = helpers::time_ms!(
+                timings,
+                poisson_ms,
+                helpers::solve_poisson(repr, solver, self.g)
+            );
+            helpers::time_ms!(
+                timings,
+                kick_ms,
+                advector.kick(repr, &accel, YOSHIDA_W0 * dt)
+            );
         }
 
         // Apply hypercollision damping after kick 2
@@ -119,16 +141,27 @@ impl TimeIntegrator for YoshidaSplitting {
         helpers::report_phase!(self.progress, StepPhase::YoshidaDrift3, 4, 7);
         {
             let _s = tracing::info_span!("yoshida_drift_3").entered();
-            helpers::time_ms!(timings, drift_ms, advector.drift(repr, (YOSHIDA_W0 + YOSHIDA_W1) * dt / 2.0));
+            helpers::time_ms!(
+                timings,
+                drift_ms,
+                advector.drift(repr, (YOSHIDA_W0 + YOSHIDA_W1) * dt / 2.0)
+            );
         }
 
         // Substep 6: kick w1·dt
         helpers::report_phase!(self.progress, StepPhase::YoshidaKick3, 5, 7);
         {
             let _s = tracing::info_span!("yoshida_kick_3").entered();
-            let (_density, _potential, accel) =
-                helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, solver, self.g));
-            helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, YOSHIDA_W1 * dt));
+            let (_density, _potential, accel) = helpers::time_ms!(
+                timings,
+                poisson_ms,
+                helpers::solve_poisson(repr, solver, self.g)
+            );
+            helpers::time_ms!(
+                timings,
+                kick_ms,
+                advector.kick(repr, &accel, YOSHIDA_W1 * dt)
+            );
         }
 
         // Apply hypercollision damping after kick 3
@@ -138,12 +171,19 @@ impl TimeIntegrator for YoshidaSplitting {
         helpers::report_phase!(self.progress, StepPhase::YoshidaDrift4, 6, 7);
         {
             let _s = tracing::info_span!("yoshida_drift_4").entered();
-            helpers::time_ms!(timings, drift_ms, advector.drift(repr, YOSHIDA_W1 * dt / 2.0));
+            helpers::time_ms!(
+                timings,
+                drift_ms,
+                advector.drift(repr, YOSHIDA_W1 * dt / 2.0)
+            );
         }
 
         // Compute end-of-step products for caller reuse
-        let (density, potential, acceleration) =
-            helpers::time_ms!(timings, density_ms, helpers::solve_poisson(repr, solver, self.g));
+        let (density, potential, acceleration) = helpers::time_ms!(
+            timings,
+            density_ms,
+            helpers::solve_poisson(repr, solver, self.g)
+        );
 
         self.last_timings = timings;
 

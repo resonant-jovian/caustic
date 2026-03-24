@@ -79,10 +79,12 @@ static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
+pub mod serde_helpers;
 pub(crate) mod sim;
 pub mod tooling;
 
-pub use sim::{dec, f64_to_decimal, Simulation};
+pub use serde_helpers::decimal_serde;
+pub use sim::{Simulation, dec, f64_to_decimal};
 pub use tooling::core::advecator::Advector;
 pub use tooling::core::conditions::ExitReason;
 pub use tooling::core::init::domain::{Domain, DomainBuilder};
@@ -112,8 +114,7 @@ pub use tooling::core::init::stability::DiskStabilityIC;
 pub use tooling::core::init::tidal::TidalIC;
 pub use tooling::core::output::exit::standard::ExitEvaluator;
 pub use tooling::core::output::phasespace::{
-    PhaseSpaceDiagnostics, field_energy_spectrum, poisson_residual_l2,
-    potential_power_spectrum,
+    PhaseSpaceDiagnostics, field_energy_spectrum, poisson_residual_l2, potential_power_spectrum,
 };
 pub use tooling::core::poisson::fft::{FftIsolated, FftPoisson};
 pub use tooling::core::poisson::ht_poisson::HtPoisson;

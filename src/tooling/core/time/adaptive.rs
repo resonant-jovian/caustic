@@ -251,8 +251,11 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
 
         helpers::report_phase!(self.progress, StepPhase::StepComplete, 0, 0);
 
-        let (density, potential, acceleration) =
-            helpers::time_ms!(timings, density_ms, helpers::solve_poisson(repr, solver, self.g));
+        let (density, potential, acceleration) = helpers::time_ms!(
+            timings,
+            density_ms,
+            helpers::solve_poisson(repr, solver, self.g)
+        );
 
         self.last_timings = timings;
 
