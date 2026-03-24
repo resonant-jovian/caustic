@@ -111,7 +111,7 @@ mod tests {
 
         let steps_phase1 = (t1 / dt).round() as usize;
         for _ in 0..steps_phase1 {
-            integrator.advance(&mut grid, &poisson, &advector, dt);
+            integrator.advance(&mut grid, &poisson, &advector, dt).unwrap();
         }
 
         // ── Apply second perturbation: multiply f by (1 + eps2 * cos(k2 * x1)) ─
@@ -135,7 +135,7 @@ mod tests {
         let remaining = t_final - t1;
         let steps_phase2 = (remaining / dt).round() as usize;
         for _ in 0..steps_phase2 {
-            integrator.advance(&mut grid, &poisson, &advector, dt);
+            integrator.advance(&mut grid, &poisson, &advector, dt).unwrap();
         }
 
         // ── Measure echo: Fourier mode at k3 of the density ────────────

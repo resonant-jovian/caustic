@@ -100,7 +100,7 @@ fn jeans_instability_isolated() {
     let mut amplitudes = vec![(0.0f64, amp_init)];
 
     for step in 0..n_steps {
-        integrator.advance(&mut grid, &poisson, &advector, dt);
+        integrator.advance(&mut grid, &poisson, &advector, dt).unwrap();
 
         if (step + 1) % 5 == 0 {
             let rho = grid.compute_density();

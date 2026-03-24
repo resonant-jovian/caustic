@@ -67,6 +67,18 @@ impl StepTimings {
 }
 
 /// Trait for all time integration / operator splitting strategies.
+///
+/// # Examples
+///
+/// ```no_run
+/// use caustic::{StrangSplitting, YoshidaSplitting, TimeIntegrator};
+///
+/// // 2nd-order symplectic (drift-kick-drift)
+/// let strang = StrangSplitting::new(1.0); // G = 1.0
+///
+/// // 4th-order symplectic (7 sub-steps)
+/// let yoshida = YoshidaSplitting::new(1.0);
+/// ```
 pub trait TimeIntegrator {
     /// Advance the simulation by one timestep Δt.
     ///

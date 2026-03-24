@@ -112,7 +112,7 @@ impl TimeIntegrator for LawsonRkIntegrator {
             data: data.clone(),
             shape,
             time,
-        });
+        })?;
         advector.kick(repr, &a2, dt / 2.0);
         let a3 = Self::compute_accel(repr, solver, self.g);
         timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
@@ -126,7 +126,7 @@ impl TimeIntegrator for LawsonRkIntegrator {
             data: data.clone(),
             shape,
             time,
-        });
+        })?;
         advector.kick(repr, &a3, dt);
         let a4 = Self::compute_accel(repr, solver, self.g);
         timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
@@ -137,7 +137,7 @@ impl TimeIntegrator for LawsonRkIntegrator {
             p.set_sub_step(5, 7);
         }
         let t0 = Instant::now();
-        repr.load_snapshot(PhaseSpaceSnapshot { data, shape, time });
+        repr.load_snapshot(PhaseSpaceSnapshot { data, shape, time })?;
         advector.kick(repr, &a1, dt / 6.0);
         advector.kick(repr, &a2, dt / 3.0);
         advector.kick(repr, &a3, dt / 3.0);

@@ -127,7 +127,7 @@ fn triaxial_collapse() {
     let n_steps = (t_final / dt) as usize;
 
     for step in 0..n_steps {
-        integrator.advance(&mut grid, &poisson, &advector, dt);
+        integrator.advance(&mut grid, &poisson, &advector, dt).unwrap();
 
         // Sanity check at midpoint
         if step == n_steps / 2 {

@@ -82,7 +82,7 @@ fn jeans_stability() {
     let dt = 0.05f64;
 
     for _ in 0..5 {
-        integrator.advance(&mut grid, &poisson, &advector, dt);
+        integrator.advance(&mut grid, &poisson, &advector, dt).unwrap();
     }
 
     let rho_final = grid.compute_density();

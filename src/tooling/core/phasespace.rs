@@ -14,6 +14,35 @@ use super::types::{
 /// - `UniformGrid6D`: O(N⁶) brute-force grid
 /// - `TensorTrain`: O(N³r³) low-rank decomposition
 /// - `SheetTracker`: O(N³) Lagrangian cold sheet
+///
+/// # Examples
+///
+/// ```no_run
+/// use caustic::{PhaseSpaceRepr, UniformGrid6D, PlummerIC, sample_on_grid};
+/// use caustic::{Domain, DomainBuilder, SpatialBoundType, VelocityBoundType};
+///
+/// let domain = Domain::builder()
+///     .spatial_extent(10.0)
+///     .velocity_extent(5.0)
+///     .spatial_resolution(8)
+///     .velocity_resolution(8)
+///     .spatial_bc(SpatialBoundType::Periodic)
+///     .velocity_bc(VelocityBoundType::Open)
+///     .build()
+///     .unwrap();
+///
+/// let ic = PlummerIC::new(1.0, 1.0, 1.0);
+/// let snap = sample_on_grid(&ic, &domain);
+/// let repr = UniformGrid6D::from_snapshot(snap, domain);
+///
+/// // Query conserved quantities
+/// let mass = repr.total_mass();
+/// let c2 = repr.casimir_c2();
+/// let ke = repr.total_kinetic_energy(); // Option<f64>
+///
+/// // Compute density for Poisson coupling
+/// let density = repr.compute_density();
+/// ```
 pub trait PhaseSpaceRepr: Send + Sync {
     /// Integrate f over all velocities: ρ(x) = ∫f dv³.
     /// This is the coupling moment to the Poisson equation.
@@ -72,9 +101,12 @@ pub trait PhaseSpaceRepr: Send + Sync {
     ///
     /// Required for unsplit (method-of-lines) time integration, which manipulates
     /// the distribution function directly rather than through drift/kick sub-steps.
-    /// Default implementation panics; not all representations support this efficiently.
-    fn load_snapshot(&mut self, snap: PhaseSpaceSnapshot) {
+    /// Returns `Err` if this representation does not support snapshot loading.
+    fn load_snapshot(&mut self, snap: PhaseSpaceSnapshot) -> Result<(), crate::CausticError> {
         let _ = snap;
+        Err(crate::CausticError::Solver(
+            "load_snapshot not supported by this representation".into(),
+        ))
     }
 
     /// Downcast to concrete type for implementation-specific queries (e.g. HT rank data).

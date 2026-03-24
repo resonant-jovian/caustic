@@ -86,7 +86,7 @@ fn landau_damping() {
     let dt = 0.1f64;
 
     for _ in 0..8 {
-        integrator.advance(&mut grid, &poisson, &advector, dt);
+        integrator.advance(&mut grid, &poisson, &advector, dt).unwrap();
     }
 
     let rho_final = grid.compute_density();

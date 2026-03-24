@@ -105,7 +105,7 @@ impl TimeIntegrator for RkeiIntegrator {
                 data: combined,
                 shape: f_n.shape,
                 time: 0.0,
-            });
+            })?;
         }
         // repr now holds f^(2)
 
@@ -138,7 +138,7 @@ impl TimeIntegrator for RkeiIntegrator {
                 data: combined,
                 shape: f_n.shape,
                 time: 0.0,
-            });
+            })?;
         }
 
         let density = repr.compute_density();

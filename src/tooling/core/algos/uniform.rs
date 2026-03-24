@@ -1,5 +1,32 @@
-//! Brute-force uniform 6D grid. Memory O(N⁶). Simple and correct; primary reference
-//! implementation for validation.
+//! Brute-force dense 6D phase-space grid (`UniformGrid6D`).
+//!
+//! Stores the distribution function f(x, v) on a uniform Cartesian grid with
+//! Nx1 * Nx2 * Nx3 * Nv1 * Nv2 * Nv3 cells. Memory scales as O(N^6), so this
+//! representation is practical only for small grids (typically N <= 32 per axis).
+//!
+//! **When to use:** reference/validation runs where correctness matters more than
+//! memory, convergence studies against compressed representations (HT, TT), and
+//! any test that needs direct cell-by-cell access to f.
+//!
+//! **Memory layout:** row-major with index order (x1, x2, x3, v1, v2, v3). The
+//! outermost (slowest-varying) index is x1; the innermost (fastest-varying) is v3.
+//! The flat index is computed as:
+//!
+//! ```text
+//! index = ix1 * (nx2*nx3*nv1*nv2*nv3)
+//!       + ix2 * (nx3*nv1*nv2*nv3)
+//!       + ix3 * (nv1*nv2*nv3)
+//!       + iv1 * (nv2*nv3)
+//!       + iv2 * nv3
+//!       + iv3
+//! ```
+//!
+//! This layout makes the velocity block for each spatial cell contiguous, which
+//! is optimal for density integration (sum over velocity) and velocity advection.
+//!
+//! This module serves as the **reference exemplar** for implementing the
+//! [`PhaseSpaceRepr`] trait. Other representations (HT, TT, sheet, AMR, etc.)
+//! should match its semantics and can be validated against it.
 
 use super::super::{
     init::domain::{Domain, SpatialBoundType, VelocityBoundType},
@@ -50,10 +77,23 @@ fn shift_1d_dispatch(
     }
 }
 
-/// Stores f on a uniform (Nx1×Nx2×Nx3×Nv1×Nv2×Nv3) grid as a flat `Vec<f64>`.
-/// Index order: x1 fastest-changing outer, v3 fastest-changing inner (row-major).
+/// Dense 6D phase-space grid storing f(x, v) on a uniform Cartesian mesh.
+///
+/// The grid holds `Nx1 * Nx2 * Nx3 * Nv1 * Nv2 * Nv3` values in a flat
+/// `Vec<f64>` with row-major ordering (x1 outermost, v3 innermost). Each
+/// spatial cell owns a contiguous velocity block, enabling efficient parallel
+/// density integration and velocity-space advection.
+///
+/// Constructed via [`UniformGrid6D::new`] (zero-filled) or
+/// [`UniformGrid6D::from_snapshot`] (from existing data). Builder methods
+/// [`with_advection_scheme`](Self::with_advection_scheme),
+/// [`with_positivity_limiter`](Self::with_positivity_limiter), and
+/// [`with_velocity_filter`](Self::with_velocity_filter) configure optional
+/// advection features.
 pub struct UniformGrid6D {
+    /// Flat array of f(x, v) values, length `product(shape)`, in row-major 6D order.
     pub data: Vec<f64>,
+    /// The [`Domain`] this grid was constructed for (extents, resolution, boundary conditions).
     pub domain: Domain,
     // Cached derived values (computed once at construction, avoids repeated Decimal→f64).
     cached_sizes: [usize; 6],
@@ -98,7 +138,11 @@ impl CachedGrid {
 }
 
 impl UniformGrid6D {
-    /// Allocate Nx³ × Nv³ floats, zero-initialised.
+    /// Create a zero-filled grid with dimensions taken from `domain`.
+    ///
+    /// Allocates `Nx1 * Nx2 * Nx3 * Nv1 * Nv2 * Nv3` f64 values (plus an
+    /// equally-sized scratch buffer for advection). All cells are initialised
+    /// to zero; populate via direct `data` access or [`from_snapshot`](Self::from_snapshot).
     pub fn new(domain: Domain) -> Self {
         let n = domain.total_cells();
         let c = CachedGrid::from_domain(&domain);
@@ -118,6 +162,9 @@ impl UniformGrid6D {
         }
     }
 
+    /// Construct a grid from an existing [`PhaseSpaceSnapshot`], taking ownership of its data.
+    ///
+    /// Panics if `snap.data.len()` does not equal `domain.total_cells()`.
     pub fn from_snapshot(snap: PhaseSpaceSnapshot, domain: Domain) -> Self {
         assert_eq!(
             snap.data.len(),
@@ -207,7 +254,9 @@ impl UniformGrid6D {
         debug_assert_eq!(n_spatial * n_vel, self.data.len());
     }
 
-    /// Linear index into flat Vec from (ix1, ix2, ix3, iv1, iv2, iv3) — row-major 6D.
+    /// Compute the flat linear index for cell `(ix[0..3], iv[0..3])`.
+    ///
+    /// Uses row-major ordering: x1 outermost, v3 innermost. No bounds checking.
     #[inline]
     pub fn index(&self, ix: [usize; 3], iv: [usize; 3]) -> usize {
         let [_, nx2, nx3, nv1, nv2, nv3] = self.cached_sizes;
@@ -220,6 +269,7 @@ impl UniformGrid6D {
         ix[0] * s_x1 + ix[1] * s_x2 + ix[2] * s_x3 + iv[0] * s_v1 + iv[1] * s_v2 + iv[2] * s_v3
     }
 
+    /// Return grid dimensions as `[nx1, nx2, nx3, nv1, nv2, nv3]`.
     #[inline]
     pub(crate) fn sizes(&self) -> [usize; 6] {
         self.cached_sizes
@@ -349,10 +399,12 @@ fn filter_pencils_dim2(
 }
 
 impl PhaseSpaceRepr for UniformGrid6D {
+    /// Store an `Arc<StepProgress>` for intra-step progress reporting to the TUI.
     fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
         self.progress = Some(p);
     }
 
+    /// Sum over the contiguous velocity block at each spatial cell (parallel over spatial cells).
     fn compute_density(&self) -> DensityField {
         let _span = tracing::info_span!("compute_density").entered();
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
@@ -384,6 +436,11 @@ impl PhaseSpaceRepr for UniformGrid6D {
         }
     }
 
+    /// Dimension-split spatial advection: shift f along x1, x2, x3 by v*dt.
+    ///
+    /// Transposes data to group spatial pencils by velocity cell, applies 1D
+    /// shifts (Catmull-Rom, WPFC, or MP7) along each spatial axis in sequence,
+    /// then transposes back. Parallel over velocity cells via rayon.
     fn advect_x(&mut self, _displacement: &DisplacementField, dt: f64) {
         let _span = tracing::info_span!("advect_x").entered();
         let progress = self.progress.clone();
@@ -531,6 +588,12 @@ impl PhaseSpaceRepr for UniformGrid6D {
         self.scratch = intermediates;
     }
 
+    /// Dimension-split velocity advection: shift f along v1, v2, v3 by a*dt.
+    ///
+    /// Each spatial cell's contiguous velocity block is shifted independently
+    /// along v1, v2, v3 using the selected 1D interpolation scheme. Parallel
+    /// over spatial cells. Applies velocity-space exponential filter afterwards
+    /// if configured.
     fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
         let _span = tracing::info_span!("advect_v").entered();
         let progress = self.progress.clone();
@@ -660,6 +723,10 @@ impl PhaseSpaceRepr for UniformGrid6D {
         self.apply_velocity_filter();
     }
 
+    /// Compute velocity moments at the nearest grid cell to `position`.
+    ///
+    /// Order 0 returns density (scalar), order 1 returns mean velocity (3-vector),
+    /// order 2 returns the velocity dispersion tensor (3x3). Higher orders return empty.
     fn moment(&self, position: &[f64; 3], order: usize) -> Tensor {
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
         let dx = self.cached_dx;
@@ -762,6 +829,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
         }
     }
 
+    /// Integrate f over the full 6D volume: M = sum(f) * dx^3 * dv^3. Parallel via rayon.
     fn total_mass(&self) -> f64 {
         let dx = self.cached_dx;
         let dv = self.cached_dv;
@@ -770,6 +838,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
         self.data.par_iter().sum::<f64>() * dx3 * dv3
     }
 
+    /// Second Casimir invariant: C2 = integral(f^2) dx^3 dv^3. Parallel via rayon.
     fn casimir_c2(&self) -> f64 {
         let dx = self.cached_dx;
         let dv = self.cached_dv;
@@ -778,6 +847,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
         self.data.par_iter().map(|&f| f * f).sum::<f64>() * dx3 * dv3
     }
 
+    /// Boltzmann entropy: S = -integral(f ln f) dx^3 dv^3, skipping cells with f <= 0.
     fn entropy(&self) -> f64 {
         let dx = self.cached_dx;
         let dv = self.cached_dv;
@@ -792,6 +862,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
             * dv3
     }
 
+    /// Count peaks in the v1-marginal distribution at each spatial cell (proxy for stream count).
     fn stream_count(&self) -> StreamCountField {
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
         let dv = self.cached_dv;
@@ -832,6 +903,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
         }
     }
 
+    /// Return the full velocity block (nv1*nv2*nv3 values) at the nearest spatial cell.
     fn velocity_distribution(&self, position: &[f64; 3]) -> Vec<f64> {
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
         let dx = self.cached_dx;
@@ -852,6 +924,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
         self.data[base..base + n_vel].to_vec()
     }
 
+    /// Kinetic energy T = 0.5 * integral(f * v^2) dx^3 dv^3 using a precomputed v^2 lookup table.
     fn total_kinetic_energy(&self) -> Option<f64> {
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
         let dx = self.cached_dx;
@@ -891,6 +964,7 @@ impl PhaseSpaceRepr for UniformGrid6D {
         Some(0.5 * t * dx3 * dv3)
     }
 
+    /// Clone the full grid data into a [`PhaseSpaceSnapshot`] tagged with `time`.
     fn to_snapshot(&self, time: f64) -> Option<PhaseSpaceSnapshot> {
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
         Some(PhaseSpaceSnapshot {
@@ -900,19 +974,30 @@ impl PhaseSpaceRepr for UniformGrid6D {
         })
     }
 
-    fn load_snapshot(&mut self, snap: PhaseSpaceSnapshot) {
-        assert_eq!(snap.data.len(), self.data.len(), "snapshot size mismatch");
+    /// Replace grid data from a snapshot, returning an error on size mismatch.
+    fn load_snapshot(&mut self, snap: PhaseSpaceSnapshot) -> Result<(), crate::CausticError> {
+        if snap.data.len() != self.data.len() {
+            return Err(crate::CausticError::Solver(format!(
+                "snapshot size mismatch: expected {}, got {}",
+                self.data.len(),
+                snap.data.len()
+            )));
+        }
         self.data = snap.data;
+        Ok(())
     }
 
+    /// Downcast support for trait-object consumers.
     fn as_any(&self) -> &dyn Any {
         self
     }
 
+    /// Mutable downcast support for trait-object consumers.
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 
+    /// Heap size of the `data` array only (does not include the scratch buffer).
     fn memory_bytes(&self) -> usize {
         self.data.len() * std::mem::size_of::<f64>()
     }

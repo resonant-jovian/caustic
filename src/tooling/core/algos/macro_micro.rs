@@ -248,10 +248,11 @@ impl PhaseSpaceRepr for MacroMicroRepr {
         self.inner.to_snapshot(time)
     }
 
-    fn load_snapshot(&mut self, snap: PhaseSpaceSnapshot) {
-        self.inner.load_snapshot(snap);
+    fn load_snapshot(&mut self, snap: PhaseSpaceSnapshot) -> Result<(), crate::CausticError> {
+        self.inner.load_snapshot(snap)?;
         // Re-sync macro fields after loading new data.
         self.reproject_moments();
+        Ok(())
     }
 
     fn as_any(&self) -> &dyn Any {

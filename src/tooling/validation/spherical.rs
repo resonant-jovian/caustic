@@ -94,7 +94,7 @@ fn spherical_collapse() {
     let n_steps = ((0.4 * t_col) / dt).ceil() as usize; // run to 40% of collapse time
 
     for _ in 0..n_steps {
-        integrator.advance(&mut grid, &poisson, &advector, dt);
+        integrator.advance(&mut grid, &poisson, &advector, dt).unwrap();
     }
 
     let rho_final = grid.compute_density();

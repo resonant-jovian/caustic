@@ -14,15 +14,25 @@ use serde::Serialize;
 /// One row of the global time-series output.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct GlobalDiagnostics {
+    /// Simulation time at this diagnostic snapshot.
     pub time: f64,
+    /// Total energy E = T + W (kinetic + potential).
     pub total_energy: f64,
+    /// Kinetic energy T = (1/2) integral f v^2 dx^3 dv^3.
     pub kinetic_energy: f64,
+    /// Potential energy W = (1/2) integral rho Phi dx^3.
     pub potential_energy: f64,
+    /// Virial ratio 2T/|W|. Equals 1.0 in virial equilibrium.
     pub virial_ratio: f64,
+    /// [px, py, pz]: total momentum components.
     pub total_momentum: [f64; 3],
+    /// [Lx, Ly, Lz]: total angular momentum components.
     pub total_angular_momentum: [f64; 3],
+    /// Casimir invariant C2 = integral f^2 dx^3 dv^3.
     pub casimir_c2: f64,
+    /// Boltzmann entropy S = -integral f ln(f) dx^3 dv^3.
     pub entropy: f64,
+    /// Total mass in the domain: M = integral f dx^3 dv^3.
     pub mass_in_box: f64,
     /// Casimir C₂ measured before LoMaC projection (None if LoMaC inactive).
     #[serde(skip_serializing_if = "Option::is_none")]

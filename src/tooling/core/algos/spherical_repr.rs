@@ -289,8 +289,9 @@ impl PhaseSpaceRepr for SphericalRepr {
         })
     }
 
-    fn load_snapshot(&mut self, snap: PhaseSpaceSnapshot) {
+    fn load_snapshot(&mut self, snap: PhaseSpaceSnapshot) -> Result<(), crate::CausticError> {
         self.data = snap.data;
+        Ok(())
     }
 
     fn as_any(&self) -> &dyn Any {

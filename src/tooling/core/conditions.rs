@@ -30,12 +30,25 @@ pub enum ExitReason {
 }
 
 /// Trait for simulation exit predicates. Evaluated after each timestep.
+///
+/// # Examples
+///
+/// ```
+/// use caustic::{EnergyDriftCondition, ExitCondition, WallClockCondition};
+///
+/// // Exit if relative energy drift exceeds 1%
+/// let energy_exit = EnergyDriftCondition { tolerance: 0.01 };
+///
+/// // Exit after 1 hour of wall-clock time
+/// let wall_exit = WallClockCondition::new(3600.0);
+/// ```
 pub trait ExitCondition {
     fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics) -> Option<ExitReason>;
 }
 
 /// Exit when simulation time reaches `t_final`.
 pub struct TimeLimitCondition {
+    /// Maximum simulation time.
     pub t_final: f64,
 }
 
@@ -51,6 +64,7 @@ impl ExitCondition for TimeLimitCondition {
 
 /// Exit when relative energy drift exceeds `tolerance`.
 pub struct EnergyDriftCondition {
+    /// Maximum allowed |E(t)-E(0)|/|E(0)|.
     pub tolerance: f64,
 }
 
@@ -67,6 +81,7 @@ impl ExitCondition for EnergyDriftCondition {
 
 /// Exit when mass fraction drops below `threshold`.
 pub struct MassLossCondition {
+    /// Minimum mass fraction M(t)/M(0) before exit.
     pub threshold: f64,
 }
 
@@ -83,6 +98,7 @@ impl ExitCondition for MassLossCondition {
 
 /// Exit when relative Casimir drift exceeds `tolerance`.
 pub struct CasimirDriftCondition {
+    /// Maximum allowed |C2(t)-C2(0)|/C2(0).
     pub tolerance: f64,
 }
 
@@ -99,7 +115,9 @@ impl ExitCondition for CasimirDriftCondition {
 
 /// Exit when wall-clock time exceeds `limit_secs` seconds.
 pub struct WallClockCondition {
+    /// Maximum wall-clock seconds.
     pub limit_secs: f64,
+    /// Instant when the condition was created.
     pub start: std::time::Instant,
 }
 
@@ -126,6 +144,7 @@ impl ExitCondition for WallClockCondition {
 /// Uses interior mutability (Cell) to track previous entropy across calls,
 /// since the trait takes `&self`.
 pub struct SteadyStateCondition {
+    /// Maximum entropy change rate before declaring steady state.
     pub threshold: f64,
     prev_entropy: Cell<Option<f64>>,
 }
@@ -162,6 +181,7 @@ impl ExitCondition for SteadyStateCondition {
 
 /// Exit when adaptive Δt drops below `dt_min`.
 pub struct CflViolationCondition {
+    /// Minimum adaptive timestep before declaring CFL violation.
     pub dt_min: f64,
 }
 
@@ -185,6 +205,7 @@ impl ExitCondition for CausticFormationCondition {
 
 /// Exit when the virial ratio 2T/|W| stabilises within `tolerance` of 1.0.
 pub struct VirialRelaxedCondition {
+    /// Maximum |2T/|W| - 1| for virial equilibrium.
     pub tolerance: f64,
 }
 

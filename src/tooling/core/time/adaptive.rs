@@ -203,7 +203,7 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
             let strang_snap = repr.to_snapshot(0.0).ok_or_else(|| CausticError::Solver("adaptive integrator requires to_snapshot support".into()))?;
 
             // --- Lie step: drift(dt) -> kick(dt), from the saved initial state ---
-            repr.load_snapshot(snap_for_lie);
+            repr.load_snapshot(snap_for_lie)?;
 
             if let Some(ref p) = self.progress {
                 p.set_phase(StepPhase::DriftHalf1);
@@ -246,11 +246,11 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
 
             if accepted {
                 // Accept Strang result (higher order)
-                repr.load_snapshot(strang_snap);
+                repr.load_snapshot(strang_snap)?;
                 break;
             } else {
                 // Reject: reload the original initial state and retry with smaller dt
-                repr.load_snapshot(snap_for_rollback);
+                repr.load_snapshot(snap_for_rollback)?;
                 dt_try = dt_new.min(dt);
             }
         }

@@ -5,6 +5,18 @@ use super::phasespace::PhaseSpaceRepr;
 use super::types::AccelerationField;
 
 /// Trait for all phase-space advection schemes.
+///
+/// # Examples
+///
+/// ```no_run
+/// use caustic::{Advector, SemiLagrangian, PhaseSpaceRepr};
+///
+/// let advector = SemiLagrangian::new();
+/// // In a typical splitting step:
+/// // advector.drift(repr, dt);       // spatial half-step
+/// // advector.kick(repr, &accel, dt); // velocity full-step
+/// // advector.drift(repr, dt);       // spatial half-step
+/// ```
 pub trait Advector {
     /// Advance f in phase space by Δt using the given acceleration.
     /// Returns nothing — mutates the representation in place.

@@ -380,7 +380,7 @@ impl TimeIntegrator for UnsplitIntegrator {
                     data: y_stage,
                     shape: snap0.shape,
                     time: snap0.time + dt,
-                });
+                })?;
             }
 
             3 => {
@@ -427,7 +427,7 @@ impl TimeIntegrator for UnsplitIntegrator {
                     data: y_stage,
                     shape: snap0.shape,
                     time: snap0.time + dt,
-                });
+                })?;
             }
 
             4 => {
@@ -487,7 +487,7 @@ impl TimeIntegrator for UnsplitIntegrator {
                     data: y_stage,
                     shape: snap0.shape,
                     time: snap0.time + dt,
-                });
+                })?;
             }
 
             _ => unreachable!("rk_stages validated in constructor"),
