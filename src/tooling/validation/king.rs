@@ -3,15 +3,14 @@
 
 #[test]
 fn king_equilibrium() {
-    use crate::sim::Simulation;
-    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::init::{
         domain::{Domain, SpatialBoundType, VelocityBoundType},
         isolated::{KingIC, sample_on_grid},
     };
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
-    use crate::tooling::core::poisson::fft::FftPoisson;
-    use crate::tooling::core::time::strang::StrangSplitting;
+    use crate::tooling::validation::helpers::{
+        assert_valid_output, build_standard_sim, density_mass, relative_drift,
+    };
 
     // King model: W₀=5 (moderate concentration), r₀=1, M=1, G=1.
     // Tidal radius ≈ 5–10 r₀ for W₀=5.
@@ -43,53 +42,21 @@ fn king_equilibrium() {
         "King IC must have positive mass, got {m_init}"
     );
 
-    // Store initial density profile
-    let initial_grid = crate::tooling::core::algos::uniform::UniformGrid6D::from_snapshot(
-        crate::tooling::core::types::PhaseSpaceSnapshot {
-            data: snap.data.clone(),
-            shape: snap.shape,
-            time: 0.0,
-        },
-        domain.clone(),
-    );
-    let initial_density = initial_grid.compute_density();
-
-    let poisson = FftPoisson::new(&domain);
-    let mut sim = Simulation::builder()
-        .domain(domain.clone())
-        .poisson_solver(poisson)
-        .advector(SemiLagrangian::new())
-        .integrator(StrangSplitting::new(1.0))
-        .initial_conditions(snap)
-        .time_final(2.0)
-        .build()
-        .unwrap();
+    let mut sim = build_standard_sim(domain, snap, 2.0);
 
     let pkg = sim.run().unwrap();
 
     let final_density = sim.repr.compute_density();
-    let dx3 = dx[0] * dx[1] * dx[2];
-    let m_final: f64 = final_density.data.iter().sum::<f64>() * dx3;
+    let m_final = density_mass(&final_density, dx);
 
     // Final state should be well-defined
-    assert!(
-        !final_density.data.iter().any(|x| x.is_nan()),
-        "Final density contains NaN"
-    );
     assert!(m_final > 0.0, "Final mass should be positive");
-    assert!(
-        pkg.diagnostics_history.len() >= 2,
-        "Should have at least 2 diagnostic entries"
-    );
+    assert_valid_output(&final_density, pkg.diagnostics_history.len());
 
     // Energy should not drift catastrophically
     let e0 = pkg.diagnostics_history[0].total_energy;
     let e_final = pkg.diagnostics_history.last().unwrap().total_energy;
-    let energy_drift = if e0.abs() > 1e-30 {
-        (e_final - e0).abs() / e0.abs()
-    } else {
-        0.0
-    };
+    let energy_drift = relative_drift(e_final, e0);
 
     println!(
         "King equilibrium: W0=5, m_init={:.4}, m_final={:.4}, E_drift={:.2e}, steps={}",

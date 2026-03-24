@@ -1,10 +1,21 @@
-//! Semi-Lagrangian advector. Traces characteristics backwards from each grid point and
-//! interpolates. Eliminates CFL constraint; Δt limited only by accuracy requirements.
+//! Semi-Lagrangian advection on uniform grids.
+//!
+//! Traces characteristics backwards from each grid point and interpolates
+//! the distribution function at the departure point using Catmull-Rom
+//! cubic splines.  This unconditionally stable scheme eliminates the CFL
+//! time-step constraint; the time step is limited only by accuracy.
+//! Both periodic and open (absorbing) boundary conditions are supported,
+//! with an optimised sliding-window path that reuses stencil data.
 
 use super::super::{advecator::Advector, phasespace::PhaseSpaceRepr, types::*};
 
-/// Semi-Lagrangian advector with cubic spline interpolation.
+/// Semi-Lagrangian advector with Catmull-Rom cubic spline interpolation.
+///
+/// Implements the [`Advector`] trait by tracing characteristics backwards
+/// and interpolating at the departure point.  The default interpolation
+/// order is 3 (cubic), giving C1-continuous reconstructions.
 pub struct SemiLagrangian {
+    /// Polynomial interpolation order (3 = cubic Catmull-Rom).
     pub interpolation_order: usize,
 }
 
@@ -15,6 +26,7 @@ impl Default for SemiLagrangian {
 }
 
 impl SemiLagrangian {
+    /// Create a `SemiLagrangian` advector with cubic (order 3) interpolation.
     pub fn new() -> Self {
         Self {
             interpolation_order: 3,
@@ -23,6 +35,10 @@ impl SemiLagrangian {
 }
 
 impl Advector for SemiLagrangian {
+    /// Perform the spatial drift sub-step: f(x, v) -> f(x - v*dt, v).
+    ///
+    /// `UniformGrid6D` computes the displacement internally from its velocity
+    /// grid, so a dummy (empty) `DisplacementField` is passed.
     fn drift(&self, repr: &mut dyn PhaseSpaceRepr, dt: f64) {
         // UniformGrid6D ignores the displacement field; it computes shifts from its velocity grid.
         let dummy = DisplacementField {
@@ -34,10 +50,12 @@ impl Advector for SemiLagrangian {
         repr.advect_x(&dummy, dt);
     }
 
+    /// Perform the velocity kick sub-step: f(x, v) -> f(x, v - g*dt).
     fn kick(&self, repr: &mut dyn PhaseSpaceRepr, acceleration: &AccelerationField, dt: f64) {
         repr.advect_v(acceleration, dt);
     }
 
+    /// Perform one full unsplit step (kick then drift).
     fn step(&self, repr: &mut dyn PhaseSpaceRepr, acceleration: &AccelerationField, dt: f64) {
         self.kick(repr, acceleration, dt);
         self.drift(repr, dt);

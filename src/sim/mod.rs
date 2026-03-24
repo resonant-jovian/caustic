@@ -20,6 +20,28 @@ use crate::tooling::core::{
     types::*,
 };
 
+/// Convert f64 to Decimal, returning `Decimal::ZERO` for unrepresentable values.
+///
+/// Shorthand for config/init code that doesn't need field-name logging.
+#[inline]
+pub fn dec(v: f64) -> Decimal {
+    Decimal::from_f64_retain(v).unwrap_or(Decimal::ZERO)
+}
+
+/// Convert f64 to Decimal with a warning on unrepresentable values (NaN, Inf, subnormal).
+///
+/// Logs a `tracing::warn!` and returns `Decimal::ZERO` for NaN, Inf, and
+/// subnormal inputs. Use the `_decimal()` builder variants for exact values.
+pub fn f64_to_decimal(v: f64, field: &str) -> Decimal {
+    Decimal::from_f64_retain(v).unwrap_or_else(|| {
+        tracing::warn!(
+            "{field}({v}) is not representable as Decimal (NaN/Inf/subnormal); defaulting to 0. \
+             Use the _decimal() variant for exact values."
+        );
+        Decimal::ZERO
+    })
+}
+
 /// The top-level simulation object. Owns all solver components.
 pub struct Simulation {
     pub domain: Domain,
@@ -49,6 +71,8 @@ pub struct Simulation {
     pub cached_density: Option<DensityField>,
     /// Cached potential from the most recent step, for TUI reuse.
     pub cached_potential: Option<PotentialField>,
+    /// Cached acceleration from the most recent step, for TUI reuse.
+    pub cached_acceleration: Option<AccelerationField>,
     /// Optional shared progress state for intra-step TUI visibility.
     progress: Option<Arc<StepProgress>>,
 }
@@ -63,13 +87,14 @@ impl Simulation {
     pub fn run(&mut self) -> anyhow::Result<ExitPackage> {
         loop {
             if let Some(reason) = self.step()? {
-                let snapshot = self.repr.to_snapshot(self.time).unwrap_or_else(|| {
-                    PhaseSpaceSnapshot {
-                        data: vec![],
-                        shape: [0; 6],
-                        time: self.time,
-                    }
-                });
+                let snapshot =
+                    self.repr
+                        .to_snapshot(self.time)
+                        .unwrap_or_else(|| PhaseSpaceSnapshot {
+                            data: vec![],
+                            shape: [0; 6],
+                            time: self.time,
+                        });
                 let history = self.diagnostics.history.clone();
                 let wall_secs = self.start_time.elapsed().as_secs_f64();
                 return Ok(ExitPackage::assemble(
@@ -264,9 +289,12 @@ impl Simulation {
 
         self.last_step_timings = timings;
 
-        // Cache density and potential for TUI reuse (avoids redundant recomputation)
+        // Cache density, potential, and acceleration for TUI reuse
+        // (avoids redundant recomputation)
+        let accel = self.poisson.compute_acceleration(&potential);
         self.cached_density = Some(density);
         self.cached_potential = Some(potential);
+        self.cached_acceleration = Some(accel);
 
         if let Some(ref p) = self.progress {
             p.set_phase(StepPhase::StepComplete);
@@ -293,11 +321,48 @@ impl Simulation {
     }
 }
 
-/// Builder for `Simulation` using a fluent API.
+/// Builder for [`Simulation`] using a fluent API.
 ///
-/// Configuration fields (`t_final`, `output_interval`, `energy_tolerance`, `g`)
-/// are stored as `Decimal` for exact user-facing arithmetic. Backward-compatible
-/// `f64` setter methods are provided alongside `_decimal` variants.
+/// All four core components ([`Domain`], [`PhaseSpaceRepr`], [`PoissonSolver`],
+/// [`Advector`], [`TimeIntegrator`]) and initial conditions must be set before
+/// calling [`build()`](SimulationBuilder::build). Numeric config fields are
+/// stored as `Decimal` for exact arithmetic; each has an `f64` setter and a
+/// `_decimal` variant.
+///
+/// # Examples
+///
+/// ```no_run
+/// use caustic::prelude::*;
+/// use caustic::{
+///     FftPoisson, SemiLagrangian, StrangSplitting,
+///     Domain, DomainBuilder, SpatialBoundType, VelocityBoundType,
+///     Simulation, sample_on_grid,
+/// };
+///
+/// let domain = Domain::builder()
+///     .spatial_extent(10.0)
+///     .velocity_extent(5.0)
+///     .spatial_resolution(16)
+///     .velocity_resolution(16)
+///     .spatial_bc(SpatialBoundType::Periodic)
+///     .velocity_bc(VelocityBoundType::Open)
+///     .build()
+///     .unwrap();
+///
+/// let snap = sample_on_grid(&PlummerIC::new(1.0, 1.0, 1.0), &domain);
+///
+/// let mut sim = Simulation::builder()
+///     .domain(domain.clone())
+///     .poisson_solver(FftPoisson::new(&domain))
+///     .advector(SemiLagrangian::new())
+///     .integrator(StrangSplitting::new(1.0))
+///     .initial_conditions(snap)
+///     .time_final(10.0)
+///     .gravitational_constant(1.0)
+///     .cfl_factor(0.5)
+///     .build()
+///     .unwrap();
+/// ```
 pub struct SimulationBuilder {
     domain: Option<Domain>,
     repr: Option<Box<dyn PhaseSpaceRepr>>,
@@ -314,6 +379,7 @@ pub struct SimulationBuilder {
 }
 
 impl SimulationBuilder {
+    /// Create an empty builder with no components set.
     pub fn new() -> Self {
         Self {
             domain: None,
@@ -331,53 +397,63 @@ impl SimulationBuilder {
         }
     }
 
+    /// Set the computational domain (spatial/velocity extents, resolution, BCs).
     pub fn domain(mut self, d: Domain) -> Self {
         self.domain = Some(d);
         self
     }
 
+    /// Set the phase-space representation (concrete type, auto-boxed).
     pub fn representation(mut self, r: impl PhaseSpaceRepr + 'static) -> Self {
         self.repr = Some(Box::new(r));
         self
     }
 
+    /// Set the phase-space representation (pre-boxed, for dynamic dispatch).
     pub fn representation_boxed(mut self, r: Box<dyn PhaseSpaceRepr>) -> Self {
         self.repr = Some(r);
         self
     }
 
+    /// Set the Poisson solver (concrete type, auto-boxed).
     pub fn poisson_solver(mut self, p: impl PoissonSolver + 'static) -> Self {
         self.poisson = Some(Box::new(p));
         self
     }
 
+    /// Set the advection scheme (concrete type, auto-boxed).
     pub fn advector(mut self, a: impl Advector + 'static) -> Self {
         self.advector = Some(Box::new(a));
         self
     }
 
+    /// Set the time integrator / operator splitting (concrete type, auto-boxed).
     pub fn integrator(mut self, i: impl TimeIntegrator + 'static) -> Self {
         self.integrator = Some(Box::new(i));
         self
     }
 
+    /// Set the Poisson solver (pre-boxed, for dynamic dispatch).
     pub fn poisson_solver_boxed(mut self, p: Box<dyn PoissonSolver>) -> Self {
         self.poisson = Some(p);
         self
     }
 
+    /// Set the time integrator (pre-boxed, for dynamic dispatch).
     pub fn integrator_boxed(mut self, i: Box<dyn TimeIntegrator>) -> Self {
         self.integrator = Some(i);
         self
     }
 
+    /// Set the initial condition snapshot. Use [`sample_on_grid`] to generate from an IC type.
     pub fn initial_conditions(mut self, ic: PhaseSpaceSnapshot) -> Self {
         self.ic = Some(ic);
         self
     }
 
+    /// Set final simulation time. See also [`time_final_decimal`](Self::time_final_decimal).
     pub fn time_final(mut self, t: f64) -> Self {
-        self.t_final = Some(Decimal::from_f64_retain(t).unwrap_or(Decimal::ZERO));
+        self.t_final = Some(f64_to_decimal(t, "time_final"));
         self
     }
 
@@ -387,8 +463,9 @@ impl SimulationBuilder {
         self
     }
 
+    /// Set snapshot output interval. See also [`output_interval_decimal`](Self::output_interval_decimal).
     pub fn output_interval(mut self, dt: f64) -> Self {
-        self.output_interval = Some(Decimal::from_f64_retain(dt).unwrap_or(Decimal::ZERO));
+        self.output_interval = Some(f64_to_decimal(dt, "output_interval"));
         self
     }
 
@@ -398,8 +475,9 @@ impl SimulationBuilder {
         self
     }
 
+    /// Add an energy drift exit condition with the given relative tolerance.
     pub fn exit_on_energy_drift(mut self, tol: f64) -> Self {
-        self.energy_tolerance = Some(Decimal::from_f64_retain(tol).unwrap_or(Decimal::ZERO));
+        self.energy_tolerance = Some(f64_to_decimal(tol, "exit_on_energy_drift"));
         self
     }
 
@@ -409,8 +487,9 @@ impl SimulationBuilder {
         self
     }
 
+    /// Set Newton's gravitational constant G. Default is 1.0.
     pub fn gravitational_constant(mut self, g: f64) -> Self {
-        self.g = Some(Decimal::from_f64_retain(g).unwrap_or(Decimal::ZERO));
+        self.g = Some(f64_to_decimal(g, "gravitational_constant"));
         self
     }
 
@@ -428,9 +507,10 @@ impl SimulationBuilder {
         self
     }
 
+    /// Set the CFL safety factor for adaptive timestep control. Default is from domain.
     pub fn cfl_factor(mut self, cfl: f64) -> Self {
         let mut opts = self.opts.unwrap_or_default();
-        opts.cfl_factor = Decimal::from_f64_retain(cfl).unwrap_or(Decimal::ZERO);
+        opts.cfl_factor = f64_to_decimal(cfl, "cfl_factor");
         self.opts = Some(opts);
         self
     }
@@ -550,6 +630,7 @@ impl SimulationBuilder {
             last_step_timings: StepTimings::default(),
             cached_density: None,
             cached_potential: None,
+            cached_acceleration: None,
             progress: None,
         })
     }

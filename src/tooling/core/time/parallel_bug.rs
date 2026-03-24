@@ -21,6 +21,7 @@ use super::super::{
     solver::PoissonSolver,
     types::*,
 };
+use super::helpers;
 use crate::CausticError;
 
 use super::bug::{
@@ -58,17 +59,22 @@ impl Default for ParallelBugConfig {
     }
 }
 
-/// Parallel BUG integrator: computes all 6 leaf K-steps simultaneously.
+/// Parallel BUG integrator: computes all 6 leaf K-steps simultaneously via rayon.
 ///
-/// Falls back to standard Strang splitting for non-HT representations.
+/// Spatial leaves (x1, x2, x3) and velocity leaves (v1, v2, v3) are updated
+/// concurrently within each Strang sub-step, then applied respecting sibling
+/// constraints. Falls back to standard Strang splitting for non-HT representations.
 pub struct ParallelBugIntegrator {
+    /// BUG truncation, rank, rejection, and conservation settings.
     pub config: ParallelBugConfig,
+    /// Gravitational constant G.
     pub g: f64,
     last_timings: StepTimings,
     progress: Option<Arc<StepProgress>>,
 }
 
 impl ParallelBugIntegrator {
+    /// Create a new parallel BUG integrator with the given gravitational constant and config.
     pub fn new(g: f64, config: ParallelBugConfig) -> Self {
         Self {
             config,
@@ -179,65 +185,46 @@ impl ParallelBugIntegrator {
         };
 
         // Phase 1: Half drift — parallel K-steps for spatial leaves
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::BugKStep);
-            p.set_sub_step(0, 5);
-        }
-        let t0 = Instant::now();
-        {
+        helpers::report_phase!(self.progress, StepPhase::BugKStep, 0, 5);
+        helpers::time_ms!(timings, drift_ms, {
             let results = Self::parallel_drift_k_steps(ht, dt / 2.0, &self.config);
             for (d, (new_frame, r_mat)) in results.into_iter().enumerate() {
                 *ht.leaf_frame_mut(d) = new_frame;
                 update_transfer(ht, d, &r_mat);
             }
-        }
-        timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        });
 
         // Poisson solve at midpoint
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::BugLStep);
-            p.set_sub_step(1, 5);
-        }
-        let t0 = Instant::now();
-        let density = ht.compute_density();
-        let potential = solver.solve(&density, self.g);
-        let accel = solver.compute_acceleration(&potential);
-        timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::report_phase!(self.progress, StepPhase::BugLStep, 1, 5);
+        let (_, _, accel) = helpers::time_ms!(
+            timings,
+            poisson_ms,
+            helpers::solve_poisson(ht, solver, self.g)
+        );
 
         // Phase 2: Full kick — parallel K-steps for velocity leaves
-        if let Some(ref p) = self.progress {
-            p.set_sub_step(2, 5);
-        }
-        let t0 = Instant::now();
-        {
+        helpers::report_phase!(self.progress, StepPhase::BugLStep, 2, 5);
+        helpers::time_ms!(timings, kick_ms, {
             let results = Self::parallel_kick_k_steps(ht, &accel, dt, &self.config);
             for (i, (new_frame, r_mat)) in results.into_iter().enumerate() {
                 let d = i + 3;
                 *ht.leaf_frame_mut(d) = new_frame;
                 update_transfer(ht, d, &r_mat);
             }
-        }
-        timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        });
 
         // Phase 3: Half drift — parallel K-steps for spatial leaves
-        if let Some(ref p) = self.progress {
-            p.set_sub_step(3, 5);
-        }
-        let t0 = Instant::now();
-        {
+        helpers::report_phase!(self.progress, StepPhase::BugLStep, 3, 5);
+        helpers::time_ms!(timings, drift_ms, {
             let results = Self::parallel_drift_k_steps(ht, dt / 2.0, &self.config);
             for (d, (new_frame, r_mat)) in results.into_iter().enumerate() {
                 *ht.leaf_frame_mut(d) = new_frame;
                 update_transfer(ht, d, &r_mat);
             }
-        }
-        timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        });
 
         // SVD-truncate interior nodes
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::BugSStep);
-            p.set_sub_step(4, 5);
-        }
+        helpers::report_phase!(self.progress, StepPhase::BugSStep, 4, 5);
         ht.truncate(self.config.tolerance);
 
         if let Some(ref dens) = density_before {
@@ -301,23 +288,17 @@ impl ParallelBugIntegrator {
         dt: f64,
         timings: &mut StepTimings,
     ) {
-        let t0 = Instant::now();
-        advector.drift(repr, dt / 2.0);
-        timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / 2.0));
 
-        let t0 = Instant::now();
-        let density = repr.compute_density();
-        let potential = solver.solve(&density, self.g);
-        let accel = solver.compute_acceleration(&potential);
-        timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        let (_, _, accel) = helpers::time_ms!(
+            timings,
+            poisson_ms,
+            helpers::solve_poisson(repr, solver, self.g)
+        );
 
-        let t0 = Instant::now();
-        advector.kick(repr, &accel, dt);
-        timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, dt));
 
-        let t0 = Instant::now();
-        advector.drift(repr, dt / 2.0);
-        timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / 2.0));
     }
 }
 
@@ -344,30 +325,26 @@ impl TimeIntegrator for ParallelBugIntegrator {
             self.strang_fallback(repr, solver, advector, dt, &mut timings);
         }
 
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::StepComplete);
-        }
+        helpers::report_phase!(self.progress, StepPhase::StepComplete, 5, 5);
 
         // Compute end-of-step products for caller reuse
-        let t0 = Instant::now();
-        let density = repr.compute_density();
-        let potential = solver.solve(&density, self.g);
-        let acceleration = solver.compute_acceleration(&potential);
-        timings.density_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        let (density, potential, acceleration) = helpers::time_ms!(
+            timings,
+            density_ms,
+            helpers::solve_poisson(repr, solver, self.g)
+        );
 
         self.last_timings = timings;
 
-        Ok(StepProducts { density, potential, acceleration })
+        Ok(StepProducts {
+            density,
+            potential,
+            acceleration,
+        })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
-        let density = repr.compute_density();
-        let rho_max = density.data.iter().cloned().fold(0.0_f64, f64::max);
-        if rho_max <= 0.0 || self.g <= 0.0 {
-            return 1e10;
-        }
-        let t_dyn = 1.0 / (self.g * rho_max).sqrt();
-        cfl_factor * t_dyn
+        helpers::dynamical_timestep(repr, self.g, cfl_factor)
     }
 
     fn last_step_timings(&self) -> Option<&StepTimings> {

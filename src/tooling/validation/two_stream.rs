@@ -88,7 +88,9 @@ fn two_stream_instability() {
     // Track amplitude over time for saturation detection
     let mut max_amp = amp_init;
     for step in 0..40 {
-        integrator.advance(&mut grid, &poisson, &advector, dt);
+        integrator
+            .advance(&mut grid, &poisson, &advector, dt)
+            .unwrap();
 
         if (step + 1) % 10 == 0 {
             let rho = grid.compute_density();

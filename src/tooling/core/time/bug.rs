@@ -1,8 +1,19 @@
 //! Basis Update & Galerkin (BUG) integrator for Hierarchical Tucker format.
 //!
-//! Evolves solutions directly on the low-rank manifold instead of the
-//! step-and-truncate (SAT) approach. Provides controlled memory usage,
-//! automatic rank adaptation, and robust stability.
+//! BUG is a dynamical low-rank integrator that updates the HT tensor factors
+//! (leaf frames and transfer tensors) directly without ever materializing the
+//! full 6D grid. Each timestep consists of three conceptual stages:
+//!
+//! - **K-step:** Update spatial (drift) or velocity (kick) leaf bases by
+//!   semi-Lagrangian shifting, then QR-decompose to maintain orthonormality.
+//! - **L-step:** Recompute the gravitational acceleration from the updated
+//!   density projection and apply the velocity kick.
+//! - **S-step:** Update the transfer tensors to absorb the basis change
+//!   coefficients (the R matrices from QR), optionally augmenting rank.
+//!
+//! This avoids the step-and-truncate (SAT) approach where the full tensor is
+//! advanced and then re-compressed, providing controlled memory usage,
+//! automatic rank adaptation, and robust stability on the low-rank manifold.
 //!
 //! Algorithm (rank-adaptive BUG, one step):
 //! 1. **K-step:** For each active leaf, shift basis by semi-Lagrangian,
@@ -23,7 +34,6 @@
 //! for dynamical low-rank approximation", BIT Numer. Math. (2022).
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use faer::Mat;
 
@@ -37,6 +47,7 @@ use super::super::{
     solver::PoissonSolver,
     types::*,
 };
+use super::helpers;
 use crate::CausticError;
 
 /// Configuration for the BUG integrator.
@@ -454,16 +465,19 @@ pub(crate) fn truncation_rank(sv: &[f64], eps: f64) -> usize {
 /// BUG (Basis Update & Galerkin) integrator for low-rank tensor formats.
 ///
 /// When the representation is an `HtTensor`, this integrator evolves the
-/// solution directly on the low-rank manifold. For other representations,
-/// it falls back to standard Strang splitting.
+/// solution directly on the low-rank manifold via K/L/S-step updates.
+/// For other representations, it falls back to standard Strang splitting.
 pub struct BugIntegrator {
+    /// BUG algorithm parameters (tolerance, max rank, midpoint, conservative).
     pub config: BugConfig,
+    /// Gravitational constant G used for the Poisson solve.
     pub g: f64,
     last_timings: StepTimings,
     progress: Option<Arc<StepProgress>>,
 }
 
 impl BugIntegrator {
+    /// Create a new BUG integrator with the given gravitational constant and configuration.
     pub fn new(g: f64, config: BugConfig) -> Self {
         Self {
             config,
@@ -482,23 +496,17 @@ impl BugIntegrator {
         dt: f64,
         timings: &mut StepTimings,
     ) {
-        let t0 = Instant::now();
-        advector.drift(repr, dt / 2.0);
-        timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / 2.0));
 
-        let t0 = Instant::now();
-        let density = repr.compute_density();
-        let potential = solver.solve(&density, self.g);
-        let accel = solver.compute_acceleration(&potential);
-        timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        let (_, _, accel) = helpers::time_ms!(
+            timings,
+            poisson_ms,
+            helpers::solve_poisson(repr, solver, self.g)
+        );
 
-        let t0 = Instant::now();
-        advector.kick(repr, &accel, dt);
-        timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, dt));
 
-        let t0 = Instant::now();
-        advector.drift(repr, dt / 2.0);
-        timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / 2.0));
     }
 
     /// Standard BUG step: Strang-split drift-kick-drift on HT leaves.
@@ -520,36 +528,33 @@ impl BugIntegrator {
             None
         };
 
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::BugKStep);
-            p.set_sub_step(0, 4);
-        }
-        let t0 = Instant::now();
-        bug_drift_substep(ht, dt / 2.0, &self.config);
-        timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::report_phase!(self.progress, StepPhase::BugKStep, 0, 4);
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            bug_drift_substep(ht, dt / 2.0, &self.config)
+        );
 
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::BugLStep);
-            p.set_sub_step(1, 4);
-        }
-        let t0 = Instant::now();
-        let density = ht.compute_density();
-        let potential = solver.solve(&density, self.g);
-        let accel = solver.compute_acceleration(&potential);
-        timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::report_phase!(self.progress, StepPhase::BugLStep, 1, 4);
+        let (_, _, accel) = helpers::time_ms!(
+            timings,
+            poisson_ms,
+            helpers::solve_poisson(ht, solver, self.g)
+        );
 
-        let t0 = Instant::now();
-        bug_kick_substep(ht, &accel, dt, &self.config);
-        timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(
+            timings,
+            kick_ms,
+            bug_kick_substep(ht, &accel, dt, &self.config)
+        );
 
-        let t0 = Instant::now();
-        bug_drift_substep(ht, dt / 2.0, &self.config);
-        timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            bug_drift_substep(ht, dt / 2.0, &self.config)
+        );
 
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::BugSStep);
-            p.set_sub_step(2, 4);
-        }
+        helpers::report_phase!(self.progress, StepPhase::BugSStep, 2, 4);
         if let Some(ref dens) = density_before {
             conservative_correction(ht, dens);
         }
@@ -574,36 +579,36 @@ impl BugIntegrator {
             None
         };
 
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::BugKStep);
-            p.set_sub_step(0, 4);
-        }
+        helpers::report_phase!(self.progress, StepPhase::BugKStep, 0, 4);
 
         // Predict midpoint with half-step
         let saved = ht.clone();
-        let t0 = Instant::now();
-        bug_drift_substep(ht, dt / 4.0, &self.config);
-        timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            bug_drift_substep(ht, dt / 4.0, &self.config)
+        );
 
-        let t0 = Instant::now();
-        let density = ht.compute_density();
-        let potential = solver.solve(&density, self.g);
-        let accel = solver.compute_acceleration(&potential);
-        timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        let (_, _, accel) = helpers::time_ms!(
+            timings,
+            poisson_ms,
+            helpers::solve_poisson(ht, solver, self.g)
+        );
 
-        let t0 = Instant::now();
-        bug_kick_substep(ht, &accel, dt / 2.0, &self.config);
-        timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(
+            timings,
+            kick_ms,
+            bug_kick_substep(ht, &accel, dt / 2.0, &self.config)
+        );
 
-        let t0 = Instant::now();
-        bug_drift_substep(ht, dt / 4.0, &self.config);
-        timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            bug_drift_substep(ht, dt / 4.0, &self.config)
+        );
 
         // ht is now at midpoint — restore and do full step
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::BugLStep);
-            p.set_sub_step(1, 4);
-        }
+        helpers::report_phase!(self.progress, StepPhase::BugLStep, 1, 4);
         *ht = saved;
 
         let aug_config = BugConfig {
@@ -617,28 +622,31 @@ impl BugIntegrator {
             }
         };
 
-        let t0 = Instant::now();
-        bug_drift_substep(ht, dt / 2.0, &aug_config);
-        timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            bug_drift_substep(ht, dt / 2.0, &aug_config)
+        );
 
-        let t0 = Instant::now();
-        let density = ht.compute_density();
-        let potential = solver.solve(&density, self.g);
-        let accel = solver.compute_acceleration(&potential);
-        timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        let (_, _, accel) = helpers::time_ms!(
+            timings,
+            poisson_ms,
+            helpers::solve_poisson(ht, solver, self.g)
+        );
 
-        let t0 = Instant::now();
-        bug_kick_substep(ht, &accel, dt, &aug_config);
-        timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(
+            timings,
+            kick_ms,
+            bug_kick_substep(ht, &accel, dt, &aug_config)
+        );
 
-        let t0 = Instant::now();
-        bug_drift_substep(ht, dt / 2.0, &aug_config);
-        timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            bug_drift_substep(ht, dt / 2.0, &aug_config)
+        );
 
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::BugSStep);
-            p.set_sub_step(2, 4);
-        }
+        helpers::report_phase!(self.progress, StepPhase::BugSStep, 2, 4);
         if let Some(ref dens) = density_before {
             conservative_correction(ht, dens);
         }
@@ -646,6 +654,10 @@ impl BugIntegrator {
 }
 
 impl TimeIntegrator for BugIntegrator {
+    /// Advance the distribution by one timestep `dt`.
+    ///
+    /// If the representation is `HtTensor`, performs a BUG step (standard or midpoint
+    /// depending on config). Otherwise falls back to Strang splitting.
     fn advance(
         &mut self,
         repr: &mut dyn PhaseSpaceRepr,
@@ -672,37 +684,35 @@ impl TimeIntegrator for BugIntegrator {
             self.strang_fallback(repr, solver, advector, dt, &mut timings);
         }
 
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::StepComplete);
-            p.set_sub_step(3, 4);
-        }
+        helpers::report_phase!(self.progress, StepPhase::StepComplete, 3, 4);
 
         // Compute end-of-step products for caller reuse
-        let t0 = Instant::now();
-        let density = repr.compute_density();
-        let potential = solver.solve(&density, self.g);
-        let acceleration = solver.compute_acceleration(&potential);
-        timings.density_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        let (density, potential, acceleration) = helpers::time_ms!(
+            timings,
+            density_ms,
+            helpers::solve_poisson(repr, solver, self.g)
+        );
 
         self.last_timings = timings;
 
-        Ok(StepProducts { density, potential, acceleration })
+        Ok(StepProducts {
+            density,
+            potential,
+            acceleration,
+        })
     }
 
+    /// Dynamical-time CFL: dt <= cfl_factor / sqrt(G * rho_max).
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
-        let density = repr.compute_density();
-        let rho_max = density.data.iter().cloned().fold(0.0_f64, f64::max);
-        if rho_max <= 0.0 || self.g <= 0.0 {
-            return 1e10;
-        }
-        let t_dyn = 1.0 / (self.g * rho_max).sqrt();
-        cfl_factor * t_dyn
+        helpers::dynamical_timestep(repr, self.g, cfl_factor)
     }
 
+    /// Return timing breakdown from the most recent step.
     fn last_step_timings(&self) -> Option<&StepTimings> {
         Some(&self.last_timings)
     }
 
+    /// Attach a progress reporter for intra-step TUI updates.
     fn set_progress(&mut self, progress: Arc<StepProgress>) {
         self.progress = Some(progress);
     }

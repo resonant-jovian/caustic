@@ -15,67 +15,119 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepPhase {
+    /// No computation in progress; the simulation is idle.
     Idle = 0,
     // Build phases (set by phasma, not caustic)
+    /// Constructing the computational domain (spatial/velocity extents, resolution, boundaries).
     BuildDomain = 1,
+    /// Generating initial conditions (sampling the distribution function).
     BuildIC = 2,
+    /// Sampling phase-space points for the initial distribution function.
     BuildICSampling = 7,
+    /// Compressing the initial conditions into a low-rank representation (HT/TT).
     BuildICCompression = 8,
+    /// Initializing the Poisson solver (FFT plans, Green's function, tree structure).
     BuildPoisson = 3,
+    /// Constructing the time integrator (splitting scheme, RK tableaux).
     BuildIntegrator = 4,
+    /// Registering exit/termination conditions (energy drift, wall clock, etc.).
     BuildExitConditions = 5,
+    /// Final assembly of the simulation object from all constructed components.
     BuildAssembly = 6,
     // Strang sub-phases
+    /// First half-step spatial drift in Strang splitting (advance x by v*dt/2).
     DriftHalf1 = 10,
+    /// Computing the density field rho(x) by integrating f over velocity space.
     ComputeDensity = 11,
+    /// Solving the Poisson equation nabla^2 Phi = 4*pi*G*rho for the gravitational potential.
     PoissonSolve = 12,
+    /// Computing the acceleration field g = -nabla(Phi) from the potential.
     ComputeAcceleration = 13,
+    /// Full velocity kick in Strang splitting (advance v by g*dt).
     Kick = 14,
+    /// Second half-step spatial drift in Strang splitting (advance x by v*dt/2).
     DriftHalf2 = 15,
     // Post-advance (Simulation::step)
+    /// Applying the LoMaC conservative projection to restore mass/momentum/energy conservation.
     LoMaC = 16,
+    /// Recomputing the density field after the time step for diagnostics.
     PostDensity = 17,
+    /// Computing global diagnostics (energy, momentum, Casimir invariants, etc.).
     Diagnostics = 18,
+    /// The time step has completed; all sub-phases finished.
     StepComplete = 19,
     // Yoshida (7 sub-steps)
+    /// Yoshida 4th-order splitting: first drift sub-step (c1*dt).
     YoshidaDrift1 = 20,
+    /// Yoshida 4th-order splitting: first kick sub-step (d1*dt).
     YoshidaKick1 = 21,
+    /// Yoshida 4th-order splitting: second drift sub-step (c2*dt).
     YoshidaDrift2 = 22,
+    /// Yoshida 4th-order splitting: second kick sub-step (d2*dt).
     YoshidaKick2 = 23,
+    /// Yoshida 4th-order splitting: third drift sub-step (c3*dt).
     YoshidaDrift3 = 24,
+    /// Yoshida 4th-order splitting: third kick sub-step (d3*dt).
     YoshidaKick3 = 25,
+    /// Yoshida 4th-order splitting: fourth (final) drift sub-step (c4*dt).
     YoshidaDrift4 = 26,
     // RKEI (3 stages)
+    /// RKEI (SSP-RK3 exponential integrator): first stage evaluation.
     RkeiStage1 = 30,
+    /// RKEI (SSP-RK3 exponential integrator): second stage evaluation.
     RkeiStage2 = 31,
+    /// RKEI (SSP-RK3 exponential integrator): third stage evaluation and combination.
     RkeiStage3 = 32,
     // Unsplit RK stages
+    /// Unsplit Runge-Kutta integrator: first stage (used by RK2, RK3, and RK4).
     UnsplitStage1 = 40,
+    /// Unsplit Runge-Kutta integrator: second stage (used by RK2, RK3, and RK4).
     UnsplitStage2 = 41,
+    /// Unsplit Runge-Kutta integrator: third stage (used by RK3 and RK4).
     UnsplitStage3 = 42,
+    /// Unsplit Runge-Kutta integrator: fourth stage (used by RK4 only).
     UnsplitStage4 = 43,
     // Adaptive error estimation
+    /// Adaptive time-stepping: computing the Lie (first-order) estimate for error control.
     AdaptiveLie = 44,
+    /// Adaptive time-stepping: applying the velocity kick in the Lie estimate.
     AdaptiveLieKick = 45,
+    /// Adaptive time-stepping: computing the error norm between splitting orders.
     AdaptiveError = 46,
     // BM4 (6-stage, 11 sub-steps)
+    /// Blanes-Moan 4th-order splitting: first drift sub-step (a1*dt).
     Bm4Sub0 = 50,
+    /// Blanes-Moan 4th-order splitting: first kick sub-step (b1*dt).
     Bm4Sub1 = 51,
+    /// Blanes-Moan 4th-order splitting: second drift sub-step (a2*dt).
     Bm4Sub2 = 52,
+    /// Blanes-Moan 4th-order splitting: second kick sub-step (b2*dt).
     Bm4Sub3 = 53,
+    /// Blanes-Moan 4th-order splitting: third drift sub-step (a3*dt).
     Bm4Sub4 = 54,
+    /// Blanes-Moan 4th-order splitting: third kick sub-step (b3*dt).
     Bm4Sub5 = 55,
+    /// Blanes-Moan 4th-order splitting: fourth drift sub-step (a4*dt).
     Bm4Sub6 = 56,
+    /// Blanes-Moan 4th-order splitting: fourth kick sub-step (b4*dt).
     Bm4Sub7 = 57,
+    /// Blanes-Moan 4th-order splitting: fifth drift sub-step (a5*dt).
     Bm4Sub8 = 58,
+    /// Blanes-Moan 4th-order splitting: fifth kick sub-step (b5*dt).
     Bm4Sub9 = 59,
     // RKN6 (triple-jump composition)
+    /// 6th-order Runge-Kutta-Nystrom triple-jump composition: first Strang block.
     Rkn6Phase1 = 60,
+    /// 6th-order Runge-Kutta-Nystrom triple-jump composition: second (scaled) Strang block.
     Rkn6Phase2 = 61,
+    /// 6th-order Runge-Kutta-Nystrom triple-jump composition: third Strang block.
     Rkn6Phase3 = 62,
     // BUG integrator
+    /// BUG integrator: K-step (kinetic/drift sub-step).
     BugKStep = 80,
+    /// BUG integrator: L-step (Lie/interaction sub-step).
     BugLStep = 81,
+    /// BUG integrator: S-step (Strang-like combined sub-step).
     BugSStep = 82,
 }
 

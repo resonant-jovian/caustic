@@ -94,7 +94,9 @@ fn zeldovich_pancake() {
     let n_steps = 16; // 16 * 0.05 = 0.8 * t_col
 
     for _ in 0..n_steps {
-        integrator.advance(&mut grid, &poisson, &advector, dt);
+        integrator
+            .advance(&mut grid, &poisson, &advector, dt)
+            .unwrap();
     }
 
     let rho_final = grid.compute_density();

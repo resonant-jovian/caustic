@@ -1,9 +1,13 @@
-//! Spherical-harmonics Poisson solver. Natural for nearly-spherical halos.
-//! O(N^3 * l_max^2) for decomposition/reconstruction.
+//! Spherical-harmonics Poisson solver for ∇²Φ = 4πGρ.
 //!
-//! Expands the density into real spherical harmonics Y_lm, solves the radial
-//! Poisson equation for each (l,m) mode via the Green's function method, and
-//! reconstructs the potential on the Cartesian grid.
+//! Designed for nearly-spherical density distributions (isolated halos, stellar
+//! systems). The density is projected onto real spherical harmonics Y_lm up to
+//! degree `l_max`, the radial Poisson ODE is solved per (l,m) mode using the
+//! Green's function method (cumulative inner/outer integrals), and the potential
+//! is reconstructed on the Cartesian grid by summing Φ_lm(r) Y_lm(θ,φ).
+//!
+//! Boundary conditions are implicitly isolated (Φ → 0 at infinity).
+//! Complexity: O(N³ l_max²) for decomposition and reconstruction.
 
 use rayon::prelude::*;
 use std::sync::Arc;
@@ -19,10 +23,15 @@ use std::f64::consts::PI;
 /// stellar systems). The expansion is truncated at degree `l_max`, and the
 /// radial direction is discretized into `n_radial` bins from 0 to `r_max`.
 pub struct SphericalHarmonicsPoisson {
+    /// Maximum spherical harmonic degree (0 = monopole only).
     pub l_max: usize,
+    /// Number of radial bins for the 1D Green's-function ODE solve.
     pub n_radial: usize,
+    /// Outer radius of the radial grid (auto-computed from the domain diagonal).
     pub r_max: f64,
+    /// Cartesian grid dimensions `[nx, ny, nz]`.
     pub shape: [usize; 3],
+    /// Cartesian cell spacings `[dx, dy, dz]`.
     pub dx: [f64; 3],
     /// Shared progress state for intra-phase reporting.
     progress: Option<Arc<super::super::progress::StepProgress>>,
@@ -432,11 +441,12 @@ fn reconstruct_potential(
 // ---------------------------------------------------------------------------
 
 impl PoissonSolver for SphericalHarmonicsPoisson {
+    /// Register a shared progress handle for intra-step reporting to the TUI.
     fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
         self.progress = Some(p);
     }
 
-    /// Solve nabla^2 Phi = 4 pi G rho via spherical harmonic decomposition.
+    /// Solve ∇²Φ = 4πGρ via spherical harmonic decomposition.
     ///
     /// Steps:
     /// 1. Decompose density into radial profiles rho_lm(r) for each (l,m).
@@ -483,7 +493,7 @@ impl PoissonSolver for SphericalHarmonicsPoisson {
         )
     }
 
-    /// Compute gravitational acceleration g = -nabla Phi via centered finite
+    /// Compute gravitational acceleration g = -∇Φ via second-order centered finite
     /// differences on the Cartesian grid.
     fn compute_acceleration(&self, potential: &PotentialField) -> AccelerationField {
         finite_difference_acceleration(potential, &self.dx)

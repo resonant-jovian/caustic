@@ -2,14 +2,11 @@
 
 #[test]
 fn conservation_laws() {
-    use crate::sim::Simulation;
-    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::init::{
         domain::{Domain, SpatialBoundType, VelocityBoundType},
         isolated::{PlummerIC, sample_on_grid},
     };
-    use crate::tooling::core::poisson::fft::FftPoisson;
-    use crate::tooling::core::time::strang::StrangSplitting;
+    use crate::tooling::validation::helpers::{build_standard_sim, relative_drift};
 
     // Plummer sphere on a coarse grid. The Strang splitting conserves a shadow Hamiltonian,
     // so total energy (computed from the same potential) should drift slowly.
@@ -27,16 +24,7 @@ fn conservation_laws() {
     let ic = PlummerIC::new(1.0, 1.0, 1.0);
     let snap = sample_on_grid(&ic, &domain);
 
-    let poisson = FftPoisson::new(&domain);
-    let mut sim = Simulation::builder()
-        .domain(domain)
-        .poisson_solver(poisson)
-        .advector(SemiLagrangian::new())
-        .integrator(StrangSplitting::new(1.0))
-        .initial_conditions(snap)
-        .time_final(4.0)
-        .build()
-        .unwrap();
+    let mut sim = build_standard_sim(domain, snap, 4.0);
 
     let pkg = sim.run().unwrap();
 
@@ -49,11 +37,11 @@ fn conservation_laws() {
     // Compute max relative drifts over the run
     let max_e_drift = history
         .iter()
-        .map(|d| (d.total_energy - e0).abs() / e0.abs().max(1e-30))
+        .map(|d| relative_drift(d.total_energy, e0))
         .fold(0.0f64, f64::max);
     let max_c2_drift = history
         .iter()
-        .map(|d| (d.casimir_c2 - c2_0).abs() / c2_0.abs().max(1e-30))
+        .map(|d| relative_drift(d.casimir_c2, c2_0))
         .fold(0.0f64, f64::max);
 
     println!(

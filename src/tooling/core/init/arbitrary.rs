@@ -1,4 +1,10 @@
-//! Arbitrary user-provided initial conditions: callable or pre-computed 6D array.
+//! Arbitrary user-provided initial conditions.
+//!
+//! Two flavours are provided:
+//! - [`CustomIC`]: wraps a closure `f(x, v) -> f64` that is evaluated on every
+//!   6D grid point at startup (parallel via rayon).
+//! - [`CustomICArray`]: wraps a pre-computed flat `f64` array (e.g. loaded from
+//!   a NumPy `.npy` file) and validates its shape against the domain.
 
 use super::super::types::PhaseSpaceSnapshot;
 use super::domain::Domain;
@@ -91,8 +97,12 @@ impl CustomIC {
     }
 }
 
-/// Pre-computed 6D array [Nx1, Nx2, Nx3, Nv1, Nv2, Nv3] loaded from file.
+/// Pre-computed 6D distribution function loaded from an external file.
+///
+/// The data is stored as a flat row-major `f64` array with shape
+/// `[Nx1, Nx2, Nx3, Nv1, Nv2, Nv3]` and wrapped in a [`PhaseSpaceSnapshot`].
 pub struct CustomICArray {
+    /// The phase-space snapshot built from the user-supplied array (time = 0).
     pub snapshot: PhaseSpaceSnapshot,
 }
 

@@ -1,4 +1,12 @@
-//! `IOManager` — handles snapshot I/O, checkpoint/restart, and diagnostics output.
+//! Snapshot I/O, checkpoint/restart, and diagnostics output.
+//!
+//! [`IOManager`] is the single entry point for all file I/O in the solver.
+//! It writes and reads phase-space snapshots (binary or HDF5), appends
+//! per-step diagnostics rows to a CSV, and saves/loads Hierarchical Tucker
+//! checkpoints so that a simulation can be restarted without expanding the
+//! full N^6 dense array.
+//!
+//! All paths are resolved relative to the configured `output_dir`.
 
 use super::diagnostics::{Diagnostics, GlobalDiagnostics};
 use super::types::PhaseSpaceSnapshot;
@@ -26,20 +34,29 @@ pub struct HtCheckpoint {
     pub max_rank: usize,
 }
 
-/// Snapshot serialisation format.
+/// Snapshot serialisation format selector.
 pub enum OutputFormat {
+    /// HDF5 (requires the `hdf5` feature). Supports yt-compatible layout.
     Hdf5,
+    /// NumPy `.npy` — flat little-endian f64 with a standard NumPy header.
     Npy,
+    /// Raw little-endian binary: 6 x u64 shape + f64 time + f64 data.
     Binary,
 }
 
 /// Manages all file I/O: snapshots, diagnostics, and checkpoints.
+///
+/// All files are written into (or read from) [`output_dir`](Self::output_dir).
+/// The directory is created on demand by each write method.
 pub struct IOManager {
+    /// Base directory for all output files.
     pub output_dir: std::path::PathBuf,
+    /// Serialisation format used for snapshot writes.
     pub format: OutputFormat,
 }
 
 impl IOManager {
+    /// Create a new I/O manager writing to `output_dir` in the given format.
     pub fn new(output_dir: &str, format: OutputFormat) -> Self {
         Self {
             output_dir: std::path::PathBuf::from(output_dir),
@@ -47,7 +64,7 @@ impl IOManager {
         }
     }
 
-    /// Save a full `PhaseSpaceSnapshot` to disk at the given path.
+    /// Save a full [`PhaseSpaceSnapshot`] to disk as raw little-endian binary.
     pub fn save_snapshot(
         &self,
         snapshot: &PhaseSpaceSnapshot,
@@ -68,7 +85,7 @@ impl IOManager {
         Ok(())
     }
 
-    /// Load a snapshot from disk and reconstruct. Used for restarts.
+    /// Load a snapshot from disk and reconstruct a [`PhaseSpaceSnapshot`]. Used for restarts.
     pub fn load_snapshot(&self, filename: &str) -> anyhow::Result<PhaseSpaceSnapshot> {
         use std::io::Read;
         let path = self.output_dir.join(filename);
@@ -99,7 +116,7 @@ impl IOManager {
         Ok(PhaseSpaceSnapshot { data, shape, time })
     }
 
-    /// Append one row to the running diagnostics CSV.
+    /// Append one row to the running `diagnostics.csv` file (creates header on first call).
     pub fn append_diagnostics(&self, row: &GlobalDiagnostics) -> anyhow::Result<()> {
         use std::io::Write;
         std::fs::create_dir_all(&self.output_dir)?;

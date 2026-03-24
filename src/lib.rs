@@ -1,3 +1,71 @@
+//! # caustic
+//!
+//! A trait-based 6D Vlasov--Poisson solver for collisionless gravitational dynamics.
+//!
+//! caustic evolves the distribution function f(x,v,t) under the coupled
+//! Vlasov--Poisson system:
+//!
+//! ```text
+//! df/dt + v . grad_x f - grad Phi . grad_v f = 0   (Vlasov equation)
+//! laplacian Phi = 4 pi G rho                        (Poisson equation)
+//! rho = integral f dv^3                              (density coupling)
+//! ```
+//!
+//! The library uses a pluggable trait architecture: each component
+//! ([`PhaseSpaceRepr`], [`PoissonSolver`], [`Advector`], [`TimeIntegrator`],
+//! [`ExitCondition`]) is a trait with multiple implementations that can be
+//! mixed and matched via the [`Simulation`] builder.
+//!
+//! # Quick Start
+//!
+//! ```no_run
+//! use caustic::prelude::*;
+//! use caustic::{
+//!     FftPoisson, SemiLagrangian, StrangSplitting, UniformGrid6D,
+//!     Domain, DomainBuilder, SpatialBoundType, VelocityBoundType,
+//!     Simulation, sample_on_grid,
+//! };
+//!
+//! let domain = Domain::builder()
+//!     .spatial_extent(10.0)
+//!     .velocity_extent(5.0)
+//!     .spatial_resolution(16)
+//!     .velocity_resolution(16)
+//!     .t_final(1.0)
+//!     .spatial_bc(SpatialBoundType::Periodic)
+//!     .velocity_bc(VelocityBoundType::Open)
+//!     .build()
+//!     .unwrap();
+//!
+//! let ic = PlummerIC::new(1.0, 1.0, 1.0);
+//! let snap = sample_on_grid(&ic, &domain);
+//!
+//! let mut sim = Simulation::builder()
+//!     .domain(domain.clone())
+//!     .poisson_solver(FftPoisson::new(&domain))
+//!     .advector(SemiLagrangian::new())
+//!     .integrator(StrangSplitting::new(1.0))
+//!     .initial_conditions(snap)
+//!     .time_final(1.0)
+//!     .build()
+//!     .unwrap();
+//!
+//! let exit = sim.run().unwrap();
+//! exit.print_summary();
+//! ```
+//!
+//! # Architecture
+//!
+//! | Trait | Role |
+//! |---|---|
+//! | [`PhaseSpaceRepr`] | Store and query f(x,v): grid, tensor, sheet, spectral, AMR |
+//! | [`PoissonSolver`] | Solve nabla^2 Phi = 4piG rho: FFT, multigrid, tree, spherical |
+//! | [`Advector`] | Advance f by dt via drift (spatial) and kick (velocity) sub-steps |
+//! | [`TimeIntegrator`] | Orchestrate the full timestep: Strang, Yoshida, unsplit RK, etc. |
+//! | [`ExitCondition`] | Termination predicates: time limit, energy drift, virial, etc. |
+//!
+//! Use [`prelude`] for the most common imports.
+
 // Feature-gated global allocators
 #[cfg(feature = "jemalloc")]
 #[global_allocator]
@@ -11,10 +79,12 @@ static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
+pub mod serde_helpers;
 pub(crate) mod sim;
 pub mod tooling;
 
-pub use sim::Simulation;
+pub use serde_helpers::decimal_serde;
+pub use sim::{Simulation, dec, f64_to_decimal};
 pub use tooling::core::advecator::Advector;
 pub use tooling::core::conditions::ExitReason;
 pub use tooling::core::init::domain::{Domain, DomainBuilder};
@@ -27,8 +97,9 @@ pub use tooling::core::types::*;
 pub use tooling::core::algos::ht::HtTensor;
 pub use tooling::core::algos::lagrangian::SemiLagrangian;
 pub use tooling::core::conditions::{
-    CasimirDriftCondition, CausticFormationCondition, CflViolationCondition, ExitCondition,
-    MassLossCondition, SteadyStateCondition, VirialRelaxedCondition, WallClockCondition,
+    CasimirDriftCondition, CausticFormationCondition, CflViolationCondition, EnergyDriftCondition,
+    ExitCondition, MassLossCondition, SteadyStateCondition, TimeLimitCondition,
+    VirialRelaxedCondition, WallClockCondition,
 };
 pub use tooling::core::diagnostics::GlobalDiagnostics;
 pub use tooling::core::init::arbitrary::CustomICArray;
@@ -42,7 +113,9 @@ pub use tooling::core::init::mergers::MergerIC;
 pub use tooling::core::init::stability::DiskStabilityIC;
 pub use tooling::core::init::tidal::TidalIC;
 pub use tooling::core::output::exit::standard::ExitEvaluator;
-pub use tooling::core::output::phasespace::{PhaseSpaceDiagnostics, field_energy_spectrum};
+pub use tooling::core::output::phasespace::{
+    PhaseSpaceDiagnostics, field_energy_spectrum, poisson_residual_l2, potential_power_spectrum,
+};
 pub use tooling::core::poisson::fft::{FftIsolated, FftPoisson};
 pub use tooling::core::poisson::ht_poisson::HtPoisson;
 pub use tooling::core::poisson::multigrid::Multigrid;
@@ -277,6 +350,11 @@ mod tests {
 }
 
 /// Convenience re-exports for the most commonly used items.
+///
+/// Import with `use caustic::prelude::*;` to get all core traits, IC types,
+/// diagnostics, and field types in scope. Concrete solver/integrator
+/// implementations are **not** included -- import those individually
+/// (e.g. `use caustic::{FftPoisson, StrangSplitting};`).
 pub mod prelude {
     pub use crate::tooling::core::{
         conditions::ExitCondition,

@@ -1,20 +1,33 @@
-//! Tidal stream initial conditions: progenitor cluster orbiting in a fixed host potential.
+//! Tidal stream initial conditions.
+//!
+//! Places a satellite (progenitor) system, described by an [`IsolatedEquilibrium`], on an
+//! orbit inside a fixed external host potential. The host potential is analytic and does not
+//! evolve self-consistently -- only the satellite's own phase-space distribution is sampled
+//! onto the 6D grid. As the simulation advances, tidal forces from the host strip stars
+//! from the progenitor, forming leading and trailing tidal streams.
 
 use super::super::types::PhaseSpaceSnapshot;
 use super::domain::Domain;
 use super::isolated::IsolatedEquilibrium;
 use rayon::prelude::*;
 
-/// Tidal stream IC: progenitor cluster on an orbit in an external host potential.
+/// Tidal stream initial conditions: a satellite on an orbit in a fixed host potential.
+///
+/// The progenitor's distribution function is sampled in its own rest frame and placed
+/// at the specified position and velocity within the host.
 pub struct TidalIC {
-    /// Fixed external host potential Φ_host(x). Does not evolve self-consistently.
+    /// Fixed external host potential Phi_host(x). Does not evolve self-consistently.
     pub host_potential: Box<dyn Fn([f64; 3]) -> f64 + Send + Sync>,
+    /// Equilibrium model for the satellite (e.g. Plummer, King).
     pub progenitor: Box<dyn IsolatedEquilibrium>,
+    /// Initial centre-of-mass position of the satellite in the host frame.
     pub progenitor_position: [f64; 3],
+    /// Initial centre-of-mass velocity of the satellite in the host frame.
     pub progenitor_velocity: [f64; 3],
 }
 
 impl TidalIC {
+    /// Create a tidal-stream IC from a host potential, satellite model, and orbital state.
     pub fn new(
         host_potential: Box<dyn Fn([f64; 3]) -> f64 + Send + Sync>,
         progenitor: Box<dyn IsolatedEquilibrium>,

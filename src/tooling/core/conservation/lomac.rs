@@ -67,7 +67,10 @@ pub struct LoMaC {
 }
 
 impl LoMaC {
-    /// Create a new LoMaC manager.
+    /// Create a new LoMaC manager with the given grid geometry.
+    ///
+    /// Initializes an internal KFVS solver for macroscopic transport. The manager
+    /// starts in active mode; set `active = false` for passthrough behavior.
     pub fn new(
         spatial_shape: [usize; 3],
         velocity_shape: [usize; 3],
@@ -208,17 +211,17 @@ impl LoMaC {
         self.project(f_truncated)
     }
 
-    /// Get the current total mass from the macroscopic solver.
+    /// Returns the current total mass (integral of rho over the spatial domain) from the KFVS state.
     pub fn total_mass(&self) -> f64 {
         self.kfvs.total_mass()
     }
 
-    /// Get the current total momentum from the macroscopic solver.
+    /// Returns the current total momentum vector [Jx, Jy, Jz] from the KFVS state.
     pub fn total_momentum(&self) -> [f64; 3] {
         self.kfvs.total_momentum()
     }
 
-    /// Get the current total energy from the macroscopic solver.
+    /// Returns the current total energy (integral of e over the spatial domain) from the KFVS state.
     pub fn total_energy(&self) -> f64 {
         self.kfvs.total_energy()
     }
@@ -268,7 +271,8 @@ impl LoMaC {
             .initialize_from_moments(&density, &mom_x, &mom_y, &mom_z, &energy);
     }
 
-    /// Enable delta-f truncation mode and set the reference distribution.
+    /// Enable delta-f truncation mode with the given reference distribution.
+    /// Truncation will act on the perturbation delta_f = f - f_ref instead of f directly.
     pub fn enable_delta_f(&mut self, f_ref: Vec<f64>, refresh_interval: u64) {
         self.delta_f_truncation = true;
         self.f_ref = Some(f_ref);
@@ -354,7 +358,7 @@ impl LoMaC {
         result
     }
 
-    /// Update the reference distribution for delta-f mode.
+    /// Replace the reference distribution for delta-f mode with a new snapshot.
     pub fn update_f_ref(&mut self, f_new: &[f64]) {
         self.f_ref = Some(f_new.to_vec());
     }

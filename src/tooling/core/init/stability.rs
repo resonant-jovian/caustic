@@ -1,5 +1,10 @@
-//! Disk stability initial conditions: equilibrium disk + bulge + halo with a seeded
-//! perturbation mode for studying spiral arm / bar instabilities.
+//! Disk stability initial conditions.
+//!
+//! Constructs an axisymmetric exponential disk (with optional bulge and dark-matter halo)
+//! using the Shu (1969) distribution function f(E, Lz). A seeded azimuthal perturbation
+//! mode (e.g. m=2 for bar, m=3 for triangle) allows controlled study of Jeans instability,
+//! bar formation, and spiral-arm growth. The Toomre Q diagnostic is provided to assess
+//! local gravitational stability before running the simulation.
 
 use super::super::types::PhaseSpaceSnapshot;
 use super::domain::Domain;
@@ -58,7 +63,8 @@ fn elliptic_e(m: f64) -> f64 {
     poly_a - poly_b * m1.ln()
 }
 
-/// Disk stability IC: f(E, Lz) for axisymmetric disk plus an optional perturbation.
+/// Disk stability initial conditions: Shu (1969) distribution function f(E, Lz)
+/// for an axisymmetric disk with optional bulge, halo, and azimuthal perturbation.
 pub struct DiskStabilityIC {
     /// Disk surface density Σ(R) as function of cylindrical radius.
     pub disk_surface_density: Box<dyn Fn(f64) -> f64 + Send + Sync>,

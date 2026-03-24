@@ -4,9 +4,11 @@
 
 [![Crates.io](https://img.shields.io/crates/v/caustic.svg)](https://crates.io/crates/caustic)
 [![docs.rs](https://docs.rs/caustic/badge.svg)](https://docs.rs/caustic)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Support on thanks.dev](https://img.shields.io/badge/Support-thanks.dev-green)](https://thanks.dev/u/gh/resonant-jovian)
+
 [![CI](https://github.com/resonant-jovian/caustic/actions/workflows/test.yml/badge.svg)](https://github.com/resonant-jovian/caustic/actions/workflows/test.yml)
 [![Clippy](https://github.com/resonant-jovian/caustic/actions/workflows/clippy.yml/badge.svg)](https://github.com/resonant-jovian/caustic/actions/workflows/clippy.yml)
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
 > [!IMPORTANT]
 > Pre-0.1.0 — the API is unstable, features may be incomplete or change without notice, and it is not yet intended for general use. Even after 0.1.0, until version 1.0.0 it should not be relied upon for production workloads or serious research.
@@ -38,7 +40,7 @@
 
 Most astrophysical simulations of dark matter, galaxies, and stellar systems use **N-body methods** — they scatter millions of particles and let gravity do its work. But particles are a lie. They introduce artificial collisions and sampling noise that destroy exactly the structures you care about: razor-thin streams of stars torn from satellite galaxies, the velocity distribution at any point in a dark matter halo, and the caustic surfaces where phase-space sheets fold.
 
-**caustic** takes a fundamentally different approach. It solves the Vlasov–Poisson equations directly on a full 6D grid (3 spatial + 3 velocity dimensions), evolving the distribution function f(x, v, t) without any particles at all. No sampling noise. No artificial two-body relaxation. The phase-space structure you see is the phase-space structure that's there.
+**caustic** takes a fundamentally different approach. It solves the Vlasov–Poisson equations directly on a full 6D grid (3 spatial + 3 velocity dimensions), evolving the distribution function $f(\mathbf{x}, \mathbf{v}, t)$ without any particles at all. No sampling noise. No artificial two-body relaxation. The phase-space structure you see is the phase-space structure that's there.
 
 ### Install
 
@@ -49,28 +51,15 @@ caustic = "0.0.12"
 
 ### How it works
 
-```
-                        ┌─────────────────────────────────────────────┐
-                        │           TimeIntegrator                    │
-                        │   (orchestrates the full timestep cycle)    │
-                        └──────────────────┬──────────────────────────┘
-                                           │
-          ┌────────────────────────────────┼────────────────────────────────┐
-          │                                │                                │
-          ▼                                ▼                                ▼
-   ┌─────────────┐              ┌──────────────────┐              ┌─────────────┐
-   │  Advector   │              │  PhaseSpaceRepr  │              │PoissonSolver│
-   │             │              │                  │              │             │
-   │ advances f  │◄─────────────│  stores f(x,v)   │─────────────►│ ∇²Φ = 4πGρ  │
-   │ by Δt       │ acceleration │  computes ρ(x)   │   density    │ returns Φ,g │
-   └─────────────┘              └──────────────────┘              └─────────────┘
-                                        ▲
-                                        │
-                                ┌───────┴────────┐
-                                │ Initial        │
-                                │ Conditions     │
-                                │ (ICs)          │
-                                └────────────────┘
+```mermaid
+%%{init: {'theme': 'neutral'}}%%
+graph TD
+    TI[TimeIntegrator] --> ADV & PSR & PS
+    ADV[Advector<br>advances f by Δt]
+    PSR[PhaseSpaceRepr<br>stores f, computes ρ]
+    PS[PoissonSolver<br>∇²Φ = 4πGρ]
+    PSR -->|ρ| PS -->|g| ADV
+    IC[Initial Conditions] --> PSR
 ```
 
 Each box is a **swappable trait** — pick the phase-space representation, Poisson solver, and time integrator that fit your problem. The library provides multiple implementations of each.
@@ -138,17 +127,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Governing equations
 
-caustic evolves the 6D distribution function f(x, v, t) under the coupled Vlasov–Poisson system:
+caustic evolves the 6D distribution function $f(\mathbf{x}, \mathbf{v}, t)$ under the coupled Vlasov–Poisson system:
 
-```
-∂f/∂t + v · ∇ₓf − ∇ₓΦ · ∇ᵥf = 0        (Vlasov equation)
-ρ(x,t) = ∫ f(x,v,t) dv³                (density coupling)
-∇²Φ(x,t) = 4πGρ(x,t)                   (Poisson equation)
-```
+$$\frac{\partial f}{\partial t} + \mathbf{v} \cdot \nabla_{\mathbf{x}} f - \nabla_{\mathbf{x}} \Phi \cdot \nabla_{\mathbf{v}} f = 0 \qquad \text{(Vlasov equation)}$$
 
-**Conserved quantities** (monitored as validation diagnostics): total mass M, total energy E = T + W, total momentum P, total angular momentum L, Casimir invariants C[s] = ∫s(f) dx³dv³ (including C₂ = ∫f² dx³dv³ and entropy S = −∫f ln f dx³dv³).
+$$\rho(\mathbf{x}, t) = \int f(\mathbf{x}, \mathbf{v}, t) \, d^3v \qquad \text{(density coupling)}$$
 
-**Operator splitting**: the Vlasov equation splits into spatial drift (∂f/∂t + v·∇ₓf = 0) and velocity kick (∂f/∂t − ∇Φ·∇ᵥf = 0). Each sub-step is a pure translation. Strang splitting (drift–kick–drift) is second-order and symplectic; Yoshida gives fourth-order accuracy.
+$$\nabla^2 \Phi(\mathbf{x}, t) = 4\pi G \rho(\mathbf{x}, t) \qquad \text{(Poisson equation)}$$
+
+**Conserved quantities** (monitored as validation diagnostics): total mass $M$, total energy $E = T + W$, total momentum $\mathbf{P}$, total angular momentum $\mathbf{L}$, Casimir invariants $C[s] = \int s(f) \, d^3x \, d^3v$ (including $C_2 = \int f^2 \, d^3x \, d^3v$ and entropy $S = -\int f \ln f \, d^3x \, d^3v$).
+
+**Operator splitting**: the Vlasov equation splits into spatial drift ($\partial f/\partial t + \mathbf{v} \cdot \nabla_{\mathbf{x}} f = 0$) and velocity kick ($\partial f/\partial t - \nabla \Phi \cdot \nabla_{\mathbf{v}} f = 0$). Each sub-step is a pure translation. Strang splitting (drift–kick–drift) is second-order and symplectic; Yoshida gives fourth-order accuracy.
 
 ### Solver capabilities
 
@@ -156,23 +145,23 @@ caustic evolves the 6D distribution function f(x, v, t) under the coupled Vlasov
 
 | Representation | Memory | Description |
 |---|---|---|
-| `UniformGrid6D` | O(N⁶) | Brute-force 6D grid, rayon-parallelized. Reference implementation. |
-| `HtTensor` | O(dNk² + dk³) | Hierarchical Tucker decomposition. Black-box construction via HTACA. SLAR advection. |
-| `SheetTracker` | O(N³) | Lagrangian cold dark matter sheet. CIC density deposit. Caustic detection. |
+| `UniformGrid6D` | $O(N^6)$ | Brute-force 6D grid, rayon-parallelized. Reference implementation. |
+| `HtTensor` | $O(dNk^2 + dk^3)$ | Hierarchical Tucker decomposition. Black-box construction via HTACA. SLAR advection. |
+| `SheetTracker` | $O(N^3)$ | Lagrangian cold dark matter sheet. CIC density deposit. Caustic detection. |
 
 <details>
 <summary>All 8 representations</summary>
 
 | Representation | Memory | Description |
 |---|---|---|
-| `UniformGrid6D` | O(N⁶) | Brute-force 6D grid, rayon-parallelized. Reference implementation. |
-| `HtTensor` | O(dNk² + dk³) | Hierarchical Tucker tensor decomposition. Black-box construction via HTACA. SLAR advection. |
-| `TensorTrain` | O(dNr²) | TT-SVD decomposition with cross approximation advection. |
-| `SheetTracker` | O(N³) | Lagrangian cold dark matter sheet. CIC density deposit. Caustic detection. |
-| `SpectralV` | O(N³M³) | Hermite spectral basis in velocity; finite-difference in space. |
+| `UniformGrid6D` | $O(N^6)$ | Brute-force 6D grid, rayon-parallelized. Reference implementation. |
+| `HtTensor` | $O(dNk^2 + dk^3)$ | Hierarchical Tucker tensor decomposition. Black-box construction via HTACA. SLAR advection. |
+| `TensorTrain` | $O(dNr^2)$ | TT-SVD decomposition with cross approximation advection. |
+| `SheetTracker` | $O(N^3)$ | Lagrangian cold dark matter sheet. CIC density deposit. Caustic detection. |
+| `SpectralV` | $O(N^3 M^3)$ | Hermite spectral basis in velocity; finite-difference in space. |
 | `AmrGrid` | adaptive | Adaptive mesh refinement in 6D with gradient-based refinement. |
 | `HybridRepr` | adaptive | Sheet/grid hybrid with caustic-aware interface switching. |
-| `SphericalRepr` | O(N_r N_l²) | Spherical harmonic basis with radial grid. |
+| `SphericalRepr` | $O(N_r N_l^2)$ | Spherical harmonic basis with radial grid. |
 
 </details>
 
@@ -180,25 +169,25 @@ caustic evolves the 6D distribution function f(x, v, t) under the coupled Vlasov
 
 | Solver | BC | Complexity | Description |
 |---|---|---|---|
-| `FftPoisson` | Periodic | O(N³ log N) | Real-to-complex FFT via `realfft`, rayon-parallelized. |
-| `VgfPoisson` | Isolated | O(N³ log N) | Spectral-accuracy isolated BC via Vico-Greengard-Ferrando method. |
-| `Multigrid` | Periodic/Isolated | O(N³) | V-cycle with red-black Gauss-Seidel smoothing, rayon-parallelized. |
+| `FftPoisson` | Periodic | $O(N^3 \log N)$ | Real-to-complex FFT via `realfft`, rayon-parallelized. |
+| `VgfPoisson` | Isolated | $O(N^3 \log N)$ | Spectral-accuracy isolated BC via Vico-Greengard-Ferrando method. |
+| `Multigrid` | Periodic/Isolated | $O(N^3)$ | V-cycle with red-black Gauss-Seidel smoothing, rayon-parallelized. |
 
 <details>
 <summary>All 10 Poisson solvers</summary>
 
 | Solver | BC | Complexity | Description |
 |---|---|---|---|
-| `FftPoisson` | Periodic | O(N³ log N) | Real-to-complex FFT via `realfft`, rayon-parallelized. |
-| `FftIsolated` *(deprecated)* | Isolated | O(N³ log N) | Hockney-Eastwood zero-padding on (2N)³ grid. Deprecated in favor of `VgfPoisson`. |
-| `VgfPoisson` | Isolated | O(N³ log N) | Spectral-accuracy isolated BC via Vico-Greengard-Ferrando method. |
-| `TensorPoisson` | Isolated | O(N³ log N) | Braess-Hackbusch exponential sum Green's function + dense 3D FFT. 2nd-order near-field correction. |
-| `HtPoisson` | Isolated | O(R_G·r·N log N) | HT-format Poisson: exp-sum Green's function in HT tensor format with rank re-compression. |
-| `Multigrid` | Periodic/Isolated | O(N³) | V-cycle with red-black Gauss-Seidel smoothing, rayon-parallelized. |
-| `SphericalHarmonicsPoisson` | Isolated | O(l²_max N) | Legendre decomposition + radial ODE integration. |
-| `TreePoisson` | Isolated | O(N³ log N³) | Barnes-Hut octree with multipole expansion, rayon-parallelized. |
-| `MultipoleExpansion` | Isolated | O(l²_max N) | Multipole expansion gravity solver. |
-| `Spherical1DPoisson` | Spherical | O(N_r) | 1D radial Poisson solver for spherically symmetric problems. |
+| `FftPoisson` | Periodic | $O(N^3 \log N)$ | Real-to-complex FFT via `realfft`, rayon-parallelized. |
+| `FftIsolated` *(deprecated)* | Isolated | $O(N^3 \log N)$ | Hockney-Eastwood zero-padding on $(2N)^3$ grid. Deprecated in favor of `VgfPoisson`. |
+| `VgfPoisson` | Isolated | $O(N^3 \log N)$ | Spectral-accuracy isolated BC via Vico-Greengard-Ferrando method. |
+| `TensorPoisson` | Isolated | $O(N^3 \log N)$ | Braess-Hackbusch exponential sum Green's function + dense 3D FFT. 2nd-order near-field correction. |
+| `HtPoisson` | Isolated | $O(R_G \cdot r \cdot N \log N)$ | HT-format Poisson: exp-sum Green's function in HT tensor format with rank re-compression. |
+| `Multigrid` | Periodic/Isolated | $O(N^3)$ | V-cycle with red-black Gauss-Seidel smoothing, rayon-parallelized. |
+| `SphericalHarmonicsPoisson` | Isolated | $O(l_{\max}^2 N)$ | Legendre decomposition + radial ODE integration. |
+| `TreePoisson` | Isolated | $O(N^3 \log N^3)$ | Barnes-Hut octree with multipole expansion, rayon-parallelized. |
+| `MultipoleExpansion` | Isolated | $O(l_{\max}^2 N)$ | Multipole expansion gravity solver. |
+| `Spherical1DPoisson` | Spherical | $O(N_r)$ | 1D radial Poisson solver for spherically symmetric problems. |
 
 </details>
 
@@ -206,7 +195,7 @@ caustic evolves the 6D distribution function f(x, v, t) under the coupled Vlasov
 
 | Integrator | Order | Description |
 |---|---|---|
-| `StrangSplitting` | 2 | Drift(Δt/2) → kick(Δt) → drift(Δt/2). Symplectic. |
+| `StrangSplitting` | 2 | Drift($\Delta t/2$) → kick($\Delta t$) → drift($\Delta t/2$). Symplectic. |
 | `YoshidaSplitting` | 4 | 3-substep Yoshida coefficients, 7 sub-steps total. Symplectic. |
 | `BugIntegrator` | varies | Basis Update & Galerkin (BUG) for HT tensors. |
 
@@ -215,9 +204,9 @@ caustic evolves the 6D distribution function f(x, v, t) under the coupled Vlasov
 
 | Integrator | Order | Description |
 |---|---|---|
-| `StrangSplitting` | 2 | Drift(Δt/2) → kick(Δt) → drift(Δt/2). Symplectic. |
+| `StrangSplitting` | 2 | Drift($\Delta t/2$) → kick($\Delta t$) → drift($\Delta t/2$). Symplectic. |
 | `YoshidaSplitting` | 4 | 3-substep Yoshida coefficients, 7 sub-steps total. Symplectic. |
-| `LieSplitting` | 1 | Drift(Δt) → kick(Δt). For testing/comparison only. |
+| `LieSplitting` | 1 | Drift($\Delta t$) → kick($\Delta t$). For testing/comparison only. |
 | `UnsplitIntegrator` | 2/3/4 | Method-of-lines RK on full Vlasov PDE. No splitting error. Re-solves Poisson at each stage. |
 | `RkeiIntegrator` | 3 | RKEI (Runge-Kutta Exponential Integrator). SSP-RK3 with unsplit characteristics. |
 | `InstrumentedStrangSplitting` | 2 | Strang splitting with per-sub-step rank diagnostics. |
@@ -234,25 +223,25 @@ caustic evolves the 6D distribution function f(x, v, t) under the coupled Vlasov
 
 ### HT tensor compression
 
-A uniform 6D grid at N=64 per dimension requires 64⁶ ~ 7x10^10 cells. The `HtTensor` representation exploits the balanced binary tree structure of the x-v split to store f(x,v) in O(dNk² + dk³) memory, where k is the representation rank.
+A uniform 6D grid at $N=64$ per dimension requires $64^6 \approx 7 \times 10^{10}$ cells. The `HtTensor` representation exploits the balanced binary tree structure of the x-v split to store $f(\mathbf{x},\mathbf{v})$ in $O(dNk^2 + dk^3)$ memory, where $k$ is the representation rank.
 
 **Construction:**
 - `HtTensor::from_full()` — compress a full 6D array via hierarchical SVD (HSVD)
-- `HtTensor::from_function_aca()` — black-box construction via HTACA (Ballani & Grasedyck 2013), sampling O(dNk) fibers instead of all N⁶ points
+- `HtTensor::from_function_aca()` — black-box construction via HTACA (Ballani & Grasedyck 2013), sampling $O(dNk)$ fibers instead of all $N^6$ points
 
 **Operations** (all in compressed format, never expanding to full):
-- `compute_density()` — O(Nk²) velocity integration via tree contraction
+- `compute_density()` — $O(Nk^2)$ velocity integration via tree contraction
 - `truncate(eps)` — rank-adaptive recompression (orthogonalize + top-down SVD)
 - `add()` — rank-concatenation, then `truncate()` to compress
-- `inner_product()` / `frobenius_norm()` — O(dk⁴) via recursive Gram matrices
+- `inner_product()` / `frobenius_norm()` — $O(dk^4)$ via recursive Gram matrices
 - `advect_x()` / `advect_v()` — SLAR (Semi-Lagrangian Adaptive Rank) via HTACA reconstruction
 
 ### Initial conditions
 
 **Isolated equilibria** (via `sample_on_grid()`):
-- **`PlummerIC`** — Plummer sphere via analytic f(E)
+- **`PlummerIC`** — Plummer sphere via analytic $f(E)$
 - **`KingIC`** — King model via Poisson-Boltzmann ODE (RK4)
-- **`HernquistIC`** — Hernquist profile via closed-form f(E)
+- **`HernquistIC`** — Hernquist profile via closed-form $f(E)$
 - **`NfwIC`** — NFW profile via numerical Eddington inversion
 
 **Cosmological:**
@@ -260,7 +249,7 @@ A uniform 6D grid at N=64 per dimension requires 64⁶ ~ 7x10^10 cells. The `HtT
 - **`ZeldovichIC`** — multi-mode from Gaussian random field (Harrison-Zel'dovich spectrum, FFT-based)
 
 **Disk dynamics:**
-- **`DiskStabilityIC`** — exponential disk with Shu (1969) f(E, L_z), Toomre Q, azimuthal perturbation modes
+- **`DiskStabilityIC`** — exponential disk with Shu (1969) $f(E, L_z)$, Toomre $Q$, azimuthal perturbation modes
 
 **Multi-body and custom:**
 - **`MergerIC`** — two-body superposition with configurable offsets
@@ -288,18 +277,18 @@ The LoMaC (Local Macroscopic Conservation) framework restores exact conservation
 
 | Test | Validates |
 |---|---|
-| `free_streaming` | Spatial advection accuracy (G=0, f shifts as f(x-vt, v, 0)) |
+| `free_streaming` | Spatial advection accuracy ($G=0$, $f$ shifts as $f(\mathbf{x}-\mathbf{v}t, \mathbf{v}, 0)$) |
 | `uniform_acceleration` | Velocity advection accuracy |
 | `jeans_instability` | Growth rate matches analytic dispersion relation (periodic BC) |
 | `jeans_instability_isolated` | Jeans instability with FftIsolated BCs |
 | `jeans_stability` | Sub-Jeans perturbation does not grow |
 | `plummer_equilibrium` | Long-term equilibrium preservation |
-| `king_equilibrium` | King model (W_0=5) equilibrium preservation |
-| `nfw_equilibrium` | NFW profile cusp preservation over 5 t_dyn |
+| `king_equilibrium` | King model ($W_0=5$) equilibrium preservation |
+| `nfw_equilibrium` | NFW profile cusp preservation over $5\,t_{\mathrm{dyn}}$ |
 | `zeldovich_pancake` | Caustic position matches analytic Zel'dovich solution |
 | `spherical_collapse` | Spherical overdensity collapse dynamics |
 | `cold_collapse_1d` | Cold slab collapse, phase-space spiral formation |
-| `conservation_laws` | Energy, momentum, C_2 conservation to tolerance |
+| `conservation_laws` | Energy, momentum, $C_2$ conservation to tolerance |
 | `landau_damping` | Damping rate matches analytic Landau rate |
 | `nonlinear_landau_damping` | Large perturbation, phase-space vortex, conservation over 50 bounce times |
 | `two_stream_instability` | Perturbation growth and saturation |
@@ -330,13 +319,13 @@ Plus HT tensor/ACA tests (17), conservation framework tests (15), diagnostics te
 Conserved quantities monitored each timestep via `GlobalDiagnostics`:
 
 - Total energy (kinetic + potential), momentum, angular momentum
-- Casimir C_2, Boltzmann entropy
+- Casimir $C_2$, Boltzmann entropy
 - Virial ratio, total mass in box
 - Density profile (radial binning)
 
 **Analysis tools:**
-- L1/L2/L_inf field norms and error metrics
-- `ConservationSummary` — energy, mass, momentum, C_2 drift tracking
+- $L^1$/$L^2$/$L^\infty$ field norms and error metrics
+- `ConservationSummary` — energy, mass, momentum, $C_2$ drift tracking
 - `convergence_table` — Richardson extrapolation and convergence order estimation
 - `CausticDetector` — caustic surface detection, first caustic time
 
@@ -347,7 +336,7 @@ Conserved quantities monitored each timestep via `GlobalDiagnostics`:
 |---|---|---|
 | Vlasov equation (operator splitting) | `time/strang.rs`, `time/yoshida.rs`, `time/rkei.rs` | Cheng & Knorr (1976) |
 | Poisson equation (FFT) | `poisson/fft.rs`, `poisson/multigrid.rs` | Hockney & Eastwood (1988) |
-| Exponential sum 1/r approximation | `poisson/exponential_sum.rs`, `poisson/tensor_poisson.rs` | Braess & Hackbusch, IMA J. Numer. Anal. 25(4) (2005) |
+| Exponential sum $1/r$ approximation | `poisson/exponential_sum.rs`, `poisson/tensor_poisson.rs` | Braess & Hackbusch, IMA J. Numer. Anal. 25(4) (2005) |
 | HT-format Poisson with rank re-compression | `poisson/ht_poisson.rs` | Khoromskij (2011), Braess-Hackbusch (2005) |
 | Near-field correction (0th + 2nd order) | `poisson/exponential_sum.rs`, `poisson/tensor_poisson.rs` | Exl, Mauser & Zhang, JCP (2016) |
 | Hierarchical Tucker decomposition | `algos/ht.rs` | Hackbusch & Kuhn, JCAM 261 (2009) |
@@ -387,9 +376,9 @@ Each solver component is a Rust trait; implementations are swapped independently
 
 | Trait | Role | Key implementations |
 |---|---|---|
-| `PhaseSpaceRepr` | Store and query f(x,v) | `UniformGrid6D`, `HtTensor`, `SheetTracker` + 5 more |
-| `PoissonSolver` | Solve ∇²Φ = 4πGρ | `FftPoisson`, `VgfPoisson`, `Multigrid` + 7 more |
-| `Advector` | Advance f by Δt | `SemiLagrangian` (Catmull-Rom + sparse polynomial) |
+| `PhaseSpaceRepr` | Store and query $f(\mathbf{x},\mathbf{v})$ | `UniformGrid6D`, `HtTensor`, `SheetTracker` + 5 more |
+| `PoissonSolver` | Solve $\nabla^2\Phi = 4\pi G\rho$ | `FftPoisson`, `VgfPoisson`, `Multigrid` + 7 more |
+| `Advector` | Advance $f$ by $\Delta t$ | `SemiLagrangian` (Catmull-Rom + sparse polynomial) |
 | `TimeIntegrator` | Orchestrate timestep | `StrangSplitting`, `YoshidaSplitting`, `BugIntegrator` + 11 more |
 | `ExitCondition` | Termination criteria | `TimeLimitCondition`, `EnergyDriftCondition` + 7 more |
 
@@ -460,11 +449,11 @@ pub trait PhaseSpaceRepr: Send + Sync {
 | Condition | Description |
 |---|---|
 | `TimeLimitCondition` | Stop at t >= t_final |
-| `EnergyDriftCondition` | Stop when \|dE/E\| > tolerance |
+| `EnergyDriftCondition` | Stop when $\lvert dE/E \rvert$ > tolerance |
 | `MassLossCondition` | Stop when mass loss exceeds threshold |
-| `CasimirDriftCondition` | Stop when C_2 drift exceeds threshold |
+| `CasimirDriftCondition` | Stop when $C_2$ drift exceeds threshold |
 | `WallClockCondition` | Stop after wall-clock time limit |
-| `SteadyStateCondition` | Stop when \|df/dt\| < epsilon |
+| `SteadyStateCondition` | Stop when $\lvert df/dt \rvert < \epsilon$ |
 | `CflViolationCondition` | Stop on CFL violation |
 | `VirialRelaxedCondition` | Stop when virial ratio stabilizes |
 | `CausticFormationCondition` | Stop at first caustic (stream count > 1) |
@@ -565,6 +554,10 @@ Run `./dev.sh doctor` to check which tools are installed and get install command
 ## Minimum supported Rust version
 
 Rust edition 2024, targeting **stable Rust 1.85+**.
+
+## Support
+
+If caustic is useful to your research or projects, consider supporting development via [thanks.dev](https://thanks.dev/u/gh/resonant-jovian).
 
 ## License
 

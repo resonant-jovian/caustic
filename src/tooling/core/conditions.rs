@@ -5,7 +5,7 @@ use super::diagnostics::GlobalDiagnostics;
 use std::cell::Cell;
 
 /// Reason why the simulation terminated.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ExitReason {
     /// Reached user-specified t_final.
     TimeLimitReached,
@@ -22,20 +22,53 @@ pub enum ExitReason {
     /// Wall-clock runtime exceeded limit.
     WallClockLimit,
     /// First caustic formed: max stream count exceeded 1.
+    #[serde(alias = "CausticFormed")]
     FirstCausticFormed,
     /// Virial ratio stabilised at 1.0 ± ε: violent relaxation complete.
+    #[serde(alias = "VirialStabilized")]
     VirialRelaxed,
     /// User-defined predicate returned true.
+    #[serde(alias = "UserStop")]
     UserDefined,
 }
 
+impl std::fmt::Display for ExitReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TimeLimitReached => write!(f, "Time limit reached"),
+            Self::SteadyState => write!(f, "Steady state reached"),
+            Self::EnergyDrift => write!(f, "Energy drift exceeded"),
+            Self::MassLoss => write!(f, "Mass loss exceeded"),
+            Self::CasimirDrift => write!(f, "Casimir drift exceeded"),
+            Self::CflViolation => write!(f, "CFL violation"),
+            Self::WallClockLimit => write!(f, "Wall clock limit reached"),
+            Self::FirstCausticFormed => write!(f, "Caustic formed"),
+            Self::VirialRelaxed => write!(f, "Virial ratio stabilized"),
+            Self::UserDefined => write!(f, "User stop"),
+        }
+    }
+}
+
 /// Trait for simulation exit predicates. Evaluated after each timestep.
+///
+/// # Examples
+///
+/// ```
+/// use caustic::{EnergyDriftCondition, ExitCondition, WallClockCondition};
+///
+/// // Exit if relative energy drift exceeds 1%
+/// let energy_exit = EnergyDriftCondition { tolerance: 0.01 };
+///
+/// // Exit after 1 hour of wall-clock time
+/// let wall_exit = WallClockCondition::new(3600.0);
+/// ```
 pub trait ExitCondition {
     fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics) -> Option<ExitReason>;
 }
 
 /// Exit when simulation time reaches `t_final`.
 pub struct TimeLimitCondition {
+    /// Maximum simulation time.
     pub t_final: f64,
 }
 
@@ -49,24 +82,28 @@ impl ExitCondition for TimeLimitCondition {
     }
 }
 
+/// Returns true if |current - initial| / |initial| > tolerance.
+fn exceeds_relative_drift(current: f64, initial: f64, tolerance: f64) -> bool {
+    let ref_val = initial.abs();
+    ref_val > 1e-30 && (current - initial).abs() / ref_val > tolerance
+}
+
 /// Exit when relative energy drift exceeds `tolerance`.
 pub struct EnergyDriftCondition {
+    /// Maximum allowed |E(t)-E(0)|/|E(0)|.
     pub tolerance: f64,
 }
 
 impl ExitCondition for EnergyDriftCondition {
     fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics) -> Option<ExitReason> {
-        let e0 = initial.total_energy.abs();
-        if e0 > 1e-30 && (diag.total_energy - initial.total_energy).abs() / e0 > self.tolerance {
-            Some(ExitReason::EnergyDrift)
-        } else {
-            None
-        }
+        exceeds_relative_drift(diag.total_energy, initial.total_energy, self.tolerance)
+            .then_some(ExitReason::EnergyDrift)
     }
 }
 
 /// Exit when mass fraction drops below `threshold`.
 pub struct MassLossCondition {
+    /// Minimum mass fraction M(t)/M(0) before exit.
     pub threshold: f64,
 }
 
@@ -83,23 +120,22 @@ impl ExitCondition for MassLossCondition {
 
 /// Exit when relative Casimir drift exceeds `tolerance`.
 pub struct CasimirDriftCondition {
+    /// Maximum allowed |C2(t)-C2(0)|/C2(0).
     pub tolerance: f64,
 }
 
 impl ExitCondition for CasimirDriftCondition {
     fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics) -> Option<ExitReason> {
-        let c0 = initial.casimir_c2.abs();
-        if c0 > 1e-30 && (diag.casimir_c2 - initial.casimir_c2).abs() / c0 > self.tolerance {
-            Some(ExitReason::CasimirDrift)
-        } else {
-            None
-        }
+        exceeds_relative_drift(diag.casimir_c2, initial.casimir_c2, self.tolerance)
+            .then_some(ExitReason::CasimirDrift)
     }
 }
 
 /// Exit when wall-clock time exceeds `limit_secs` seconds.
 pub struct WallClockCondition {
+    /// Maximum wall-clock seconds.
     pub limit_secs: f64,
+    /// Instant when the condition was created.
     pub start: std::time::Instant,
 }
 
@@ -126,6 +162,7 @@ impl ExitCondition for WallClockCondition {
 /// Uses interior mutability (Cell) to track previous entropy across calls,
 /// since the trait takes `&self`.
 pub struct SteadyStateCondition {
+    /// Maximum entropy change rate before declaring steady state.
     pub threshold: f64,
     prev_entropy: Cell<Option<f64>>,
 }
@@ -162,6 +199,7 @@ impl ExitCondition for SteadyStateCondition {
 
 /// Exit when adaptive Δt drops below `dt_min`.
 pub struct CflViolationCondition {
+    /// Minimum adaptive timestep before declaring CFL violation.
     pub dt_min: f64,
 }
 
@@ -185,6 +223,7 @@ impl ExitCondition for CausticFormationCondition {
 
 /// Exit when the virial ratio 2T/|W| stabilises within `tolerance` of 1.0.
 pub struct VirialRelaxedCondition {
+    /// Maximum |2T/|W| - 1| for virial equilibrium.
     pub tolerance: f64,
 }
 

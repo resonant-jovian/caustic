@@ -174,7 +174,7 @@ impl Xorshift64 {
         (self.next_u64() % (bound as u64)) as usize
     }
 
-    /// Generate a random multi-index where each element is in [0, shape[d]).
+    /// Generate a random multi-index where each element is in `[0, shape[d])`.
     pub fn random_multi_index(&mut self, shape: &[usize]) -> Vec<usize> {
         shape.iter().map(|&s| self.next_usize(s)).collect()
     }

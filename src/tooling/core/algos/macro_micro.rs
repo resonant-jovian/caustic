@@ -1,12 +1,16 @@
 //! Macro-micro decomposition of the distribution function.
 //!
-//! f = f_M + g where f_M is a local Maxwellian carrying exact macroscopic moments
-//! and g is the kinetic deviation stored by an inner `PhaseSpaceRepr`.
+//! Splits the distribution function into a macroscopic part and a kinetic correction:
+//! f = f_M + g, where f_M is a local Maxwellian parameterized by density rho,
+//! mean velocity u, and temperature T at each spatial cell, and g is the kinetic
+//! deviation stored by an inner [`PhaseSpaceRepr`].
 //!
 //! f_M(x,v) = rho(x) / (2 pi T(x))^{3/2} * exp(-|v - u(x)|^2 / (2 T(x)))
 //!
-//! Density is O(N^3) from the macro fields -- no velocity integration needed.
-//! Conservation of mass, momentum, and energy is exact by construction.
+//! This reduces effective dimensionality for near-equilibrium regions: density is
+//! O(N^3) from the macro fields alone with no velocity integration needed, and
+//! the deviation g carries only the non-Maxwellian structure. Conservation of mass,
+//! momentum, and energy is exact by construction since f_M encodes the exact moments.
 
 use super::super::{
     init::domain::Domain, phasespace::PhaseSpaceRepr, progress::StepProgress, types::*,
@@ -23,11 +27,11 @@ use std::sync::Arc;
 /// Density is O(N^3) from the macro fields -- no velocity integration needed.
 /// Conservation of mass, momentum, and energy is exact by construction.
 pub struct MacroMicroRepr {
-    /// Macro density rho(x) -- flat row-major [nx*ny*nz].
+    /// Macro density rho(x) -- flat row-major `[nx*ny*nz]`.
     pub density: Vec<f64>,
     /// Macro mean velocity u(x) -- flat [nx*ny*nz * 3] (ux, uy, uz interleaved).
     pub mean_velocity: Vec<f64>,
-    /// Macro temperature T(x) -- flat [nx*ny*nz] (scalar temperature).
+    /// Macro temperature T(x) -- flat `[nx*ny*nz]` (scalar temperature).
     pub temperature: Vec<f64>,
     /// Micro deviation g = f - f_M, stored by inner representation.
     pub inner: Box<dyn PhaseSpaceRepr>,
@@ -67,8 +71,7 @@ impl MacroMicroRepr {
         let default_temp = (lv[0] * lv[0] + lv[1] * lv[1] + lv[2] * lv[2]) / 9.0;
         let temperature = vec![default_temp; n_spatial];
 
-        let dx = domain.dx();
-        let dx3 = dx[0] * dx[1] * dx[2];
+        let dx3 = domain.cell_volume_3d();
         let total_mass = density.iter().sum::<f64>() * dx3;
 
         Self {
@@ -96,8 +99,7 @@ impl MacroMicroRepr {
         let density_field = self.inner.compute_density();
         self.density = density_field.data;
 
-        let dx = self.domain.dx();
-        let dx3 = dx[0] * dx[1] * dx[2];
+        let dx3 = self.domain.cell_volume_3d();
         self.total_mass_cached = self.density.iter().sum::<f64>() * dx3;
 
         // Recompute u and T from moments of inner repr at each spatial cell center.
@@ -144,6 +146,7 @@ impl MacroMicroRepr {
 }
 
 impl PhaseSpaceRepr for MacroMicroRepr {
+    /// Returns density directly from the cached macro field (O(N^3), no velocity integration).
     fn compute_density(&self) -> DensityField {
         // Key advantage: O(N^3) density from macro fields, no velocity integration.
         DensityField {
@@ -152,40 +155,40 @@ impl PhaseSpaceRepr for MacroMicroRepr {
         }
     }
 
+    /// Delegates spatial advection to the inner representation.
+    /// Macro fields are re-synced via `reproject_moments()` after a full step.
     fn advect_x(&mut self, displacement: &DisplacementField, dt: f64) {
-        // Delegate to inner representation. Macro fields are updated via
-        // reproject_moments() after a full step, not during sub-steps.
         self.inner.advect_x(displacement, dt);
     }
 
+    /// Delegates velocity advection to the inner representation.
+    /// Macro momentum update is applied via `reproject_moments()` after a full step.
     fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
-        // Delegate to inner representation. Macro momentum update (u += a*dt)
-        // is applied via reproject_moments() after a full step.
         self.inner.advect_v(acceleration, dt);
     }
 
+    /// Computes velocity moments by delegating to the inner kinetic representation.
     fn moment(&self, position: &[f64; 3], order: usize) -> Tensor {
-        // Delegate to inner for full kinetic information.
         self.inner.moment(position, order)
     }
 
+    /// Returns the cached total mass from macro density integration.
     fn total_mass(&self) -> f64 {
         self.total_mass_cached
     }
 
+    /// Approximates C2 = integral(f^2) using the fluid-level density: sum(rho^2 * dx^3).
     fn casimir_c2(&self) -> f64 {
         // Approximate via density: sum rho^2 * dx^3.
         // The full C2 requires velocity integration of f^2; this is the
         // fluid-level approximation.
-        let dx = self.domain.dx();
-        let dx3 = dx[0] * dx[1] * dx[2];
+        let dx3 = self.domain.cell_volume_3d();
         self.density.par_iter().map(|&rho| rho * rho).sum::<f64>() * dx3
     }
 
+    /// Fluid-level entropy: configurational (-integral rho ln rho) plus thermal (3/2 rho ln(2 pi e T)).
     fn entropy(&self) -> f64 {
-        // Fluid-level entropy: S ~ -integral(rho ln rho dx^3) + (3/2) N ln(2 pi e T).
-        let dx = self.domain.dx();
-        let dx3 = dx[0] * dx[1] * dx[2];
+        let dx3 = self.domain.cell_volume_3d();
 
         let n_spatial = self.n_spatial();
         let s_config: f64 = self
@@ -211,20 +214,19 @@ impl PhaseSpaceRepr for MacroMicroRepr {
         s_config + s_thermal
     }
 
+    /// Delegates stream counting to the inner kinetic representation.
     fn stream_count(&self) -> StreamCountField {
-        // Delegate to inner for full kinetic information.
         self.inner.stream_count()
     }
 
+    /// Delegates local velocity distribution extraction to the inner representation.
     fn velocity_distribution(&self, position: &[f64; 3]) -> Vec<f64> {
-        // Delegate to inner for full kinetic information.
         self.inner.velocity_distribution(position)
     }
 
+    /// Kinetic energy from macro fields: bulk (1/2 rho |u|^2) plus thermal (3/2 rho T).
     fn total_kinetic_energy(&self) -> Option<f64> {
-        // From macro fields: T = (1/2) integral(rho |u|^2 dx^3) + (3/2) integral(rho T dx^3).
-        let dx = self.domain.dx();
-        let dx3 = dx[0] * dx[1] * dx[2];
+        let dx3 = self.domain.cell_volume_3d();
         let n_spatial = self.n_spatial();
 
         let energy: f64 = (0..n_spatial)
@@ -243,15 +245,17 @@ impl PhaseSpaceRepr for MacroMicroRepr {
         Some(energy * dx3)
     }
 
+    /// Produces a full 6D snapshot by delegating to the inner representation.
     fn to_snapshot(&self, time: f64) -> Option<PhaseSpaceSnapshot> {
-        // Delegate to inner for full 6D snapshot.
         self.inner.to_snapshot(time)
     }
 
-    fn load_snapshot(&mut self, snap: PhaseSpaceSnapshot) {
-        self.inner.load_snapshot(snap);
+    /// Loads a snapshot into the inner representation and re-syncs macro fields.
+    fn load_snapshot(&mut self, snap: PhaseSpaceSnapshot) -> Result<(), crate::CausticError> {
+        self.inner.load_snapshot(snap)?;
         // Re-sync macro fields after loading new data.
         self.reproject_moments();
+        Ok(())
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -262,16 +266,19 @@ impl PhaseSpaceRepr for MacroMicroRepr {
         self
     }
 
+    /// Reports whether the inner representation supports dense materialization.
     fn can_materialize(&self) -> bool {
         self.inner.can_materialize()
     }
 
+    /// Total memory: macro fields (density + velocity + temperature) plus inner representation.
     fn memory_bytes(&self) -> usize {
         let macro_bytes = (self.density.len() + self.mean_velocity.len() + self.temperature.len())
             * std::mem::size_of::<f64>();
         macro_bytes + self.inner.memory_bytes()
     }
 
+    /// Attaches a shared progress reporter to both this wrapper and the inner representation.
     fn set_progress(&mut self, progress: Arc<StepProgress>) {
         self.inner.set_progress(progress.clone());
         self.progress = Some(progress);

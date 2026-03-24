@@ -1,13 +1,16 @@
 //! Cosmological comoving-coordinate Strang splitting.
 //!
-//! Wraps StrangSplitting with scale-factor-dependent coefficients for
-//! cosmological simulations in an expanding universe:
-//! - Drift: v*dt/(a*m) instead of v*dt
-//! - Kick: acceleration *= a*m
-//! - Poisson: 4*pi*G*a^2*rho_bar*delta
+//! Adapts second-order Strang splitting for an expanding universe by
+//! incorporating scale-factor-dependent coefficients and Hubble drag.
+//! The scale factor a(t) is evolved via Euler integration each step.
+//!
+//! Coordinate modifications relative to standard Strang splitting:
+//! - Drift: displacement scaled by 1/a (comoving coordinates)
+//! - Kick: acceleration scaled by a (momentum in comoving frame)
+//! - Poisson: effective G_eff = G * a^2 for the comoving Poisson equation
+//! - CFL: time step also limited by Hubble time 0.1/H(t)
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use super::super::{
     advecator::Advector,
@@ -17,6 +20,7 @@ use super::super::{
     solver::PoissonSolver,
     types::*,
 };
+use super::helpers;
 use crate::CausticError;
 
 /// Cosmological Strang splitting with scale-factor-dependent coefficients.
@@ -65,76 +69,52 @@ impl TimeIntegrator for CosmologicalStrangSplitting {
 
         if let Some(ref p) = self.progress {
             p.start_step();
-            p.set_phase(StepPhase::DriftHalf1);
-            p.set_sub_step(0, 5);
         }
+        helpers::report_phase!(self.progress, StepPhase::DriftHalf1, 0, 5);
 
         // Comoving drift: displacement scaled by 1/a
-        {
-            let t0 = Instant::now();
-            advector.drift(repr, dt / (2.0 * a));
-            timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
-        }
+        helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / (2.0 * a)));
 
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::PoissonSolve);
-            p.set_sub_step(1, 5);
-        }
+        helpers::report_phase!(self.progress, StepPhase::PoissonSolve, 1, 5);
 
-        // Poisson solve with cosmological factor
-        let accel = {
-            let t0 = Instant::now();
-            let density = repr.compute_density();
-            // Solve with effective G_eff = G * a^2 for comoving Poisson equation
+        // Poisson solve with cosmological factor (G_eff = G * a^2)
+        let accel = helpers::time_ms!(timings, poisson_ms, {
             let g_eff = self.g * a * a;
+            let density = repr.compute_density();
             let potential = solver.solve(&density, g_eff);
-            let accel = solver.compute_acceleration(&potential);
-            timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
-            accel
-        };
+            solver.compute_acceleration(&potential)
+        });
 
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::Kick);
-            p.set_sub_step(2, 5);
-        }
+        helpers::report_phase!(self.progress, StepPhase::Kick, 2, 5);
 
         // Kick with cosmological factor
-        {
-            let t0 = Instant::now();
-            advector.kick(repr, &accel, dt * a);
-            timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
-        }
+        helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, dt * a));
 
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::DriftHalf2);
-            p.set_sub_step(3, 5);
-        }
+        helpers::report_phase!(self.progress, StepPhase::DriftHalf2, 3, 5);
 
-        {
-            let t0 = Instant::now();
-            advector.drift(repr, dt / (2.0 * a));
-            timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
-        }
+        helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / (2.0 * a)));
 
         // Update scale factor via simple Euler step: a' = a * H * dt
         self.scale_factor += self.scale_factor * self.hubble * dt;
 
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::StepComplete);
-            p.set_sub_step(4, 5);
-        }
+        helpers::report_phase!(self.progress, StepPhase::StepComplete, 4, 5);
 
         // Compute end-of-step products for caller reuse (use updated scale factor)
-        let t0 = Instant::now();
-        let density = repr.compute_density();
-        let g_eff = self.g * self.scale_factor * self.scale_factor;
-        let potential = solver.solve(&density, g_eff);
-        let acceleration = solver.compute_acceleration(&potential);
-        timings.density_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        let (density, potential, acceleration) = helpers::time_ms!(timings, density_ms, {
+            let g_eff = self.g * self.scale_factor * self.scale_factor;
+            let density = repr.compute_density();
+            let potential = solver.solve(&density, g_eff);
+            let acceleration = solver.compute_acceleration(&potential);
+            (density, potential, acceleration)
+        });
 
         self.last_timings = timings;
 
-        Ok(StepProducts { density, potential, acceleration })
+        Ok(StepProducts {
+            density,
+            potential,
+            acceleration,
+        })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {

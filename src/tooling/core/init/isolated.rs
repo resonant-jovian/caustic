@@ -1,5 +1,12 @@
-//! Isolated equilibrium initial conditions: Plummer, King, Hernquist, Isochrone, NFW.
-//! All specified as f(E) or f(E,L) — integrals of motion.
+//! Spherically symmetric equilibrium initial conditions for isolated systems.
+//!
+//! Provides [`IsolatedEquilibrium`] implementations for Plummer, King,
+//! Hernquist, Isochrone, and NFW profiles.  Each model supplies a
+//! distribution function f(E) or f(E,L) that depends only on integrals
+//! of motion, together with the analytic density and potential profiles.
+//! The [`sample_on_grid`] function evaluates f(1/2 v^2 + Phi(r)) on every
+//! 6D grid point (rayon-parallelised) to produce a [`PhaseSpaceSnapshot`]
+//! suitable for initialising a [`Simulation`](crate::Simulation).
 
 use super::super::types::PhaseSpaceSnapshot;
 use super::domain::Domain;
@@ -7,21 +14,35 @@ use rayon::prelude::*;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 
-/// Trait for isolated equilibrium models specified as a distribution function.
+/// Trait for spherically symmetric equilibrium models specified as a
+/// distribution function of the integrals of motion.
+///
+/// Implementors supply f(E, L), rho(r), and Phi(r).  These are consumed by
+/// [`sample_on_grid`] to evaluate the IC on the full 6D phase-space grid.
 pub trait IsolatedEquilibrium: Send + Sync {
-    /// Distribution function f(E, L). E = specific energy, L = specific angular momentum.
+    /// Evaluate the distribution function f(E, L).
+    ///
+    /// `energy` is the specific energy E = 1/2 v^2 + Phi(r).
+    /// `angular_momentum` is the specific angular momentum magnitude |L|.
+    /// Returns 0 for unbound orbits (E >= 0 or E >= E_0 for King models).
     fn distribution_function(&self, energy: f64, angular_momentum: f64) -> f64;
-    /// Density profile ρ(r) in real space.
+    /// Analytic (or tabulated) mass density profile rho(r).
     fn density_profile(&self, r: f64) -> f64;
-    /// Gravitational potential Φ(r) (spherically symmetric, includes factor G).
+    /// Gravitational potential Phi(r), including the factor G*M.
     fn potential(&self, r: f64) -> f64;
 }
 
-/// Plummer sphere: f(E) ∝ (−E)^(7/2).
-/// Analytic DF; density ρ ∝ (r²+a²)^(−5/2).
+/// Plummer sphere initial conditions.
+///
+/// An isotropic model with analytic DF f(E) proportional to (-E)^(7/2) and a
+/// cored density profile rho proportional to (r^2 + a^2)^(-5/2).  Widely used
+/// as a smooth, non-singular test case for equilibrium preservation.
 pub struct PlummerIC {
+    /// Total mass of the system (Decimal for config precision).
     pub mass: Decimal,
+    /// Plummer softening / scale radius `a`.
     pub scale_radius: Decimal,
+    /// Gravitational constant G.
     pub g: Decimal,
     // Cached f64 values for hot-path computation
     mass_f64: f64,
@@ -30,7 +51,10 @@ pub struct PlummerIC {
 }
 
 impl PlummerIC {
-    /// Create a Plummer IC from f64 parameters (backward-compatible).
+    /// Create a Plummer IC from `f64` parameters.
+    ///
+    /// Internally converts to `Decimal` for config storage and caches `f64` for
+    /// hot-path evaluation.
     pub fn new(mass: f64, scale_radius: f64, g: f64) -> Self {
         Self {
             mass: Decimal::from_f64_retain(mass).unwrap_or(Decimal::ZERO),
@@ -84,14 +108,20 @@ impl IsolatedEquilibrium for PlummerIC {
     }
 }
 
-/// King (1966) lowered Maxwellian: f(E) ∝ (e^((E₀−E)/σ²) − 1) for E < E₀.
-/// Requires solving the Poisson-Boltzmann ODE from r=0 outward to find the
-/// tidal radius r_t where Φ(r_t) = E₀.
+/// King (1966) lowered-Maxwellian model.
+///
+/// The DF is f(E) proportional to (exp((E_0 - E)/sigma^2) - 1) for E < E_0
+/// and zero otherwise.  Construction solves the Poisson-Boltzmann ODE
+/// (via RK4) from r = 0 outward to determine the tidal radius r_t, the
+/// density profile, and the self-consistent velocity dispersion sigma.
 pub struct KingIC {
+    /// Total mass of the system.
     pub mass: Decimal,
-    /// Dimensionless King concentration W₀ = Φ(0)/σ².
+    /// Dimensionless King concentration parameter W_0 = Phi(0)/sigma^2.
     pub king_parameter_w0: Decimal,
+    /// Core velocity dispersion sigma (derived self-consistently from the ODE).
     pub velocity_dispersion: Decimal,
+    /// Gravitational constant G.
     pub g: Decimal,
     // Cached f64 values for hot-path computation
     mass_f64: f64,
@@ -334,11 +364,17 @@ fn interpolate_table(x_table: &[f64], y_table: &[f64], x: f64) -> f64 {
     y_table[lo] + t * (y_table[hi] - y_table[lo])
 }
 
-/// Hernquist (1990): ρ ∝ 1/(r(r+a)³). More realistic cuspy halo profile.
-/// Closed-form DF from Hernquist 1990, eq. 17.
+/// Hernquist (1990) cuspy halo model.
+///
+/// Density profile rho proportional to 1/(r (r+a)^3), yielding a central
+/// r^{-1} cusp more realistic than Plummer for galaxy halos.  The DF is
+/// available in closed form (Hernquist 1990, eq. 17).
 pub struct HernquistIC {
+    /// Total mass of the system.
     pub mass: Decimal,
+    /// Hernquist scale radius `a`.
     pub scale_radius: Decimal,
+    /// Gravitational constant G.
     pub g: Decimal,
     // Cached f64 values for hot-path computation
     mass_f64: f64,
@@ -347,7 +383,7 @@ pub struct HernquistIC {
 }
 
 impl HernquistIC {
-    /// Create a Hernquist IC from f64 parameters (backward-compatible).
+    /// Create a Hernquist IC from `f64` parameters.
     pub fn new(mass: f64, scale_radius: f64, g: f64) -> Self {
         Self {
             mass: Decimal::from_f64_retain(mass).unwrap_or(Decimal::ZERO),
@@ -412,12 +448,16 @@ impl IsolatedEquilibrium for HernquistIC {
 }
 
 /// Henon isochrone model: Phi(r) = -GM / (sqrt(b^2 + r^2) + b).
-/// Analytic DF f(E) from Henon (1960) / Binney & Tremaine eq. 4.48.
-/// The isochrone is the only non-trivial spherical potential for which
-/// all orbits can be solved in closed form (hence the name).
+///
+/// Analytic DF from Henon (1960) / Binney & Tremaine eq. 4.48.  The
+/// isochrone is the only non-trivial spherical potential for which all
+/// orbits can be solved in closed form (hence the name).
 pub struct IsochroneIC {
+    /// Total mass of the system.
     pub mass: Decimal,
-    pub scale_radius: Decimal, // b parameter
+    /// Isochrone scale parameter `b`.
+    pub scale_radius: Decimal,
+    /// Gravitational constant G.
     pub g: Decimal,
     // Cached f64 values for hot-path computation
     mass_f64: f64,
@@ -426,7 +466,7 @@ pub struct IsochroneIC {
 }
 
 impl IsochroneIC {
-    /// Create an Isochrone IC from f64 parameters (backward-compatible).
+    /// Create an Isochrone IC from `f64` parameters.
     pub fn new(mass: f64, scale_radius: f64, g: f64) -> Self {
         Self {
             mass: Decimal::from_f64_retain(mass).unwrap_or(Decimal::ZERO),
@@ -524,12 +564,19 @@ impl IsolatedEquilibrium for IsochroneIC {
     }
 }
 
-/// NFW (Navarro-Frenk-White): ρ ∝ 1/(r/r_s · (1+r/r_s)²).
-/// DF computed via numerical Eddington inversion.
+/// NFW (Navarro-Frenk-White) dark matter halo model.
+///
+/// Density profile rho proportional to 1/((r/r_s)(1 + r/r_s)^2).  The DF
+/// is computed numerically via Eddington inversion at construction time and
+/// stored as a tabulated (E, f(E)) lookup for fast evaluation.
 pub struct NfwIC {
+    /// Total enclosed mass within the virial radius r_vir = c * r_s.
     pub mass: Decimal,
+    /// NFW scale radius r_s.
     pub scale_radius: Decimal,
+    /// Halo concentration c = r_vir / r_s.
     pub concentration: Decimal,
+    /// Gravitational constant G.
     pub g: Decimal,
     // Cached f64 values for hot-path computation
     mass_f64: f64,
@@ -544,7 +591,10 @@ pub struct NfwIC {
 }
 
 impl NfwIC {
-    /// Create an NFW IC from f64 parameters (backward-compatible).
+    /// Create an NFW IC from `f64` parameters.
+    ///
+    /// Derives rho_s from the enclosed mass and solves the Eddington inversion
+    /// integral numerically, storing the resulting DF as a lookup table.
     pub fn new(mass: f64, scale_radius: f64, concentration: f64, g: f64) -> Self {
         use std::f64::consts::PI;
         let rs = scale_radius;
@@ -695,8 +745,10 @@ impl IsolatedEquilibrium for NfwIC {
 }
 
 /// Sample an isolated equilibrium IC onto the 6D grid.
-/// Evaluates f(E(x,v)) = f(½v² + Φ(r)) on every (x,v) grid point.
-/// Parallelized over the outer spatial dimension (ix1) using rayon.
+///
+/// Evaluates f(E(x,v)) = f(1/2 v^2 + Phi(r)) on every (x,v) grid point
+/// and returns the result as a flat [`PhaseSpaceSnapshot`].  The outer
+/// spatial dimension (ix1) is parallelised with rayon.
 pub fn sample_on_grid(
     ic: &(dyn IsolatedEquilibrium + Sync),
     domain: &Domain,
@@ -704,8 +756,9 @@ pub fn sample_on_grid(
     sample_on_grid_with_progress(ic, domain, None)
 }
 
-/// Like `sample_on_grid`, but reports intra-phase progress via the optional
-/// `StepProgress` handle so the TUI can show a cell-level progress bar.
+/// Like [`sample_on_grid`], but reports intra-phase progress via the optional
+/// [`StepProgress`](crate::tooling::core::progress::StepProgress) handle so the
+/// TUI can show a cell-level progress bar during IC generation.
 pub fn sample_on_grid_with_progress(
     ic: &(dyn IsolatedEquilibrium + Sync),
     domain: &Domain,

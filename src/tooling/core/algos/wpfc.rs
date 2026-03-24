@@ -1,8 +1,16 @@
-//! Weighted Positive Flux Conservative (WPFC) 5th-order advection scheme.
+//! Weighted Positive Flux Conservative (WPFC) and WENO-based advection limiters
+//! for semi-Lagrangian transport on uniform grids.
 //!
-//! WPFC uses 3 candidate 3rd-degree polynomial reconstructions with WENO-style
-//! smoothness indicators to achieve 5th-order accuracy for smooth solutions
-//! while preserving positivity. Reference: Minoshima et al. (2025).
+//! WPFC uses three candidate 3rd-degree polynomial reconstructions with WENO-style
+//! smoothness indicators (Jiang-Shu) to achieve 5th-order accuracy for smooth
+//! solutions while suppressing spurious oscillations near discontinuities. The
+//! nonlinear weights automatically degrade to the smoothest stencil near shocks.
+//!
+//! Also provides a Zhang-Shu positivity-preserving limiter that can be applied as
+//! a post-processing step after any advection scheme to enforce non-negativity
+//! of the distribution function while conserving total mass.
+//!
+//! Reference: Minoshima et al. (2025).
 
 /// Advection scheme selector for `UniformGrid6D`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

@@ -315,6 +315,10 @@ fn compute_density_from_data(data: &[f64], shape: [usize; 6], dv: [f64; 3]) -> D
 }
 
 impl TimeIntegrator for UnsplitIntegrator {
+    /// Advance the distribution by one timestep `dt` using the configured RK scheme.
+    ///
+    /// Extracts the current state as a flat 6D snapshot, evaluates the Vlasov RHS
+    /// at each RK stage (re-solving Poisson each time), and loads the result back.
     fn advance(
         &mut self,
         repr: &mut dyn PhaseSpaceRepr,
@@ -380,7 +384,7 @@ impl TimeIntegrator for UnsplitIntegrator {
                     data: y_stage,
                     shape: snap0.shape,
                     time: snap0.time + dt,
-                });
+                })?;
             }
 
             3 => {
@@ -427,7 +431,7 @@ impl TimeIntegrator for UnsplitIntegrator {
                     data: y_stage,
                     shape: snap0.shape,
                     time: snap0.time + dt,
-                });
+                })?;
             }
 
             4 => {
@@ -479,15 +483,14 @@ impl TimeIntegrator for UnsplitIntegrator {
 
                 // y_{n+1} = y_n + dt/6 * (k1 + 2*k2 + 2*k3 + k4) — reuse y_stage
                 for i in 0..n {
-                    y_stage[i] =
-                        y0[i] + dt / 6.0 * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]);
+                    y_stage[i] = y0[i] + dt / 6.0 * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]);
                 }
 
                 repr.load_snapshot(PhaseSpaceSnapshot {
                     data: y_stage,
                     shape: snap0.shape,
                     time: snap0.time + dt,
-                });
+                })?;
             }
 
             _ => unreachable!("rk_stages validated in constructor"),
@@ -496,7 +499,11 @@ impl TimeIntegrator for UnsplitIntegrator {
         let density = repr.compute_density();
         let potential = solver.solve(&density, g);
         let acceleration = solver.compute_acceleration(&potential);
-        Ok(StepProducts { density, potential, acceleration })
+        Ok(StepProducts {
+            density,
+            potential,
+            acceleration,
+        })
     }
 
     /// CFL condition for the unsplit integrator.
@@ -539,6 +546,7 @@ impl TimeIntegrator for UnsplitIntegrator {
         cfl_factor * dt_spatial.min(dt_velocity)
     }
 
+    /// Attach a progress reporter for intra-step TUI updates.
     fn set_progress(&mut self, progress: Arc<StepProgress>) {
         self.progress = Some(progress);
     }
@@ -628,7 +636,9 @@ mod tests {
             Box::new(UniformGrid6D::from_snapshot(snap, domain));
 
         let dt = 0.01;
-        unsplit.advance(&mut *repr, &poisson, &advector, dt).unwrap();
+        unsplit
+            .advance(&mut *repr, &poisson, &advector, dt)
+            .unwrap();
 
         let result = repr.to_snapshot(dt).unwrap();
         // Basic sanity: result should be finite and have positive mass
@@ -685,7 +695,9 @@ mod tests {
         let mut repr: Box<dyn PhaseSpaceRepr> =
             Box::new(UniformGrid6D::from_snapshot(snap, domain));
 
-        unsplit.advance(&mut *repr, &poisson, &advector, 0.01).unwrap();
+        unsplit
+            .advance(&mut *repr, &poisson, &advector, 0.01)
+            .unwrap();
         let result = repr.to_snapshot(0.01).unwrap();
         assert!(result.data.iter().all(|v| v.is_finite()));
     }
@@ -718,7 +730,9 @@ mod tests {
         let mut repr: Box<dyn PhaseSpaceRepr> =
             Box::new(UniformGrid6D::from_snapshot(snap, domain));
 
-        unsplit.advance(&mut *repr, &poisson, &advector, 0.01).unwrap();
+        unsplit
+            .advance(&mut *repr, &poisson, &advector, 0.01)
+            .unwrap();
         let result = repr.to_snapshot(0.01).unwrap();
         assert!(result.data.iter().all(|v| v.is_finite()));
     }

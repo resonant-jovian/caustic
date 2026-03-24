@@ -125,7 +125,7 @@ impl TtCore {
 /// The TT decomposition factors a 6D tensor into a chain of d=6 three-way
 /// cores with TT ranks r_0=1, r_1, r_2, r_3, r_4, r_5, r_6=1.
 pub struct TensorTrain {
-    /// The 6 TT cores. cores[k] has shape (ranks[k], shape[k], ranks[k+1]).
+    /// The 6 TT cores. `cores[k]` has shape `(ranks[k], shape[k], ranks[k+1])`.
     pub cores: Vec<TtCore>,
     /// Grid sizes: [nx1, nx2, nx3, nv1, nv2, nv3].
     pub shape: [usize; 6],
@@ -327,7 +327,7 @@ impl TensorTrain {
 
     /// Evaluate f at a single 6D index by left-to-right contraction of all cores.
     ///
-    /// f(i0, i1, i2, i3, i4, i5) = G0[:,i0,:] * G1[:,i1,:] * ... * G5[:,i5,:]
+    /// `f(i0, i1, i2, i3, i4, i5) = G0[:,i0,:] * G1[:,i1,:] * ... * G5[:,i5,:]`
     #[inline]
     pub fn evaluate(&self, indices: [usize; 6]) -> f64 {
         // Start with vec = [1.0] (r_0 = 1)
@@ -1138,11 +1138,7 @@ impl PhaseSpaceRepr for TensorTrain {
     }
 
     fn total_mass(&self) -> f64 {
-        let dx = self.domain.dx();
-        let dv = self.domain.dv();
-        let dx3 = dx[0] * dx[1] * dx[2];
-        let dv3 = dv[0] * dv[1] * dv[2];
-        let cell_vol = dx3 * dv3;
+        let cell_vol = self.domain.cell_volume_6d();
 
         // Total mass = sum over all indices f(i) * cell_vol
         // This is equivalent to contracting each core with a unit sum vector.
@@ -1165,18 +1161,14 @@ impl PhaseSpaceRepr for TensorTrain {
 
     fn casimir_c2(&self) -> f64 {
         // C2 = integral f^2 dx^3 dv^3 = <self, self> * cell_vol
-        let dx = self.domain.dx();
-        let dv = self.domain.dv();
-        let cell_vol = dx[0] * dx[1] * dx[2] * dv[0] * dv[1] * dv[2];
+        let cell_vol = self.domain.cell_volume_6d();
         self.inner_product(self) * cell_vol
     }
 
     fn entropy(&self) -> f64 {
         // S = -integral f ln(f) dx^3 dv^3
         // No efficient TT method exists; expand to full for small grids.
-        let dx = self.domain.dx();
-        let dv = self.domain.dv();
-        let cell_vol = dx[0] * dx[1] * dx[2] * dv[0] * dv[1] * dv[2];
+        let cell_vol = self.domain.cell_volume_6d();
 
         let data = self.to_full();
         data.iter()
@@ -1256,10 +1248,9 @@ impl PhaseSpaceRepr for TensorTrain {
 
     fn total_kinetic_energy(&self) -> Option<f64> {
         // T = 0.5 * integral f * v^2 dx^3 dv^3
-        let dx = self.domain.dx();
         let dv = self.domain.dv();
         let lv = self.lv();
-        let cell_vol = dx[0] * dx[1] * dx[2] * dv[0] * dv[1] * dv[2];
+        let cell_vol = self.domain.cell_volume_6d();
         let [n0, n1, n2, n3, n4, n5] = self.shape;
 
         // Efficient approach: pre-compute v^2-weighted velocity contraction vectors,
@@ -1628,9 +1619,7 @@ mod tests {
         };
         let tt = TensorTrain::from_snapshot(&snap, 10, 1e-12, &domain);
         let mass = tt.total_mass();
-        let dx = domain.dx();
-        let dv = domain.dv();
-        let expected = 4.0_f64.powi(6) * dx[0] * dx[1] * dx[2] * dv[0] * dv[1] * dv[2];
+        let expected = 4.0_f64.powi(6) * domain.cell_volume_6d();
         assert!(
             (mass - expected).abs() / expected < 0.01,
             "Mass: got {mass}, expected {expected}"
@@ -1898,9 +1887,7 @@ mod tests {
 
         let c2_tt = tt.casimir_c2();
         // Direct: C2 = sum f^2 * cell_vol = n_total * 1^2 * cell_vol
-        let dx = domain.dx();
-        let dv = domain.dv();
-        let cell_vol = dx[0] * dx[1] * dx[2] * dv[0] * dv[1] * dv[2];
+        let cell_vol = domain.cell_volume_6d();
         let c2_expected = n_total as f64 * cell_vol;
 
         assert!(

@@ -37,6 +37,10 @@ pub struct VgfPoisson {
 }
 
 impl VgfPoisson {
+    /// Create a new VGF solver from the simulation domain.
+    ///
+    /// Precomputes FFT plans and the truncated Green's function kernel
+    /// analytically in Fourier space on a (2N)^3 padded grid.
     pub fn new(domain: &Domain) -> Self {
         use std::f64::consts::PI;
         let shape = [
@@ -123,10 +127,15 @@ fn wavenumber(i: usize, n: usize, cell_size: f64) -> f64 {
 }
 
 impl PoissonSolver for VgfPoisson {
+    /// Attach a shared progress handle for intra-step reporting.
     fn set_progress(&mut self, p: Arc<super::super::progress::StepProgress>) {
         self.progress = Some(p);
     }
 
+    /// Solve the Poisson equation for the given density field.
+    ///
+    /// Zero-pads rho into (2N)^3, convolves with the VGF kernel in Fourier space,
+    /// and extracts the N^3 potential sub-grid.
     fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
         let _span = tracing::info_span!("vgf_poisson_solve").entered();
         use std::f64::consts::PI;
@@ -210,6 +219,7 @@ impl PoissonSolver for VgfPoisson {
         }
     }
 
+    /// Compute the gravitational acceleration via second-order finite differences.
     fn compute_acceleration(&self, potential: &PotentialField) -> AccelerationField {
         super::utils::finite_difference_acceleration(potential, &self.dx)
     }

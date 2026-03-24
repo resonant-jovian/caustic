@@ -23,6 +23,7 @@ use super::super::{
     solver::PoissonSolver,
     types::*,
 };
+use super::helpers;
 use crate::CausticError;
 use rayon::prelude::*;
 
@@ -51,7 +52,8 @@ impl TimeIntegrator for RkeiIntegrator {
     ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("rkei_advance").entered();
 
-        let snap_err = || CausticError::Solver("RKEI integrator requires to_snapshot support".into());
+        let snap_err =
+            || CausticError::Solver("RKEI integrator requires to_snapshot support".into());
 
         if let Some(ref p) = self.progress {
             p.start_step();
@@ -105,7 +107,7 @@ impl TimeIntegrator for RkeiIntegrator {
                 data: combined,
                 shape: f_n.shape,
                 time: 0.0,
-            });
+            })?;
         }
         // repr now holds f^(2)
 
@@ -138,23 +140,21 @@ impl TimeIntegrator for RkeiIntegrator {
                 data: combined,
                 shape: f_n.shape,
                 time: 0.0,
-            });
+            })?;
         }
 
         let density = repr.compute_density();
         let potential = solver.solve(&density, self.g);
         let acceleration = solver.compute_acceleration(&potential);
-        Ok(StepProducts { density, potential, acceleration })
+        Ok(StepProducts {
+            density,
+            potential,
+            acceleration,
+        })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
-        let density = repr.compute_density();
-        let rho_max = density.data.iter().cloned().fold(0.0_f64, f64::max);
-        if rho_max <= 0.0 || self.g <= 0.0 {
-            return 1e10;
-        }
-        let t_dyn = 1.0 / (self.g * rho_max).sqrt();
-        cfl_factor * t_dyn
+        helpers::dynamical_timestep(repr, self.g, cfl_factor)
     }
 
     fn set_progress(&mut self, progress: Arc<StepProgress>) {
@@ -194,7 +194,9 @@ mod tests {
         let advector = SemiLagrangian::new();
         let mut integrator = RkeiIntegrator::new(1.0);
 
-        integrator.advance(&mut grid, &poisson, &advector, 0.01).unwrap();
+        integrator
+            .advance(&mut grid, &poisson, &advector, 0.01)
+            .unwrap();
 
         // Should not contain NaN
         assert!(

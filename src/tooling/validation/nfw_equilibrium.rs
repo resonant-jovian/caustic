@@ -4,15 +4,14 @@
 #[test]
 #[ignore] // takes ~12s in release mode
 fn nfw_equilibrium() {
-    use crate::sim::Simulation;
-    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::init::{
         domain::{Domain, SpatialBoundType, VelocityBoundType},
         isolated::{NfwIC, sample_on_grid},
     };
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
-    use crate::tooling::core::poisson::fft::FftPoisson;
-    use crate::tooling::core::time::strang::StrangSplitting;
+    use crate::tooling::validation::helpers::{
+        assert_valid_output, build_standard_sim, density_mass, relative_drift, snapshot_density,
+    };
 
     // NFW profile: ρ(r) = ρ_s / [(r/r_s)(1+r/r_s)²]
     // M=1, r_s=1, c=5, G=1.
@@ -33,35 +32,14 @@ fn nfw_equilibrium() {
     let snap = sample_on_grid(&ic, &domain);
 
     // Compute initial density profile
-    let initial_grid = crate::tooling::core::algos::uniform::UniformGrid6D::from_snapshot(
-        crate::tooling::core::types::PhaseSpaceSnapshot {
-            data: snap.data.clone(),
-            shape: snap.shape,
-            time: 0.0,
-        },
-        domain.clone(),
-    );
-    let initial_density = initial_grid.compute_density();
+    let initial_density = snapshot_density(&snap, &domain);
     let rho_max_init = initial_density.data.iter().cloned().fold(0.0f64, f64::max);
 
-    let poisson = FftPoisson::new(&domain);
-    let mut sim = Simulation::builder()
-        .domain(domain)
-        .poisson_solver(poisson)
-        .advector(SemiLagrangian::new())
-        .integrator(StrangSplitting::new(1.0))
-        .initial_conditions(snap)
-        .time_final(5.0)
-        .build()
-        .unwrap();
+    let mut sim = build_standard_sim(domain, snap, 5.0);
 
     let pkg = sim.run().unwrap();
 
     let final_density = sim.repr.compute_density();
-    assert!(
-        !final_density.data.iter().any(|x| x.is_nan()),
-        "Final density contains NaN"
-    );
 
     let rho_max_final = final_density.data.iter().cloned().fold(0.0f64, f64::max);
 
@@ -72,23 +50,15 @@ fn nfw_equilibrium() {
 
     // Check mass conservation (with truncated velocity BC)
     let dx = sim.domain.dx();
-    let dx3 = dx[0] * dx[1] * dx[2];
-    let m_init: f64 = initial_density.data.iter().sum::<f64>() * dx3;
-    let m_final: f64 = final_density.data.iter().sum::<f64>() * dx3;
+    let m_init = density_mass(&initial_density, dx);
+    let m_final = density_mass(&final_density, dx);
 
-    let mass_drift = if m_init > 1e-30 {
-        (m_final - m_init).abs() / m_init
-    } else {
-        0.0
-    };
+    let mass_drift = relative_drift(m_final, m_init);
 
     // With truncated velocity BC, mass should be reasonably conserved
     assert!(m_final > 0.0, "Final mass should be positive");
 
-    assert!(
-        pkg.diagnostics_history.len() >= 2,
-        "Should have at least 2 diagnostic entries"
-    );
+    assert_valid_output(&final_density, pkg.diagnostics_history.len());
 
     println!(
         "NFW equilibrium: rho_max init={:.4}, final={:.4}, mass_drift={:.2}%, steps={}",

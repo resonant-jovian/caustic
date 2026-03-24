@@ -1,3 +1,5 @@
+pub(crate) mod helpers;
+
 pub(crate) mod adaptive;
 pub(crate) mod blanes_moan;
 pub(crate) mod bug;

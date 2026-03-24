@@ -8,7 +8,6 @@
 //! "Runge-Kutta methods for dynamical low-rank approximation".
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use super::super::{
     advecator::Advector,
@@ -19,6 +18,7 @@ use super::super::{
     solver::PoissonSolver,
     types::*,
 };
+use super::helpers;
 use crate::CausticError;
 
 use super::bug::{BugConfig, bug_drift_substep, bug_kick_substep, conservative_correction};
@@ -49,15 +49,21 @@ impl Default for RkBugConfig {
     }
 }
 
-/// RK-BUG integrator: Runge-Kutta method with BUG sub-steps.
+/// RK-BUG integrator: classical Runge-Kutta time stepping with BUG tensor updates.
+///
+/// Uses SSP-RK3 for the macro time step and BUG for the HT factor updates at each
+/// stage. Falls back to standard Strang splitting for non-HT representations.
 pub struct RkBugIntegrator {
+    /// BUG truncation, rank, and conservation settings.
     pub config: RkBugConfig,
+    /// Gravitational constant G.
     pub g: f64,
     last_timings: StepTimings,
     progress: Option<Arc<StepProgress>>,
 }
 
 impl RkBugIntegrator {
+    /// Create a new RK-BUG integrator with the given gravitational constant and config.
     pub fn new(g: f64, config: RkBugConfig) -> Self {
         Self {
             config,
@@ -88,23 +94,14 @@ impl RkBugIntegrator {
         config: &BugConfig,
         timings: &mut StepTimings,
     ) {
-        let t0 = Instant::now();
-        bug_drift_substep(ht, dt / 2.0, config);
-        timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(timings, drift_ms, bug_drift_substep(ht, dt / 2.0, config));
 
-        let t0 = Instant::now();
-        let density = ht.compute_density();
-        let potential = solver.solve(&density, g);
-        let accel = solver.compute_acceleration(&potential);
-        timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        let (_, _, accel) =
+            helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(ht, solver, g));
 
-        let t0 = Instant::now();
-        bug_kick_substep(ht, &accel, dt, config);
-        timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(timings, kick_ms, bug_kick_substep(ht, &accel, dt, config));
 
-        let t0 = Instant::now();
-        bug_drift_substep(ht, dt / 2.0, config);
-        timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(timings, drift_ms, bug_drift_substep(ht, dt / 2.0, config));
     }
 
     /// SSP-RK3 (Shu-Osher form) with BUG sub-steps:
@@ -139,17 +136,12 @@ impl RkBugIntegrator {
         let y0 = ht.clone();
 
         // Stage 1: Y^(1) = BUG(Y^(0), dt)
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::BugKStep);
-            p.set_sub_step(0, 4);
-        }
+        helpers::report_phase!(self.progress, StepPhase::BugKStep, 0, 4);
         Self::bug_strang_step(ht, solver, self.g, dt, &config, timings);
         // ht is now Y^(1)
 
         // Stage 2: Z^(2) = BUG(Y^(1), dt)
-        if let Some(ref p) = self.progress {
-            p.set_sub_step(1, 4);
-        }
+        helpers::report_phase!(self.progress, StepPhase::BugKStep, 1, 4);
         let mut z2 = ht.clone();
         Self::bug_strang_step(&mut z2, solver, self.g, dt, &config, timings);
         // Y^(2) = 3/4 · Y^(0) + 1/4 · Z^(2)
@@ -157,20 +149,14 @@ impl RkBugIntegrator {
         *ht = y2;
 
         // Stage 3: Z^(3) = BUG(Y^(2), dt)
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::BugLStep);
-            p.set_sub_step(2, 4);
-        }
+        helpers::report_phase!(self.progress, StepPhase::BugLStep, 2, 4);
         let mut z3 = ht.clone();
         Self::bug_strang_step(&mut z3, solver, self.g, dt, &config, timings);
         // Y^(n+1) = 1/3 · Y^(0) + 2/3 · Z^(3)
         let result = y0.scaled_add(1.0 / 3.0, &z3, 2.0 / 3.0, tol);
         *ht = result;
 
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::BugSStep);
-            p.set_sub_step(3, 4);
-        }
+        helpers::report_phase!(self.progress, StepPhase::BugSStep, 3, 4);
 
         if let Some(ref dens) = density_before {
             conservative_correction(ht, dens);
@@ -186,23 +172,17 @@ impl RkBugIntegrator {
         dt: f64,
         timings: &mut StepTimings,
     ) {
-        let t0 = Instant::now();
-        advector.drift(repr, dt / 2.0);
-        timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / 2.0));
 
-        let t0 = Instant::now();
-        let density = repr.compute_density();
-        let potential = solver.solve(&density, self.g);
-        let accel = solver.compute_acceleration(&potential);
-        timings.poisson_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        let (_, _, accel) = helpers::time_ms!(
+            timings,
+            poisson_ms,
+            helpers::solve_poisson(repr, solver, self.g)
+        );
 
-        let t0 = Instant::now();
-        advector.kick(repr, &accel, dt);
-        timings.kick_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, dt));
 
-        let t0 = Instant::now();
-        advector.drift(repr, dt / 2.0);
-        timings.drift_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / 2.0));
     }
 }
 
@@ -229,30 +209,26 @@ impl TimeIntegrator for RkBugIntegrator {
             self.strang_fallback(repr, solver, advector, dt, &mut timings);
         }
 
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::StepComplete);
-        }
+        helpers::report_phase!(self.progress, StepPhase::StepComplete, 4, 4);
 
         // Compute end-of-step products for caller reuse
-        let t0 = Instant::now();
-        let density = repr.compute_density();
-        let potential = solver.solve(&density, self.g);
-        let acceleration = solver.compute_acceleration(&potential);
-        timings.density_ms += t0.elapsed().as_secs_f64() * 1000.0;
+        let (density, potential, acceleration) = helpers::time_ms!(
+            timings,
+            density_ms,
+            helpers::solve_poisson(repr, solver, self.g)
+        );
 
         self.last_timings = timings;
 
-        Ok(StepProducts { density, potential, acceleration })
+        Ok(StepProducts {
+            density,
+            potential,
+            acceleration,
+        })
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
-        let density = repr.compute_density();
-        let rho_max = density.data.iter().cloned().fold(0.0_f64, f64::max);
-        if rho_max <= 0.0 || self.g <= 0.0 {
-            return 1e10;
-        }
-        let t_dyn = 1.0 / (self.g * rho_max).sqrt();
-        cfl_factor * t_dyn
+        helpers::dynamical_timestep(repr, self.g, cfl_factor)
     }
 
     fn last_step_timings(&self) -> Option<&StepTimings> {
