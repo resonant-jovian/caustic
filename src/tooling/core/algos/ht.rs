@@ -2272,9 +2272,14 @@ impl PhaseSpaceRepr for HtTensor {
                         ws.resize(ws_len, 0.0);
                     }
                     match interp_mode {
-                        InterpolationMode::TricubicCatmullRom => {
-                            tricubic_interpolate_ht(&old_ht, int_idx, [0, 1, 2], frac, [periodic; 3], &mut ws)
-                        }
+                        InterpolationMode::TricubicCatmullRom => tricubic_interpolate_ht(
+                            &old_ht,
+                            int_idx,
+                            [0, 1, 2],
+                            frac,
+                            [periodic; 3],
+                            &mut ws,
+                        ),
                         InterpolationMode::SparsePolynomial => sparse_polynomial_interpolate_ht(
                             &old_ht,
                             int_idx,
@@ -2381,9 +2386,14 @@ impl PhaseSpaceRepr for HtTensor {
                         ws.resize(ws_len, 0.0);
                     }
                     match interp_mode {
-                        InterpolationMode::TricubicCatmullRom => {
-                            tricubic_interpolate_ht(&old_ht, int_idx, [3, 4, 5], frac, [periodic_v; 3], &mut ws)
-                        }
+                        InterpolationMode::TricubicCatmullRom => tricubic_interpolate_ht(
+                            &old_ht,
+                            int_idx,
+                            [3, 4, 5],
+                            frac,
+                            [periodic_v; 3],
+                            &mut ws,
+                        ),
                         InterpolationMode::SparsePolynomial => sparse_polynomial_interpolate_ht(
                             &old_ht,
                             int_idx,
@@ -4234,7 +4244,8 @@ mod tests {
         let int_indices = [0, 0, 0, 4, 4, 4]; // velocity indices don't matter for this function
 
         let mut ws = vec![0.0; ht.eval_workspace_len()];
-        let result = sparse_polynomial_interpolate_ht(&ht, int_indices, [0, 1, 2], frac, [true; 3], &mut ws);
+        let result =
+            sparse_polynomial_interpolate_ht(&ht, int_indices, [0, 1, 2], frac, [true; 3], &mut ws);
 
         // Compute expected value from the quadratic at fractional position
         let x1 = -lx[0] + (frac[0] + 0.5) * dx[0];

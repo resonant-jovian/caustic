@@ -2,6 +2,7 @@
 name = "caustic"
 version = "0.0.12"
 edition = "2024"
+rust-version = "1.86"
 description = "A General-Purpose 6D Collisionless Gravitational Dynamics Solver"
 authors = ["Albin <albin@sjoegren.se>"]
 license = "GPL-3.0"
