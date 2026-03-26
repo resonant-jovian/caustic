@@ -1,0 +1,210 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '32 23 * * 5' # weekly lint (Friday 23:32 UTC)
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Build ──────────────────────────────────────────────────────────────────
+  build:
+    name: Build (${{ matrix.rust }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust: [stable, "1.85.0"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.rust }}
+      - name: Compile test binaries
+        run: cargo test --release --no-run --verbose
+
+  # ── Lint ────────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint (clippy + fmt)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Install SARIF tools
+        run: cargo install clippy-sarif sarif-fmt
+      - name: Run clippy
+        run: >
+          cargo clippy
+          --all-features
+          --message-format=json | clippy-sarif | tee rust-clippy-results.sarif | sarif-fmt
+        continue-on-error: true
+      - name: Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: rust-clippy-results.sarif
+          wait-for-processing: true
+
+  # ── Unit tests ──────────────────────────────────────────────────────────────
+  unit-tests:
+    name: Unit tests (${{ matrix.rust }})
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust: [stable, "1.85.0"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.rust }}
+      - name: Run unit tests
+        run: cargo test --release --verbose --lib --bins -- --test-threads=4 2>&1 | tee test-output.txt
+      - name: Test summary
+        if: always()
+        run: |
+          echo "## Unit Tests (${{ matrix.rust }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Extract result line
+          result=$(grep '^test result:' test-output.txt || echo "test result: unknown")
+          echo "**Result:** \`$result\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # List failures
+          failed=$(grep '\.\.\.\ FAILED' test-output.txt || true)
+          if [ -n "$failed" ]; then
+            echo "### Failures" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "$failed" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # Extract panic messages
+            panics=$(sed -n '/^failures:$/,/^test result:/p' test-output.txt | head -50)
+            if [ -n "$panics" ]; then
+              echo "### Panic details" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              echo "$panics" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+
+          # List slow tests (> 30s) from verbose output
+          slow=$(grep -E 'test .+ \.\.\. ok' test-output.txt | while read line; do
+            # cargo test --verbose doesn't print per-test timing unless unstable
+            # Just list the tests for now
+            true
+          done)
+
+  # ── Validation tests ────────────────────────────────────────────────────────
+  validation-tests:
+    name: Validation tests
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: stable
+      - name: Run validation tests
+        run: cargo test --release --verbose -- tooling::validation --test-threads=1 2>&1 | tee test-output.txt
+      - name: Test summary
+        if: always()
+        run: |
+          echo "## Validation Tests" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          result=$(grep '^test result:' test-output.txt || echo "test result: unknown")
+          echo "**Result:** \`$result\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          failed=$(grep '\.\.\.\ FAILED' test-output.txt || true)
+          if [ -n "$failed" ]; then
+            echo "### Failures" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "$failed" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            panics=$(sed -n '/^failures:$/,/^test result:/p' test-output.txt | head -50)
+            if [ -n "$panics" ]; then
+              echo "### Panic details" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              echo "$panics" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+
+  # ── Benchmark regression ────────────────────────────────────────────────────
+  benchmark-regression:
+    name: Benchmark regression
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: stable
+      - name: Install critcmp
+        run: cargo install critcmp
+
+      # On push to main: save baseline
+      - name: Run benchmarks (baseline)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: cargo bench --bench solver_kernels -- --save-baseline main
+      - name: Upload baseline
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-baseline
+          path: target/criterion
+          retention-days: 30
+
+      # On PR: compare against baseline
+      - name: Download baseline
+        if: github.event_name == 'pull_request'
+        uses: actions/download-artifact@v4
+        with:
+          name: criterion-baseline
+          path: target/criterion-baseline
+        continue-on-error: true # baseline may not exist yet
+      - name: Run benchmarks (PR)
+        if: github.event_name == 'pull_request'
+        run: cargo bench --bench solver_kernels -- --save-baseline pr
+      - name: Compare benchmarks
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ -d target/criterion-baseline ]; then
+            # Copy baseline into criterion directory for critcmp
+            cp -r target/criterion-baseline/* target/criterion/ 2>/dev/null || true
+            echo "## Benchmark Comparison" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            critcmp main pr --threshold 5 >> $GITHUB_STEP_SUMMARY 2>&1 || echo "critcmp failed or no baseline available" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## Benchmark Comparison" >> $GITHUB_STEP_SUMMARY
+            echo "No baseline available yet. Push to main to create one." >> $GITHUB_STEP_SUMMARY
+          fi
