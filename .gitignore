@@ -2,3 +2,4 @@
 *.lock
 /.idea
 ref/*
+docs/*
