@@ -29,6 +29,7 @@ use rayon::prelude::*;
 use rustfft::FftPlanner;
 use rustfft::num_complex::Complex64;
 use std::any::Any;
+use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1249,16 +1250,55 @@ fn build_interior_transfer_aca<E: Fn([usize; 6]) -> f64 + Sync>(
 
 impl HtTensor {
     /// Evaluate at a single 6D grid point. Cost: O(d·k³).
+    ///
+    /// Allocates temporary workspace per call. For hot-path evaluation in loops,
+    /// use [`evaluate_into`] with a pre-allocated workspace from [`eval_workspace_len`].
     #[inline]
     pub fn evaluate(&self, indices: [usize; 6]) -> f64 {
-        let mut buf = [0.0f64; 256];
-        self.node_vector_into(ROOT, &indices, &mut buf);
-        buf[0]
+        let mr = self.compute_max_node_rank();
+        let mut ws = vec![0.0f64; Self::workspace_len_for(mr)];
+        self.evaluate_into(indices, &mut ws)
     }
 
-    /// Contracted vector at a node, writing into caller-provided buffer (no allocation).
+    /// Evaluate at a single 6D grid point using a pre-allocated workspace.
+    ///
+    /// The workspace must have at least [`eval_workspace_len`] elements.
+    /// This avoids heap allocation and is suitable for tight loops.
     #[inline]
-    fn node_vector_into(&self, node_idx: usize, indices: &[usize; 6], out: &mut [f64]) -> usize {
+    pub fn evaluate_into(&self, indices: [usize; 6], workspace: &mut [f64]) -> f64 {
+        let mr = self.compute_max_node_rank();
+        let (out, rest) = workspace.split_at_mut(mr);
+        self.node_vector_into(ROOT, &indices, out, rest, mr);
+        out[0]
+    }
+
+    /// Returns the required workspace length for [`evaluate_into`].
+    pub fn eval_workspace_len(&self) -> usize {
+        Self::workspace_len_for(self.compute_max_node_rank())
+    }
+
+    /// Compute workspace length for a given max rank.
+    /// Layout: mr (output) + depth * 2 * mr (recursive buffers), depth = 3 for 6D tree.
+    fn workspace_len_for(mr: usize) -> usize {
+        7 * mr // 1 output + 3 levels × 2 child buffers
+    }
+
+    /// Actual maximum rank across all nodes in the tree.
+    fn compute_max_node_rank(&self) -> usize {
+        self.nodes.iter().map(|n| n.rank()).max().unwrap_or(1)
+    }
+
+    /// Contracted vector at a node, writing into caller-provided buffer.
+    /// `workspace` provides scratch space for recursive child buffers.
+    #[inline]
+    fn node_vector_into(
+        &self,
+        node_idx: usize,
+        indices: &[usize; 6],
+        out: &mut [f64],
+        workspace: &mut [f64],
+        mr: usize,
+    ) -> usize {
         match &self.nodes[node_idx] {
             HtNode::Leaf { dim, frame } => {
                 let row = indices[*dim];
@@ -1275,10 +1315,10 @@ impl HtTensor {
                 ranks,
             } => {
                 let [kt, kl, kr] = *ranks;
-                let mut left_buf = [0.0f64; 256];
-                let mut right_buf = [0.0f64; 256];
-                self.node_vector_into(*left, indices, &mut left_buf);
-                self.node_vector_into(*right, indices, &mut right_buf);
+                let (bufs, deeper) = workspace.split_at_mut(2 * mr);
+                let (left_buf, right_buf) = bufs.split_at_mut(mr);
+                self.node_vector_into(*left, indices, left_buf, deeper, mr);
+                self.node_vector_into(*right, indices, right_buf, deeper, mr);
                 contract_transfer_into(
                     transfer,
                     kt,
@@ -1436,6 +1476,7 @@ impl HtTensor {
         for &ni in &[0, 1, 2, 3, 4, 5] {
             self.truncate_node(ni, eps_leaf);
         }
+        self.max_rank = self.compute_max_node_rank();
     }
 
     /// Truncate all nodes to a fixed maximum rank.
@@ -1444,6 +1485,7 @@ impl HtTensor {
         for &ni in &[8, 9, 6, 7, 0, 1, 2, 3, 4, 5] {
             self.truncate_node_fixed(ni, max_rank);
         }
+        self.max_rank = self.compute_max_node_rank();
     }
 
     fn truncate_node(&mut self, node_idx: usize, eps: f64) {
@@ -1639,12 +1681,13 @@ impl HtTensor {
             }
         }
 
+        let actual_max_rank = nodes.iter().map(|n| n.rank()).max().unwrap_or(1);
         HtTensor {
             nodes,
             shape: self.shape,
             domain: self.domain.clone(),
             tolerance: self.tolerance.min(other.tolerance),
-            max_rank: self.max_rank.max(other.max_rank),
+            max_rank: actual_max_rank,
             interpolation_mode: self.interpolation_mode,
             progress: self.progress.clone(),
             positivity_limiter: self.positivity_limiter,
@@ -1850,6 +1893,7 @@ fn tricubic_interpolate_ht(
     shift_dims: [usize; 3],
     frac_pos: [f64; 3],
     periodic: [bool; 3],
+    workspace: &mut [f64],
 ) -> f64 {
     let ns = [
         ht.shape[shift_dims[0]],
@@ -1925,7 +1969,7 @@ fn tricubic_interpolate_ht(
                 idx[shift_dims[1]] = raw1 as usize;
                 idx[shift_dims[2]] = raw2 as usize;
 
-                result += ht.evaluate(idx) * w;
+                result += ht.evaluate_into(idx, workspace) * w;
             }
         }
     }
@@ -1949,6 +1993,7 @@ fn sparse_polynomial_interpolate_ht(
     shift_dims: [usize; 3],
     frac_pos: [f64; 3],
     periodic: [bool; 3],
+    workspace: &mut [f64],
 ) -> f64 {
     let ns = [
         ht.shape[shift_dims[0]],
@@ -1995,7 +2040,7 @@ fn sparse_polynomial_interpolate_ht(
     };
 
     // Center evaluation: f0
-    let f0 = ht.evaluate(idx0);
+    let f0 = ht.evaluate_into(idx0, workspace);
 
     // Per-dimension finite differences: f(x0 ± e_k)
     let mut f_plus = [0.0f64; 3];
@@ -2006,11 +2051,11 @@ fn sparse_polynomial_interpolate_ht(
     for k in 0..3 {
         let mut idx_p = idx0;
         idx_p[shift_dims[k]] = adjust(k, 1);
-        f_plus[k] = ht.evaluate(idx_p);
+        f_plus[k] = ht.evaluate_into(idx_p, workspace);
 
         let mut idx_m = idx0;
         idx_m[shift_dims[k]] = adjust(k, -1);
-        f_minus[k] = ht.evaluate(idx_m);
+        f_minus[k] = ht.evaluate_into(idx_m, workspace);
 
         a[k] = (f_plus[k] - f_minus[k]) / 2.0;
         b[k] = (f_plus[k] + f_minus[k] - 2.0 * f0) / 2.0;
@@ -2023,7 +2068,7 @@ fn sparse_polynomial_interpolate_ht(
             let mut idx_diag = idx0;
             idx_diag[shift_dims[k]] = adjust(k, 1);
             idx_diag[shift_dims[l]] = adjust(l, 1);
-            let f_diag = ht.evaluate(idx_diag);
+            let f_diag = ht.evaluate_into(idx_diag, workspace);
             c[k][l] = f_diag - f_plus[k] - f_plus[l] + f0;
         }
     }
@@ -2186,9 +2231,13 @@ impl PhaseSpaceRepr for HtTensor {
         let interp_mode = self.interpolation_mode;
 
         let saved_progress = self.progress.clone();
+        let ws_len = old_ht.eval_workspace_len();
 
         let new_ht = HtTensor::from_function_aca(
             move |x_phys: &[f64; 3], v_phys: &[f64; 3]| -> f64 {
+                thread_local! {
+                    static EVAL_WS: RefCell<Vec<f64>> = RefCell::new(Vec::new());
+                }
                 // Integer velocity indices (round to nearest cell center)
                 let iv = [
                     ((v_phys[0] + lv[0]) / dv[0] - 0.5)
@@ -2217,18 +2266,25 @@ impl PhaseSpaceRepr for HtTensor {
                 ];
 
                 let int_idx = [0, 0, 0, iv[0], iv[1], iv[2]];
-                match interp_mode {
-                    InterpolationMode::TricubicCatmullRom => {
-                        tricubic_interpolate_ht(&old_ht, int_idx, [0, 1, 2], frac, [periodic; 3])
+                EVAL_WS.with(|ws_cell| {
+                    let mut ws = ws_cell.borrow_mut();
+                    if ws.len() < ws_len {
+                        ws.resize(ws_len, 0.0);
                     }
-                    InterpolationMode::SparsePolynomial => sparse_polynomial_interpolate_ht(
-                        &old_ht,
-                        int_idx,
-                        [0, 1, 2],
-                        frac,
-                        [periodic; 3],
-                    ),
-                }
+                    match interp_mode {
+                        InterpolationMode::TricubicCatmullRom => {
+                            tricubic_interpolate_ht(&old_ht, int_idx, [0, 1, 2], frac, [periodic; 3], &mut ws)
+                        }
+                        InterpolationMode::SparsePolynomial => sparse_polynomial_interpolate_ht(
+                            &old_ht,
+                            int_idx,
+                            [0, 1, 2],
+                            frac,
+                            [periodic; 3],
+                            &mut ws,
+                        ),
+                    }
+                })
             },
             &self.domain,
             tol,
@@ -2269,9 +2325,13 @@ impl PhaseSpaceRepr for HtTensor {
         let gz: Arc<[f64]> = Arc::from(acceleration.gz.as_slice());
 
         let saved_progress = self.progress.clone();
+        let ws_len = old_ht.eval_workspace_len();
 
         let new_ht = HtTensor::from_function_aca(
             move |x_phys: &[f64; 3], v_phys: &[f64; 3]| -> f64 {
+                thread_local! {
+                    static EVAL_WS: RefCell<Vec<f64>> = RefCell::new(Vec::new());
+                }
                 // Spatial grid index for acceleration lookup
                 let ix = [
                     ((x_phys[0] + lx[0]) / dx[0] - 0.5)
@@ -2315,18 +2375,25 @@ impl PhaseSpaceRepr for HtTensor {
                 ];
 
                 let int_idx = [ix_int[0], ix_int[1], ix_int[2], 0, 0, 0];
-                match interp_mode {
-                    InterpolationMode::TricubicCatmullRom => {
-                        tricubic_interpolate_ht(&old_ht, int_idx, [3, 4, 5], frac, [periodic_v; 3])
+                EVAL_WS.with(|ws_cell| {
+                    let mut ws = ws_cell.borrow_mut();
+                    if ws.len() < ws_len {
+                        ws.resize(ws_len, 0.0);
                     }
-                    InterpolationMode::SparsePolynomial => sparse_polynomial_interpolate_ht(
-                        &old_ht,
-                        int_idx,
-                        [3, 4, 5],
-                        frac,
-                        [periodic_v; 3],
-                    ),
-                }
+                    match interp_mode {
+                        InterpolationMode::TricubicCatmullRom => {
+                            tricubic_interpolate_ht(&old_ht, int_idx, [3, 4, 5], frac, [periodic_v; 3], &mut ws)
+                        }
+                        InterpolationMode::SparsePolynomial => sparse_polynomial_interpolate_ht(
+                            &old_ht,
+                            int_idx,
+                            [3, 4, 5],
+                            frac,
+                            [periodic_v; 3],
+                            &mut ws,
+                        ),
+                    }
+                })
             },
             &self.domain,
             tol,
@@ -4166,7 +4233,8 @@ mod tests {
         let frac = [2.7, 3.4, 5.1]; // fractional cell indices
         let int_indices = [0, 0, 0, 4, 4, 4]; // velocity indices don't matter for this function
 
-        let result = sparse_polynomial_interpolate_ht(&ht, int_indices, [0, 1, 2], frac, [true; 3]);
+        let mut ws = vec![0.0; ht.eval_workspace_len()];
+        let result = sparse_polynomial_interpolate_ht(&ht, int_indices, [0, 1, 2], frac, [true; 3], &mut ws);
 
         // Compute expected value from the quadratic at fractional position
         let x1 = -lx[0] + (frac[0] + 0.5) * dx[0];
