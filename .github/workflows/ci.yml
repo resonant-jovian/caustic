@@ -14,19 +14,12 @@ env:
 jobs:
   # ── Build ──────────────────────────────────────────────────────────────────
   build:
-    name: Build (${{ matrix.rust }})
+    name: Build
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        rust: [stable, "1.86.0"]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
+      - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.rust }}
       - name: Compile test binaries
         run: cargo test --release --no-run --verbose
 
@@ -62,26 +55,19 @@ jobs:
 
   # ── Unit tests ──────────────────────────────────────────────────────────────
   unit-tests:
-    name: Unit tests (${{ matrix.rust }})
+    name: Unit tests
     needs: build
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        rust: [stable, "1.86.0"]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
+      - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.rust }}
       - name: Run unit tests
         run: cargo test --release --verbose --lib --bins -- --test-threads=4 2>&1 | tee test-output.txt
       - name: Test summary
         if: always()
         run: |
-          echo "## Unit Tests (${{ matrix.rust }})" >> $GITHUB_STEP_SUMMARY
+          echo "## Unit Tests" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           # Extract result line
