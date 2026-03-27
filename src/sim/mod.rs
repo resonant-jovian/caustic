@@ -141,6 +141,8 @@ impl Simulation {
             dt = (t_final - self.time).max(0.0);
         }
 
+        tracing::debug!(dt, step = self.step, time = self.time, "Simulation::step dt");
+
         let products =
             self.integrator
                 .advance(&mut *self.repr, &*self.poisson, &*self.advector, dt)?;
@@ -271,6 +273,10 @@ impl Simulation {
                 .cloned()
                 .reduce(|| 0.0_f64, f64::max),
         );
+
+        if let Some(rho_max) = self.cached_rho_max {
+            tracing::debug!(rho_max, step = self.step, "Simulation::step cached_rho_max");
+        }
 
         if let Some(ref p) = self.progress {
             let sub = p.read().sub_step;

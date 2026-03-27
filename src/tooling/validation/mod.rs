@@ -7,6 +7,7 @@ pub(crate) mod convergence;
 pub(crate) mod free;
 pub(crate) mod fujiwara;
 pub(crate) mod helpers;
+pub(crate) mod ht_diagnostic;
 pub(crate) mod instability;
 pub(crate) mod isochrone;
 pub(crate) mod jeans_isolated;

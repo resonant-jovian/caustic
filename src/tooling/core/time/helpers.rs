@@ -21,10 +21,13 @@ pub fn dynamical_timestep(repr: &dyn PhaseSpaceRepr, g: f64, cfl_factor: f64) ->
     let density = repr.compute_density();
     let rho_max = density.data.iter().cloned().fold(0.0_f64, f64::max);
     if rho_max <= 0.0 || g <= 0.0 {
+        tracing::debug!(rho_max, g, "dynamical_timestep: non-positive rho_max or g, returning 1e10");
         return 1e10;
     }
     let t_dyn = 1.0 / (g * rho_max).sqrt();
-    cfl_factor * t_dyn
+    let dt = cfl_factor * t_dyn;
+    tracing::debug!(rho_max, t_dyn, dt, "dynamical_timestep");
+    dt
 }
 
 /// Solve the full Poisson pipeline: density → potential → acceleration.

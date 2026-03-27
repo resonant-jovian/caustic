@@ -607,15 +607,45 @@ impl HtTensor {
             let n_mu = shape[mu];
             let ns = n_samples.min(n_mu * 10); // cap samples
 
-            // Generate random complementary multi-indices
+            // Generate complementary multi-indices for fiber sampling.
+            // Start with deterministic samples at the domain center and nearby
+            // grid points to ensure the non-zero support of compact distributions
+            // (e.g. Plummer sphere) is captured. Random sampling alone can miss
+            // the support on coarse grids.
             let mut comp_indices: Vec<[usize; 6]> = Vec::with_capacity(ns);
-            for _ in 0..ns {
+
+            // Deterministic center-of-domain sample
+            let center: [usize; 6] = std::array::from_fn(|d| shape[d] / 2);
+            comp_indices.push(center);
+
+            // Deterministic samples at center ± 1 in each complementary dim
+            for d in 0..6 {
+                if d == mu {
+                    continue;
+                }
+                let mid = shape[d] / 2;
+                if mid > 0 {
+                    let mut idx = center;
+                    idx[d] = mid - 1;
+                    comp_indices.push(idx);
+                }
+                if mid + 1 < shape[d] {
+                    let mut idx = center;
+                    idx[d] = mid + 1;
+                    comp_indices.push(idx);
+                }
+            }
+
+            // Fill remainder with random samples
+            let n_deterministic = comp_indices.len();
+            for _ in n_deterministic..ns {
                 let mut idx = [0usize; 6];
                 for d in 0..6 {
                     idx[d] = rng.next_usize(shape[d]);
                 }
                 comp_indices.push(idx);
             }
+            let ns = comp_indices.len();
 
             // Evaluate fibers: M ∈ ℝ^{n_μ × ns}
             // Parallelize over fiber columns (each sample is independent)
@@ -638,6 +668,23 @@ impl HtTensor {
                 }
             }
 
+            // Check for all-zero fiber matrix: QR of a zero matrix produces NaN
+            // in some backends. Fall back to a unit frame (rank 1).
+            let fiber_norm: f64 = fiber_mat
+                .col_iter()
+                .flat_map(|col| col.iter())
+                .map(|v| v * v)
+                .sum();
+            if fiber_norm < 1e-60 {
+                tracing::debug!(leaf = mu, "from_function_aca: all-zero fibers, using unit frame");
+                let mut unit = Mat::zeros(n_mu, 1);
+                unit[(n_mu / 2, 0)] = 1.0;
+                leaf_frames.push(unit);
+                leaf_ranks.push(1);
+                leaf_comp_indices.push(comp_indices);
+                continue;
+            }
+
             // Column-pivoted QR to extract basis
             let cpqr = fiber_mat.as_ref().col_piv_qr();
             let q = cpqr.compute_thin_Q();
@@ -651,8 +698,21 @@ impl HtTensor {
             let k_mu = truncation_rank(&sv, eps_node).max(1).min(max_rank);
 
             let frame = q.subcols(0, k_mu).to_owned();
-            leaf_frames.push(frame);
-            leaf_ranks.push(k_mu);
+
+            // Guard against NaN from QR of near-zero matrices
+            let has_nan = frame
+                .col_iter()
+                .any(|col| col.iter().any(|v| v.is_nan()));
+            if has_nan {
+                tracing::warn!(leaf = mu, "from_function_aca: QR produced NaN frame, using unit frame");
+                let mut unit = Mat::zeros(n_mu, 1);
+                unit[(n_mu / 2, 0)] = 1.0;
+                leaf_frames.push(unit);
+                leaf_ranks.push(1);
+            } else {
+                leaf_frames.push(frame);
+                leaf_ranks.push(k_mu);
+            }
             leaf_comp_indices.push(comp_indices);
         }
 
@@ -1055,6 +1115,12 @@ impl HtTensor {
         // HT tensor with a coarser tolerance proportional to the approximation norm.
         // This catches over-ranked nodes from the bottom-up ACA construction.
         ht.truncate(tolerance);
+
+        tracing::debug!(
+            total_rank = ht.total_rank(),
+            memory_mb = ht.memory_bytes() as f64 / 1_048_576.0,
+            "HtTensor::from_function_aca complete"
+        );
 
         ht
     }
@@ -2207,6 +2273,17 @@ impl PhaseSpaceRepr for HtTensor {
             })
             .collect();
 
+        let rho_max = density.iter().cloned().fold(0.0_f64, f64::max);
+        let rho_sum: f64 = density.iter().sum();
+        let nonzero = density.iter().filter(|&&v| v.abs() > 1e-30).count();
+        tracing::debug!(
+            rho_max,
+            rho_sum,
+            nonzero,
+            total = density.len(),
+            "HtTensor::compute_density"
+        );
+
         DensityField {
             data: density,
             shape: [nx1, nx2, nx3],
@@ -2218,6 +2295,9 @@ impl PhaseSpaceRepr for HtTensor {
         if dt.abs() < 1e-30 {
             return;
         }
+
+        let pre_mass = self.total_mass();
+        tracing::debug!(pre_mass, dt, "HtTensor::advect_x start");
 
         let old_ht = self.clone();
         let dx = self.domain.dx();
@@ -2236,7 +2316,7 @@ impl PhaseSpaceRepr for HtTensor {
         let new_ht = HtTensor::from_function_aca(
             move |x_phys: &[f64; 3], v_phys: &[f64; 3]| -> f64 {
                 thread_local! {
-                    static EVAL_WS: RefCell<Vec<f64>> = RefCell::new(Vec::new());
+                    static EVAL_WS: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
                 }
                 // Integer velocity indices (round to nearest cell center)
                 let iv = [
@@ -2304,6 +2384,16 @@ impl PhaseSpaceRepr for HtTensor {
         if self.positivity_limiter {
             self.enforce_positivity();
         }
+
+        let post_mass = self.total_mass();
+        let mass_ratio = post_mass / pre_mass.max(1e-30);
+        tracing::debug!(post_mass, mass_ratio, "HtTensor::advect_x end");
+        if mass_ratio < 0.01 || !post_mass.is_finite() {
+            tracing::warn!(
+                pre_mass, post_mass, mass_ratio,
+                "SLAR advect_x: mass collapsed after tensor reconstruction"
+            );
+        }
     }
 
     fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
@@ -2311,6 +2401,9 @@ impl PhaseSpaceRepr for HtTensor {
         if dt.abs() < 1e-30 {
             return;
         }
+
+        let pre_mass = self.total_mass();
+        tracing::debug!(pre_mass, dt, "HtTensor::advect_v start");
 
         let old_ht = self.clone();
         let dx = self.domain.dx();
@@ -2335,7 +2428,7 @@ impl PhaseSpaceRepr for HtTensor {
         let new_ht = HtTensor::from_function_aca(
             move |x_phys: &[f64; 3], v_phys: &[f64; 3]| -> f64 {
                 thread_local! {
-                    static EVAL_WS: RefCell<Vec<f64>> = RefCell::new(Vec::new());
+                    static EVAL_WS: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
                 }
                 // Spatial grid index for acceleration lookup
                 let ix = [
@@ -2424,6 +2517,16 @@ impl PhaseSpaceRepr for HtTensor {
         }
 
         self.apply_velocity_filter();
+
+        let post_mass = self.total_mass();
+        let mass_ratio = post_mass / pre_mass.max(1e-30);
+        tracing::debug!(post_mass, mass_ratio, "HtTensor::advect_v end");
+        if mass_ratio < 0.01 || !post_mass.is_finite() {
+            tracing::warn!(
+                pre_mass, post_mass, mass_ratio,
+                "SLAR advect_v: mass collapsed after tensor reconstruction"
+            );
+        }
     }
 
     fn moment(&self, position: &[f64; 3], order: usize) -> Tensor {

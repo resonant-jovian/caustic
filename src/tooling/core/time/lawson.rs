@@ -113,7 +113,7 @@ impl TimeIntegrator for LawsonRkIntegrator {
                 shape,
                 time,
             })
-            .expect("Lawson-RK snapshot restore failed");
+            .map_err(|e| CausticError::Solver(format!("Lawson-RK snapshot restore failed: {e}")))?;
             advector.kick(repr, &a2, dt / 2.0);
             Self::compute_accel(repr, solver, self.g)
         });
@@ -126,7 +126,7 @@ impl TimeIntegrator for LawsonRkIntegrator {
                 shape,
                 time,
             })
-            .expect("Lawson-RK snapshot restore failed");
+            .map_err(|e| CausticError::Solver(format!("Lawson-RK snapshot restore failed: {e}")))?;
             advector.kick(repr, &a3, dt);
             Self::compute_accel(repr, solver, self.g)
         });

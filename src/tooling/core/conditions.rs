@@ -222,13 +222,34 @@ impl ExitCondition for CausticFormationCondition {
 }
 
 /// Exit when the virial ratio 2T/|W| stabilises within `tolerance` of 1.0.
+///
+/// Includes a minimum step count to avoid premature exit for systems that
+/// start in or near virial equilibrium (e.g. Plummer sphere ICs).
 pub struct VirialRelaxedCondition {
     /// Maximum |2T/|W| - 1| for virial equilibrium.
     pub tolerance: f64,
+    /// Minimum number of evaluation calls before the condition can trigger.
+    pub min_steps: u64,
+    step_count: Cell<u64>,
+}
+
+impl VirialRelaxedCondition {
+    pub fn new(tolerance: f64, min_steps: u64) -> Self {
+        Self {
+            tolerance,
+            min_steps,
+            step_count: Cell::new(0),
+        }
+    }
 }
 
 impl ExitCondition for VirialRelaxedCondition {
     fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics) -> Option<ExitReason> {
+        let count = self.step_count.get();
+        self.step_count.set(count + 1);
+        if count < self.min_steps {
+            return None;
+        }
         if (diag.virial_ratio - 1.0).abs() < self.tolerance {
             Some(ExitReason::VirialRelaxed)
         } else {
