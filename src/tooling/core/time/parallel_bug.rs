@@ -187,11 +187,7 @@ impl ParallelBugIntegrator {
 
         // Poisson solve at midpoint
         helpers::report_phase!(ctx, StepPhase::BugLStep, 1, 5);
-        let (_, _, accel) = helpers::time_ms!(
-            timings,
-            poisson_ms,
-            helpers::solve_poisson(ht, ctx)
-        );
+        let (_, _, accel) = helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(ht, ctx));
 
         // Phase 2: Full kick — parallel K-steps for velocity leaves
         helpers::report_phase!(ctx, StepPhase::BugLStep, 2, 5);
@@ -278,17 +274,26 @@ impl ParallelBugIntegrator {
         dt: f64,
         timings: &mut StepTimings,
     ) {
-        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
-
-        let (_, _, accel) = helpers::time_ms!(
+        helpers::time_ms!(
             timings,
-            poisson_ms,
-            helpers::solve_poisson(repr, ctx)
+            drift_ms,
+            ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0))
         );
 
-        helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(dt)));
+        let (_, _, accel) =
+            helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, ctx));
 
-        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
+        helpers::time_ms!(
+            timings,
+            kick_ms,
+            ctx.advector.kick(repr, &accel, &ctx.with_dt(dt))
+        );
+
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0))
+        );
     }
 }
 
@@ -314,11 +319,8 @@ impl TimeIntegrator for ParallelBugIntegrator {
         helpers::report_phase!(ctx, StepPhase::StepComplete, 5, 5);
 
         // Compute end-of-step products for caller reuse
-        let (density, potential, acceleration) = helpers::time_ms!(
-            timings,
-            density_ms,
-            helpers::solve_poisson(repr, ctx)
-        );
+        let (density, potential, acceleration) =
+            helpers::time_ms!(timings, density_ms, helpers::solve_poisson(repr, ctx));
 
         self.last_timings = timings;
 

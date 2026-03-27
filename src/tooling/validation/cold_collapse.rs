@@ -6,14 +6,14 @@
 fn cold_collapse_1d() {
     use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::algos::uniform::UniformGrid6D;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::integrator::TimeIntegrator as _;
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
     use crate::tooling::core::poisson::fft::FftPoisson;
-    use crate::tooling::core::time::strang::StrangSplitting;
-    use crate::tooling::core::context::SimContext;
-    use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::progress::StepProgress;
+    use crate::tooling::core::time::strang::StrangSplitting;
 
     // Cold 1D slab: f(x,v) = ρ(x) * δ(v) approximated as narrow Gaussian.
     // ρ(x₁) = ρ₀ (1 + ε cos(k x₁)) with k < k_J → collapse forms
@@ -93,7 +93,6 @@ fn cold_collapse_1d() {
     let mut density_peaks = vec![rho_max_init];
     for step in 0..n_steps {
         let ctx = SimContext {
-
             solver: &poisson,
 
             advector: &advector,
@@ -109,14 +108,9 @@ fn cold_collapse_1d() {
             dt: dt,
 
             g: 1.0,
-
         };
 
-        integrator
-
-            .advance(&mut grid, &ctx)
-
-            .unwrap();
+        integrator.advance(&mut grid, &ctx).unwrap();
 
         if (step + 1) % 10 == 0 {
             let rho = grid.compute_density();

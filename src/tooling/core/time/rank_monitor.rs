@@ -208,23 +208,32 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
         };
 
         // Drift half-step
-        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0))
+        );
         diag.post_drift_ranks = extract_ranks(&*repr);
 
         // Poisson solve + kick
         helpers::report_phase!(ctx, StepPhase::PoissonSolve, 1, 5);
-        let (_density, _potential, accel) = helpers::time_ms!(
-            timings,
-            poisson_ms,
-            helpers::solve_poisson(repr, ctx)
-        );
+        let (_density, _potential, accel) =
+            helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, ctx));
         helpers::report_phase!(ctx, StepPhase::Kick, 2, 5);
-        helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(dt)));
+        helpers::time_ms!(
+            timings,
+            kick_ms,
+            ctx.advector.kick(repr, &accel, &ctx.with_dt(dt))
+        );
         diag.post_kick_ranks = extract_ranks(&*repr);
 
         // Drift half-step
         helpers::report_phase!(ctx, StepPhase::DriftHalf2, 3, 5);
-        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0))
+        );
         diag.post_final_ranks = extract_ranks(&*repr);
 
         // Compute amplification ratios
@@ -285,11 +294,8 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
 
         helpers::report_phase!(ctx, StepPhase::StepComplete, 4, 5);
 
-        let (density, potential, acceleration) = helpers::time_ms!(
-            timings,
-            density_ms,
-            helpers::solve_poisson(repr, ctx)
-        );
+        let (density, potential, acceleration) =
+            helpers::time_ms!(timings, density_ms, helpers::solve_poisson(repr, ctx));
 
         self.last_diagnostics = diag;
         self.last_timings = timings;
@@ -359,9 +365,7 @@ mod tests {
             g: 1.0,
         };
 
-        integrator
-            .advance(&mut grid, &ctx)
-            .unwrap();
+        integrator.advance(&mut grid, &ctx).unwrap();
 
         // UniformGrid6D is not HtTensor, so all rank fields should be None
         assert!(integrator.last_diagnostics.pre_drift_ranks.is_none());
@@ -458,9 +462,7 @@ mod tests {
                 dt,
                 g: 1.0,
             };
-            integrator
-                .advance(&mut ht, &ctx)
-                .unwrap();
+            integrator.advance(&mut ht, &ctx).unwrap();
         }
 
         let diag = &integrator.last_diagnostics;
@@ -552,9 +554,7 @@ mod tests {
             g: 0.0,
         };
 
-        integrator
-            .advance(&mut ht, &ctx)
-            .unwrap();
+        integrator.advance(&mut ht, &ctx).unwrap();
 
         let diag = &integrator.last_diagnostics;
 

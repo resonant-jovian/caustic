@@ -44,14 +44,20 @@ impl TimeIntegrator for LieSplitting {
         ctx.progress.start_step();
         ctx.progress.set_phase(StepPhase::DriftHalf1);
         ctx.progress.set_sub_step(0, 2);
-        ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::DriftHalf1, step: ctx.step });
+        ctx.emitter.emit(SimEvent::PhaseEntered {
+            phase: StepPhase::DriftHalf1,
+            step: ctx.step,
+        });
 
         // 1. Drift full step
         ctx.advector.drift(repr, &ctx.with_dt(dt));
 
         ctx.progress.set_phase(StepPhase::Kick);
         ctx.progress.set_sub_step(1, 2);
-        ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::Kick, step: ctx.step });
+        ctx.emitter.emit(SimEvent::PhaseEntered {
+            phase: StepPhase::Kick,
+            step: ctx.step,
+        });
 
         // 2. Compute density → Poisson → acceleration → kick full step
         let density = repr.compute_density();

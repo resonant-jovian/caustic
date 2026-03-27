@@ -4,14 +4,14 @@
 fn jeans_stability() {
     use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::algos::uniform::UniformGrid6D;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::integrator::TimeIntegrator as _;
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
     use crate::tooling::core::poisson::fft::FftPoisson;
-    use crate::tooling::core::time::strang::StrangSplitting;
-    use crate::tooling::core::context::SimContext;
-    use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::progress::StepProgress;
+    use crate::tooling::core::time::strang::StrangSplitting;
 
     // Large sigma=3.0, small box lx=0.5:
     // k_J = sqrt(4πGρ0)/σ ≈ sqrt(4π)/3 ≈ 1.18 (ρ0≈1, G=1)
@@ -88,7 +88,6 @@ fn jeans_stability() {
 
     for _ in 0..5 {
         let ctx = SimContext {
-
             solver: &poisson,
 
             advector: &advector,
@@ -104,14 +103,9 @@ fn jeans_stability() {
             dt: dt,
 
             g: 1.0,
-
         };
 
-        integrator
-
-            .advance(&mut grid, &ctx)
-
-            .unwrap();
+        integrator.advance(&mut grid, &ctx).unwrap();
     }
 
     let rho_final = grid.compute_density();

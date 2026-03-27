@@ -11,7 +11,13 @@
 //! across solves, avoiding redundant plan creation on each call. Scratch buffers
 //! are similarly cached behind a `Mutex` to eliminate per-call heap allocations.
 
-use super::super::{context::SimContext, events::{SimEvent, SolverKind}, init::domain::Domain, solver::PoissonSolver, types::*};
+use super::super::{
+    context::SimContext,
+    events::{SimEvent, SolverKind},
+    init::domain::Domain,
+    solver::PoissonSolver,
+    types::*,
+};
 use rayon::prelude::*;
 use realfft::RealFftPlanner;
 use rustfft::{FftPlanner, num_complex::Complex};

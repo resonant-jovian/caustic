@@ -164,27 +164,48 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
 
             // --- Strang step: drift(dt/2) -> kick(dt) -> drift(dt/2) ---
             helpers::report_phase!(ctx, StepPhase::DriftHalf1, 0, 7);
-            ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::DriftHalf1, step: ctx.step });
-            helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt_try / 2.0)));
+            ctx.emitter.emit(SimEvent::PhaseEntered {
+                phase: StepPhase::DriftHalf1,
+                step: ctx.step,
+            });
+            helpers::time_ms!(
+                timings,
+                drift_ms,
+                ctx.advector.drift(repr, &ctx.with_dt(dt_try / 2.0))
+            );
 
             helpers::report_phase!(ctx, StepPhase::PoissonSolve, 1, 7);
-            ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::PoissonSolve, step: ctx.step });
+            ctx.emitter.emit(SimEvent::PhaseEntered {
+                phase: StepPhase::PoissonSolve,
+                step: ctx.step,
+            });
             let accel = {
-                let (_density, _potential, accel) = helpers::time_ms!(
-                    timings,
-                    poisson_ms,
-                    helpers::solve_poisson(repr, ctx)
-                );
+                let (_density, _potential, accel) =
+                    helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, ctx));
                 accel
             };
 
             helpers::report_phase!(ctx, StepPhase::Kick, 2, 7);
-            ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::Kick, step: ctx.step });
-            helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(dt_try)));
+            ctx.emitter.emit(SimEvent::PhaseEntered {
+                phase: StepPhase::Kick,
+                step: ctx.step,
+            });
+            helpers::time_ms!(
+                timings,
+                kick_ms,
+                ctx.advector.kick(repr, &accel, &ctx.with_dt(dt_try))
+            );
 
             helpers::report_phase!(ctx, StepPhase::DriftHalf2, 3, 7);
-            ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::DriftHalf2, step: ctx.step });
-            helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt_try / 2.0)));
+            ctx.emitter.emit(SimEvent::PhaseEntered {
+                phase: StepPhase::DriftHalf2,
+                step: ctx.step,
+            });
+            helpers::time_ms!(
+                timings,
+                drift_ms,
+                ctx.advector.drift(repr, &ctx.with_dt(dt_try / 2.0))
+            );
 
             // Capture Strang result before overwriting with Lie step
             let strang_snap = repr.to_snapshot(0.0).ok_or_else(|| {
@@ -195,17 +216,28 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
             repr.load_snapshot(snap_for_lie)?;
 
             helpers::report_phase!(ctx, StepPhase::DriftHalf1, 4, 7);
-            ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::DriftHalf1, step: ctx.step });
-            helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt_try)));
+            ctx.emitter.emit(SimEvent::PhaseEntered {
+                phase: StepPhase::DriftHalf1,
+                step: ctx.step,
+            });
+            helpers::time_ms!(
+                timings,
+                drift_ms,
+                ctx.advector.drift(repr, &ctx.with_dt(dt_try))
+            );
 
             helpers::report_phase!(ctx, StepPhase::Kick, 5, 7);
-            ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::Kick, step: ctx.step });
-            let (_density, _potential, accel) = helpers::time_ms!(
+            ctx.emitter.emit(SimEvent::PhaseEntered {
+                phase: StepPhase::Kick,
+                step: ctx.step,
+            });
+            let (_density, _potential, accel) =
+                helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, ctx));
+            helpers::time_ms!(
                 timings,
-                poisson_ms,
-                helpers::solve_poisson(repr, ctx)
+                kick_ms,
+                ctx.advector.kick(repr, &accel, &ctx.with_dt(dt_try))
             );
-            helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(dt_try)));
 
             // --- Error estimation ---
             let lie_snap = repr.to_snapshot(0.0).ok_or_else(|| {
@@ -214,7 +246,10 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
             let err = Self::relative_error(&strang_snap.data, &lie_snap.data);
 
             helpers::report_phase!(ctx, StepPhase::Diagnostics, 6, 7);
-            ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::Diagnostics, step: ctx.step });
+            ctx.emitter.emit(SimEvent::PhaseEntered {
+                phase: StepPhase::Diagnostics,
+                step: ctx.step,
+            });
 
             let (dt_new, accepted) = self.controller.step(dt_try, err);
             self.suggested_dt = Some(dt_new);
@@ -242,13 +277,13 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
         }
 
         helpers::report_phase!(ctx, StepPhase::StepComplete, 0, 0);
-        ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::StepComplete, step: ctx.step });
+        ctx.emitter.emit(SimEvent::PhaseEntered {
+            phase: StepPhase::StepComplete,
+            step: ctx.step,
+        });
 
-        let (density, potential, acceleration) = helpers::time_ms!(
-            timings,
-            density_ms,
-            helpers::solve_poisson(repr, ctx)
-        );
+        let (density, potential, acceleration) =
+            helpers::time_ms!(timings, density_ms, helpers::solve_poisson(repr, ctx));
 
         self.last_timings = timings;
 

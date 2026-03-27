@@ -6,14 +6,14 @@
 fn two_stream_instability() {
     use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::algos::uniform::UniformGrid6D;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::integrator::TimeIntegrator as _;
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
     use crate::tooling::core::poisson::fft::FftPoisson;
-    use crate::tooling::core::time::strang::StrangSplitting;
-    use crate::tooling::core::context::SimContext;
-    use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::progress::StepProgress;
+    use crate::tooling::core::time::strang::StrangSplitting;
 
     // Two-stream: f(x,v) = C * v₁² * exp(-v²/2) * (1 + ε cos(k x₁))
     // The v² factor creates two beams moving in ±x₁ direction.
@@ -94,7 +94,6 @@ fn two_stream_instability() {
     let mut max_amp = amp_init;
     for step in 0..40 {
         let ctx = SimContext {
-
             solver: &poisson,
 
             advector: &advector,
@@ -110,14 +109,9 @@ fn two_stream_instability() {
             dt: dt,
 
             g: 1.0,
-
         };
 
-        integrator
-
-            .advance(&mut grid, &ctx)
-
-            .unwrap();
+        integrator.advance(&mut grid, &ctx).unwrap();
 
         if (step + 1) % 10 == 0 {
             let rho = grid.compute_density();

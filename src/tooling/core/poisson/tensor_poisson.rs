@@ -335,7 +335,7 @@ fn fft_3d_inverse(
 
 #[cfg(test)]
 mod tests {
-use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::context::SimContext;
     use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::progress::StepProgress;
@@ -368,42 +368,27 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
 
         let _advector = SemiLagrangian::new();
 
-
         let _emitter = EventEmitter::sink();
-
 
         let _progress = StepProgress::new();
 
-
         let _ctx = SimContext {
-
-
             solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
-
 
             advector: &_advector,
 
-
             emitter: &_emitter,
-
 
             progress: &_progress,
 
-
             step: 0,
-
 
             time: 0.0,
 
-
             dt: 0.0,
 
-
             g: 1.0,
-
-
         };
-
 
         let potential = solver.solve(&density, &_ctx);
         assert_eq!(potential.data.len(), n);
@@ -441,42 +426,27 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
 
         let _advector = SemiLagrangian::new();
 
-
         let _emitter = EventEmitter::sink();
-
 
         let _progress = StepProgress::new();
 
-
         let _ctx = SimContext {
-
-
             solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
-
 
             advector: &_advector,
 
-
             emitter: &_emitter,
-
 
             progress: &_progress,
 
-
             step: 0,
-
 
             time: 0.0,
 
-
             dt: 0.0,
 
-
             g: 1.0,
-
-
         };
-
 
         let potential = solver.solve(&density, &_ctx);
         assert!(potential.data[center].is_finite());
@@ -569,42 +539,27 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
 
         let _advector = SemiLagrangian::new();
 
-
         let _emitter = EventEmitter::sink();
-
 
         let _progress = StepProgress::new();
 
-
         let _ctx = SimContext {
-
-
             solver: &fft_solver as &dyn crate::tooling::core::solver::PoissonSolver,
-
 
             advector: &_advector,
 
-
             emitter: &_emitter,
-
 
             progress: &_progress,
 
-
             step: 0,
-
 
             time: 0.0,
 
-
             dt: 0.0,
 
-
             g: 1.0,
-
-
         };
-
 
         let phi_fft = fft_solver.solve(&density, &_ctx);
         let _advector = SemiLagrangian::new();
@@ -614,7 +569,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
         let _progress = StepProgress::new();
 
         let _ctx = SimContext {
-
             solver: &tensor_solver as &dyn crate::tooling::core::solver::PoissonSolver,
 
             advector: &_advector,
@@ -630,7 +584,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
             dt: 0.0,
 
             g: 1.0,
-
         };
 
         let phi_tensor = tensor_solver.solve(&density, &_ctx);
@@ -683,7 +636,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
         let _progress = StepProgress::new();
 
         let _ctx = SimContext {
-
             solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
 
             advector: &_advector,
@@ -699,7 +651,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
             dt: 0.0,
 
             g: 1.0,
-
         };
 
         let _potential = solver.solve(&density, &_ctx);
@@ -727,42 +678,27 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
 
         let _advector = SemiLagrangian::new();
 
-
         let _emitter = EventEmitter::sink();
-
 
         let _progress = StepProgress::new();
 
-
         let _ctx = SimContext {
-
-
             solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
-
 
             advector: &_advector,
 
-
             emitter: &_emitter,
-
 
             progress: &_progress,
 
-
             step: 0,
-
 
             time: 0.0,
 
-
             dt: 0.0,
 
-
             g: 1.0,
-
-
         };
-
 
         let potential = solver.solve(&density, &_ctx);
         let mag = solver.last_near_field_magnitude();
@@ -795,7 +731,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
         let _progress = StepProgress::new();
 
         let _ctx = SimContext {
-
             solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
 
             advector: &_advector,
@@ -811,7 +746,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
             dt: 0.0,
 
             g: 1.0,
-
         };
 
         let _potential = solver.solve(&density, &_ctx);

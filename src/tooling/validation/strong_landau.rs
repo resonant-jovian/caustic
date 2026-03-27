@@ -149,9 +149,7 @@ fn strong_landau_damping() {
     let e_total_init = t_init + w_init;
 
     for step in 0..n_steps {
-        integrator
-            .advance(&mut grid, &make_ctx(dt))
-            .unwrap();
+        integrator.advance(&mut grid, &make_ctx(dt)).unwrap();
 
         // Sample field energy at regular intervals
         if (step + 1) % 5 == 0 {

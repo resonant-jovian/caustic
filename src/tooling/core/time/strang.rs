@@ -54,45 +54,66 @@ impl TimeIntegrator for StrangSplitting {
 
         ctx.progress.start_step();
         helpers::report_phase!(ctx, StepPhase::DriftHalf1, 0, 5);
-        ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::DriftHalf1, step: ctx.step });
+        ctx.emitter.emit(SimEvent::PhaseEntered {
+            phase: StepPhase::DriftHalf1,
+            step: ctx.step,
+        });
 
-        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0))
+        );
 
         helpers::report_phase!(ctx, StepPhase::PoissonSolve, 1, 5);
-        ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::PoissonSolve, step: ctx.step });
+        ctx.emitter.emit(SimEvent::PhaseEntered {
+            phase: StepPhase::PoissonSolve,
+            step: ctx.step,
+        });
 
         let accel = {
-            let (density, potential, accel) = helpers::time_ms!(
-                timings,
-                poisson_ms,
-                helpers::solve_poisson(repr, ctx)
-            );
+            let (density, potential, accel) =
+                helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, ctx));
             let _ = (density, potential);
             accel
         };
 
         helpers::report_phase!(ctx, StepPhase::Kick, 2, 5);
-        ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::Kick, step: ctx.step });
+        ctx.emitter.emit(SimEvent::PhaseEntered {
+            phase: StepPhase::Kick,
+            step: ctx.step,
+        });
 
-        helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(dt)));
+        helpers::time_ms!(
+            timings,
+            kick_ms,
+            ctx.advector.kick(repr, &accel, &ctx.with_dt(dt))
+        );
 
         // Apply hypercollision damping if the representation is SpectralV
         helpers::apply_hypercollision_if_spectral(repr, dt);
 
         helpers::report_phase!(ctx, StepPhase::DriftHalf2, 3, 5);
-        ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::DriftHalf2, step: ctx.step });
+        ctx.emitter.emit(SimEvent::PhaseEntered {
+            phase: StepPhase::DriftHalf2,
+            step: ctx.step,
+        });
 
-        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0))
+        );
 
         helpers::report_phase!(ctx, StepPhase::StepComplete, 4, 5);
-        ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::StepComplete, step: ctx.step });
+        ctx.emitter.emit(SimEvent::PhaseEntered {
+            phase: StepPhase::StepComplete,
+            step: ctx.step,
+        });
 
         // Compute end-of-step products for caller reuse
-        let (density, potential, acceleration) = helpers::time_ms!(
-            timings,
-            density_ms,
-            helpers::solve_poisson(repr, ctx)
-        );
+        let (density, potential, acceleration) =
+            helpers::time_ms!(timings, density_ms, helpers::solve_poisson(repr, ctx));
 
         self.last_timings = timings;
 
@@ -179,9 +200,7 @@ mod tests {
             g: 1.0,
         };
 
-        integrator
-            .advance(&mut spec, &ctx)
-            .unwrap();
+        integrator.advance(&mut spec, &ctx).unwrap();
 
         // The high mode (3,3,3) should be significantly damped.
         // Damping factor for mode (3,3,3) with nu=1.0, order=2, dt=0.1:

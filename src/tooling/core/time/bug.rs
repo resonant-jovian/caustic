@@ -487,17 +487,26 @@ impl BugIntegrator {
         dt: f64,
         timings: &mut StepTimings,
     ) {
-        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
-
-        let (_, _, accel) = helpers::time_ms!(
+        helpers::time_ms!(
             timings,
-            poisson_ms,
-            helpers::solve_poisson(repr, ctx)
+            drift_ms,
+            ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0))
         );
 
-        helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(dt)));
+        let (_, _, accel) =
+            helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, ctx));
 
-        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
+        helpers::time_ms!(
+            timings,
+            kick_ms,
+            ctx.advector.kick(repr, &accel, &ctx.with_dt(dt))
+        );
+
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0))
+        );
     }
 
     /// Standard BUG step: Strang-split drift-kick-drift on HT leaves.
@@ -527,11 +536,7 @@ impl BugIntegrator {
         );
 
         helpers::report_phase!(ctx, StepPhase::BugLStep, 1, 4);
-        let (_, _, accel) = helpers::time_ms!(
-            timings,
-            poisson_ms,
-            helpers::solve_poisson(ht, ctx)
-        );
+        let (_, _, accel) = helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(ht, ctx));
 
         helpers::time_ms!(
             timings,
@@ -580,11 +585,7 @@ impl BugIntegrator {
             bug_drift_substep(ht, dt / 4.0, &self.config)
         );
 
-        let (_, _, accel) = helpers::time_ms!(
-            timings,
-            poisson_ms,
-            helpers::solve_poisson(ht, ctx)
-        );
+        let (_, _, accel) = helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(ht, ctx));
 
         helpers::time_ms!(
             timings,
@@ -619,11 +620,7 @@ impl BugIntegrator {
             bug_drift_substep(ht, dt / 2.0, &aug_config)
         );
 
-        let (_, _, accel) = helpers::time_ms!(
-            timings,
-            poisson_ms,
-            helpers::solve_poisson(ht, ctx)
-        );
+        let (_, _, accel) = helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(ht, ctx));
 
         helpers::time_ms!(
             timings,
@@ -674,11 +671,8 @@ impl TimeIntegrator for BugIntegrator {
         helpers::report_phase!(ctx, StepPhase::StepComplete, 3, 4);
 
         // Compute end-of-step products for caller reuse
-        let (density, potential, acceleration) = helpers::time_ms!(
-            timings,
-            density_ms,
-            helpers::solve_poisson(repr, ctx)
-        );
+        let (density, potential, acceleration) =
+            helpers::time_ms!(timings, density_ms, helpers::solve_poisson(repr, ctx));
 
         self.last_timings = timings;
 

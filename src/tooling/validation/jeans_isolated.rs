@@ -7,14 +7,14 @@
 fn jeans_instability_isolated() {
     use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::algos::uniform::UniformGrid6D;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::integrator::TimeIntegrator as _;
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
     use crate::tooling::core::poisson::fft::FftIsolated;
-    use crate::tooling::core::time::strang::StrangSplitting;
-    use crate::tooling::core::context::SimContext;
-    use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::progress::StepProgress;
+    use crate::tooling::core::time::strang::StrangSplitting;
 
     // Jeans instability with isolated (vacuum) boundary conditions.
     // f(x,v) = C * exp(-v²/2σ²) * (1 + ε cos(k x₁))
@@ -106,7 +106,6 @@ fn jeans_instability_isolated() {
 
     for step in 0..n_steps {
         let ctx = SimContext {
-
             solver: &poisson,
 
             advector: &advector,
@@ -122,14 +121,9 @@ fn jeans_instability_isolated() {
             dt: dt,
 
             g: 1.0,
-
         };
 
-        integrator
-
-            .advance(&mut grid, &ctx)
-
-            .unwrap();
+        integrator.advance(&mut grid, &ctx).unwrap();
 
         if (step + 1) % 5 == 0 {
             let rho = grid.compute_density();

@@ -62,7 +62,11 @@ impl TimeIntegrator for CosmologicalStrangSplitting {
         helpers::report_phase!(ctx, StepPhase::DriftHalf1, 0, 5);
 
         // Comoving drift: displacement scaled by 1/a
-        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / (2.0 * a))));
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            ctx.advector.drift(repr, &ctx.with_dt(dt / (2.0 * a)))
+        );
 
         helpers::report_phase!(ctx, StepPhase::PoissonSolve, 1, 5);
 
@@ -78,11 +82,19 @@ impl TimeIntegrator for CosmologicalStrangSplitting {
         helpers::report_phase!(ctx, StepPhase::Kick, 2, 5);
 
         // Kick with cosmological factor
-        helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(dt * a)));
+        helpers::time_ms!(
+            timings,
+            kick_ms,
+            ctx.advector.kick(repr, &accel, &ctx.with_dt(dt * a))
+        );
 
         helpers::report_phase!(ctx, StepPhase::DriftHalf2, 3, 5);
 
-        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / (2.0 * a))));
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            ctx.advector.drift(repr, &ctx.with_dt(dt / (2.0 * a)))
+        );
 
         // Update scale factor via simple Euler step: a' = a * H * dt
         self.scale_factor += self.scale_factor * self.hubble * dt;

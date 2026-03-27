@@ -46,10 +46,7 @@ impl LawsonRkIntegrator {
     }
 
     /// Compute acceleration field from the current distribution.
-    fn compute_accel(
-        repr: &dyn PhaseSpaceRepr,
-        ctx: &SimContext,
-    ) -> AccelerationField {
+    fn compute_accel(repr: &dyn PhaseSpaceRepr, ctx: &SimContext) -> AccelerationField {
         let (_density, _potential, accel) = helpers::solve_poisson(repr, ctx);
         accel
     }
@@ -68,7 +65,11 @@ impl TimeIntegrator for LawsonRkIntegrator {
         helpers::report_phase!(ctx, StepPhase::DriftHalf1, 0, 7);
 
         // Step 1: Exact half-drift (free-streaming, no CFL restriction)
-        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0))
+        );
 
         // Save state after half-drift for RK4 stage resets
         let snap_after_drift = repr.to_snapshot(0.0).ok_or_else(|| {
@@ -78,11 +79,7 @@ impl TimeIntegrator for LawsonRkIntegrator {
         // Step 2: RK4 kick with 4 Poisson solves
         // Stage 1: evaluate acceleration at drifted state
         helpers::report_phase!(ctx, StepPhase::PoissonSolve, 1, 7);
-        let a1 = helpers::time_ms!(
-            timings,
-            poisson_ms,
-            Self::compute_accel(repr, ctx)
-        );
+        let a1 = helpers::time_ms!(timings, poisson_ms, Self::compute_accel(repr, ctx));
 
         // Stage 2: half-kick with a1, evaluate acceleration
         helpers::report_phase!(ctx, StepPhase::PoissonSolve, 2, 7);
@@ -130,15 +127,16 @@ impl TimeIntegrator for LawsonRkIntegrator {
 
         // Step 3: Exact half-drift
         helpers::report_phase!(ctx, StepPhase::DriftHalf2, 6, 7);
-        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0))
+        );
 
         helpers::report_phase!(ctx, StepPhase::StepComplete, 7, 7);
 
-        let (density, potential, acceleration) = helpers::time_ms!(
-            timings,
-            density_ms,
-            helpers::solve_poisson(repr, ctx)
-        );
+        let (density, potential, acceleration) =
+            helpers::time_ms!(timings, density_ms, helpers::solve_poisson(repr, ctx));
 
         self.last_timings = timings;
 

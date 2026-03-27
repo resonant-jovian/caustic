@@ -363,9 +363,7 @@ fn jeans_growth_rate_convergence() {
                 dt,
                 g,
             };
-            integrator
-                .advance(&mut grid, &ctx)
-                .unwrap();
+            integrator.advance(&mut grid, &ctx).unwrap();
         }
 
         // Measure final amplitude
@@ -504,14 +502,14 @@ fn strang_temporal_convergence_order_2() {
 /// extrapolation to estimate spatial convergence order.
 #[test]
 fn spatial_convergence_free_streaming_3_resolutions() {
-    use crate::tooling::core::diagnostics::estimate_convergence_order;
     use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::diagnostics::estimate_convergence_order;
     use crate::tooling::core::events::EventEmitter;
-    use crate::tooling::core::progress::StepProgress;
     use crate::tooling::core::init::{
         domain::{Domain, SpatialBoundType, VelocityBoundType},
         isolated::{PlummerIC, sample_on_grid},
     };
+    use crate::tooling::core::progress::StepProgress;
     use crate::tooling::validation::helpers::{build_standard_sim, relative_drift};
 
     let t_final = 0.5;

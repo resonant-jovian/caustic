@@ -189,9 +189,7 @@ mod tests {
             g: 1.0,
         };
 
-        integrator
-            .advance(&mut grid, &ctx)
-            .unwrap();
+        integrator.advance(&mut grid, &ctx).unwrap();
 
         // Should not contain NaN
         assert!(

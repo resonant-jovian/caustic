@@ -146,7 +146,7 @@ impl PoissonSolver for RangeSeparatedPoisson {
 
 #[cfg(test)]
 mod tests {
-use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::context::SimContext;
     use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::progress::StepProgress;
@@ -194,42 +194,27 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
 
         let _advector = SemiLagrangian::new();
 
-
         let _emitter = EventEmitter::sink();
-
 
         let _progress = StepProgress::new();
 
-
         let _ctx = SimContext {
-
-
             solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
-
 
             advector: &_advector,
 
-
             emitter: &_emitter,
-
 
             progress: &_progress,
 
-
             step: 0,
-
 
             time: 0.0,
 
-
             dt: 0.0,
 
-
             g: 1.0,
-
-
         };
-
 
         let pot = solver.solve(&density, &_ctx);
         let acc = solver.compute_acceleration(&pot);
@@ -286,42 +271,27 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
 
         let _advector = SemiLagrangian::new();
 
-
         let _emitter = EventEmitter::sink();
-
 
         let _progress = StepProgress::new();
 
-
         let _ctx = SimContext {
-
-
             solver: &fft_only as &dyn crate::tooling::core::solver::PoissonSolver,
-
 
             advector: &_advector,
 
-
             emitter: &_emitter,
-
 
             progress: &_progress,
 
-
             step: 0,
-
 
             time: 0.0,
 
-
             dt: 0.0,
 
-
             g: 1.0,
-
-
         };
-
 
         let pot_fft = fft_only.solve(&density, &_ctx);
         let _advector = SemiLagrangian::new();
@@ -331,7 +301,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
         let _progress = StepProgress::new();
 
         let _ctx = SimContext {
-
             solver: &range_sep as &dyn crate::tooling::core::solver::PoissonSolver,
 
             advector: &_advector,
@@ -347,7 +316,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
             dt: 0.0,
 
             g: 1.0,
-
         };
 
         let pot_rs = range_sep.solve(&density, &_ctx);
@@ -388,42 +356,27 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
 
         let _advector = SemiLagrangian::new();
 
-
         let _emitter = EventEmitter::sink();
-
 
         let _progress = StepProgress::new();
 
-
         let _ctx = SimContext {
-
-
             solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
-
 
             advector: &_advector,
 
-
             emitter: &_emitter,
-
 
             progress: &_progress,
 
-
             step: 0,
-
 
             time: 0.0,
 
-
             dt: 0.0,
 
-
             g: 1.0,
-
-
         };
-
 
         let pot = solver.solve(&density, &_ctx);
 

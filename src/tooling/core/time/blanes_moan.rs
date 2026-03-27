@@ -83,28 +83,30 @@ impl TimeIntegrator for BlanesMoanSplitting {
         for i in 0..6 {
             // --- Drift a_i * dt ---
             helpers::report_phase!(ctx, StepPhase::DriftHalf1, 2 * i as u8, n_sub);
-            helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(BM4_A[i] * dt)));
+            helpers::time_ms!(
+                timings,
+                drift_ms,
+                ctx.advector.drift(repr, &ctx.with_dt(BM4_A[i] * dt))
+            );
 
             // --- Kick b_i * dt (5 kicks between 6 drifts) ---
             if i < 5 {
                 helpers::report_phase!(ctx, StepPhase::Kick, 2 * i as u8 + 1, n_sub);
-                let (_density, _potential, accel) = helpers::time_ms!(
+                let (_density, _potential, accel) =
+                    helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, ctx));
+                helpers::time_ms!(
                     timings,
-                    poisson_ms,
-                    helpers::solve_poisson(repr, ctx)
+                    kick_ms,
+                    ctx.advector.kick(repr, &accel, &ctx.with_dt(BM4_B[i] * dt))
                 );
-                helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(BM4_B[i] * dt)));
             }
         }
 
         helpers::report_phase!(ctx, StepPhase::StepComplete, n_sub, n_sub);
 
         // Compute end-of-step products for caller reuse
-        let (density, potential, acceleration) = helpers::time_ms!(
-            timings,
-            density_ms,
-            helpers::solve_poisson(repr, ctx)
-        );
+        let (density, potential, acceleration) =
+            helpers::time_ms!(timings, density_ms, helpers::solve_poisson(repr, ctx));
 
         self.last_timings = timings;
 

@@ -484,7 +484,7 @@ impl PoissonSolver for SphericalHarmonicsPoisson {
 
 #[cfg(test)]
 mod tests {
-use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::context::SimContext;
     use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::progress::StepProgress;
@@ -514,7 +514,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
         let _progress = StepProgress::new();
 
         let _ctx = SimContext {
-
             solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
 
             advector: &_advector,
@@ -530,7 +529,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
             dt: 0.0,
 
             g: 1.0,
-
         };
 
         let pot = solver.solve(&density, &_ctx);
@@ -582,7 +580,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
         let _progress = StepProgress::new();
 
         let _ctx = SimContext {
-
             solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
 
             advector: &_advector,
@@ -598,7 +595,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
             dt: 0.0,
 
             g: g_val,
-
         };
 
         let pot = solver.solve(&density, &_ctx);
@@ -643,7 +639,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
         let _progress = StepProgress::new();
 
         let _ctx = SimContext {
-
             solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
 
             advector: &_advector,
@@ -659,7 +654,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
             dt: 0.0,
 
             g: 1.0,
-
         };
 
         let pot = solver.solve(&density, &_ctx);
@@ -741,7 +735,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
         let _progress = StepProgress::new();
 
         let _ctx = SimContext {
-
             solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
 
             advector: &_advector,
@@ -757,7 +750,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
             dt: 0.0,
 
             g: 1.0,
-
         };
 
         let pot = solver.solve(&density, &_ctx);
@@ -801,7 +793,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
         let _progress = StepProgress::new();
 
         let _ctx = SimContext {
-
             solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
 
             advector: &_advector,
@@ -817,7 +808,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
             dt: 0.0,
 
             g: 1.0,
-
         };
 
         let pot = solver.solve(&density, &_ctx);

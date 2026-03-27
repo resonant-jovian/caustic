@@ -126,9 +126,7 @@ mod tests {
                 dt,
                 g,
             };
-            integrator
-                .advance(&mut grid, &ctx)
-                .unwrap();
+            integrator.advance(&mut grid, &ctx).unwrap();
         }
 
         // ── Apply second perturbation: multiply f by (1 + eps2 * cos(k2 * x1)) ─
@@ -162,9 +160,7 @@ mod tests {
                 dt,
                 g,
             };
-            integrator
-                .advance(&mut grid, &ctx)
-                .unwrap();
+            integrator.advance(&mut grid, &ctx).unwrap();
         }
 
         // ── Measure echo: Fourier mode at k3 of the density ────────────

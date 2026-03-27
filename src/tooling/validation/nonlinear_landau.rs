@@ -7,14 +7,14 @@
 fn nonlinear_landau_damping() {
     use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::algos::uniform::UniformGrid6D;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::integrator::TimeIntegrator as _;
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
     use crate::tooling::core::poisson::fft::FftPoisson;
-    use crate::tooling::core::time::strang::StrangSplitting;
-    use crate::tooling::core::context::SimContext;
-    use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::progress::StepProgress;
+    use crate::tooling::core::time::strang::StrangSplitting;
 
     // Nonlinear Landau damping: f(x,v) = (1/√(2π)) exp(-v²/2) (1 + ε cos(kx))
     // with ε = 0.5 (strong perturbation). k = 0.5 is in the damping regime for
@@ -98,7 +98,6 @@ fn nonlinear_landau_damping() {
 
     for _ in 0..n_steps {
         let ctx = SimContext {
-
             solver: &poisson,
 
             advector: &advector,
@@ -114,14 +113,9 @@ fn nonlinear_landau_damping() {
             dt: dt,
 
             g: 1.0,
-
         };
 
-        integrator
-
-            .advance(&mut grid, &ctx)
-
-            .unwrap();
+        integrator.advance(&mut grid, &ctx).unwrap();
     }
 
     // Check no NaN

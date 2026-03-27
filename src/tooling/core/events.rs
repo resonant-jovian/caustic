@@ -219,15 +219,26 @@ pub enum SimWarning {
     /// HT rank budget nearly exhausted.
     RankBudgetSaturated { fraction: f64, max_rank: u32 },
     /// Exponential rank growth detected.
-    RankExplosion { growth_rate: f64, doubling_steps: f64 },
+    RankExplosion {
+        growth_rate: f64,
+        doubling_steps: f64,
+    },
     /// Mass changed more than expected during a phase.
     MassImbalance { relative_change: f64, phase: String },
     /// Mass collapsed to near-zero after tensor reconstruction.
-    MassCollapsed { phase: String, pre_mass: f64, post_mass: f64 },
+    MassCollapsed {
+        phase: String,
+        pre_mass: f64,
+        post_mass: f64,
+    },
     /// NaN detected in a field or tensor component.
     NaNDetected { component: String },
     /// Iterative solver stalled before convergence.
-    ConvergenceStalled { solver: String, iterations: u32, residual: f64 },
+    ConvergenceStalled {
+        solver: String,
+        iterations: u32,
+        residual: f64,
+    },
     /// Positivity limiter activated on many cells.
     PositivityLimitActive { cells_limited: u64 },
 }
@@ -255,7 +266,6 @@ pub enum SimWarning {
 #[derive(Debug, Clone)]
 pub enum SimEvent {
     // ═══ Simulation Lifecycle ═════════════════════════════════════════════════
-
     /// Emitted once at simulation start with full configuration summary.
     SimStarted {
         repr_kind: ReprKind,
@@ -274,7 +284,6 @@ pub enum SimEvent {
     },
 
     // ═══ Step Lifecycle ═══════════════════════════════════════════════════════
-
     /// Beginning of a new timestep.
     StepStarted { step: u64, time: f64, dt: f64 },
     /// Integrator entered a new sub-phase within the step.
@@ -290,7 +299,6 @@ pub enum SimEvent {
     },
 
     // ═══ Timestep Control ════════════════════════════════════════════════════
-
     /// Timestep determined from CFL / dynamical constraints.
     TimestepComputed {
         dt: f64,
@@ -309,7 +317,6 @@ pub enum SimEvent {
     AdaptiveDtAccepted { dt: f64, error_estimate: f64 },
 
     // ═══ Poisson Solve ═══════════════════════════════════════════════════════
-
     /// Poisson solve completed (any solver type).
     PoissonSolveComplete { solver: SolverKind, wall_us: u64 },
     /// Multigrid V-cycle converged.
@@ -323,7 +330,6 @@ pub enum SimEvent {
     MultigridDiverged { iterations: u32, residual: f64 },
 
     // ═══ Phase-Space Operations ══════════════════════════════════════════════
-
     /// Density field computed (emitted by the caller of compute_density, not the repr).
     DensityComputed {
         total_mass: f64,
@@ -341,7 +347,6 @@ pub enum SimEvent {
     PositivityViolations { count: u64, max_magnitude: f64 },
 
     // ═══ HT Tensor Deep Observability ════════════════════════════════════════
-
     /// Per-step HT rank snapshot across all tensor tree nodes.
     HtRankSnapshot {
         ranks: Vec<u32>,
@@ -399,7 +404,6 @@ pub enum SimEvent {
     },
 
     // ═══ TT (Tensor Train) Observability ═════════════════════════════════════
-
     /// TT-SVD recompression changed ranks.
     TtRecompression {
         old_ranks: Vec<u32>,
@@ -407,7 +411,6 @@ pub enum SimEvent {
     },
 
     // ═══ Conservation (LoMaC) ════════════════════════════════════════════════
-
     /// LoMaC conservative projection completed.
     LoMaCComplete {
         correction_norm: f64,
@@ -419,7 +422,6 @@ pub enum SimEvent {
     LoMaCSkipped { reason: String },
 
     // ═══ Exit Conditions ═════════════════════════════════════════════════════
-
     /// Per-condition status: how close to triggering (emitted each step).
     ExitConditionStatus {
         condition: ExitConditionKind,
@@ -432,7 +434,6 @@ pub enum SimEvent {
     ExitTriggered { reason: ExitReason },
 
     // ═══ Diagnostics ═════════════════════════════════════════════════════════
-
     /// Full diagnostics snapshot (boxed to keep SimEvent small).
     DiagnosticsComputed(Box<GlobalDiagnostics>),
     /// Per-quantity conservation drift.
@@ -442,19 +443,16 @@ pub enum SimEvent {
     },
 
     // ═══ Warnings ════════════════════════════════════════════════════════════
-
     /// Structured non-fatal warning.
     Warning(SimWarning),
 
     // ═══ Build Phases ════════════════════════════════════════════════════════
-
     /// Pre-simulation build phase started.
     BuildPhaseStarted { phase: BuildPhase },
     /// Pre-simulation build phase completed with timing.
     BuildPhaseComplete { phase: BuildPhase, wall_ms: f64 },
 
     // ═══ Performance Profiling ═══════════════════════════════════════════════
-
     /// Memory usage snapshot for a component.
     MemorySnapshot {
         component: ComponentKind,

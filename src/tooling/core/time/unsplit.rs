@@ -43,10 +43,7 @@ impl UnsplitIntegrator {
             "rk_stages must be 2, 3, or 4; got {}",
             rk_stages
         );
-        Self {
-            rk_stages,
-            domain,
-        }
+        Self { rk_stages, domain }
     }
 
     /// Grid dimensions as `[nx1, nx2, nx3, nv1, nv2, nv3]`.
@@ -627,9 +624,7 @@ mod tests {
             g: 0.0,
         };
 
-        unsplit
-            .advance(&mut *repr, &ctx)
-            .unwrap();
+        unsplit.advance(&mut *repr, &ctx).unwrap();
 
         let result = repr.to_snapshot(dt).unwrap();
         // Basic sanity: result should be finite and have positive mass
@@ -701,9 +696,7 @@ mod tests {
             g: 0.0,
         };
 
-        unsplit
-            .advance(&mut *repr, &ctx)
-            .unwrap();
+        unsplit.advance(&mut *repr, &ctx).unwrap();
         let result = repr.to_snapshot(0.01).unwrap();
         assert!(result.data.iter().all(|v| v.is_finite()));
     }
@@ -751,9 +744,7 @@ mod tests {
             g: 0.0,
         };
 
-        unsplit
-            .advance(&mut *repr, &ctx)
-            .unwrap();
+        unsplit.advance(&mut *repr, &ctx).unwrap();
         let result = repr.to_snapshot(0.01).unwrap();
         assert!(result.data.iter().all(|v| v.is_finite()));
     }

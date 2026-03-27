@@ -6,14 +6,14 @@
 fn zeldovich_pancake() {
     use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::algos::uniform::UniformGrid6D;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::integrator::TimeIntegrator as _;
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
     use crate::tooling::core::poisson::fft::FftPoisson;
-    use crate::tooling::core::time::strang::StrangSplitting;
-    use crate::tooling::core::context::SimContext;
-    use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::progress::StepProgress;
+    use crate::tooling::core::time::strang::StrangSplitting;
 
     // Setup: 1D plane wave in x1. v₀(x) = -A*sin(k*x1) (converging flow toward x=0).
     // t_col = 1/A (with k=1, H=1): at t=1 the caustic forms.
@@ -100,7 +100,6 @@ fn zeldovich_pancake() {
 
     for _ in 0..n_steps {
         let ctx = SimContext {
-
             solver: &poisson,
 
             advector: &advector,
@@ -116,14 +115,9 @@ fn zeldovich_pancake() {
             dt: dt,
 
             g: 1.0,
-
         };
 
-        integrator
-
-            .advance(&mut grid, &ctx)
-
-            .unwrap();
+        integrator.advance(&mut grid, &ctx).unwrap();
     }
 
     let rho_final = grid.compute_density();

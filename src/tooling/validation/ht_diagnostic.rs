@@ -58,16 +58,34 @@ fn ht_plummer_one_step() {
                 for r in 0..nrows {
                     for c in 0..ncols {
                         let v = frame[(r, c)];
-                        if v.is_nan() { nan_count += 1; }
-                        if v.is_finite() { max_val = max_val.max(v.abs()); }
+                        if v.is_nan() {
+                            nan_count += 1;
+                        }
+                        if v.is_finite() {
+                            max_val = max_val.max(v.abs());
+                        }
                     }
                 }
-                println!("  Node {i}: Leaf dim={dim}, shape=({nrows}x{ncols}), nan={nan_count}, max_abs={max_val:.6e}");
+                println!(
+                    "  Node {i}: Leaf dim={dim}, shape=({nrows}x{ncols}), nan={nan_count}, max_abs={max_val:.6e}"
+                );
             }
-            crate::tooling::core::algos::ht::HtNode::Interior { left, right, transfer, ranks } => {
+            crate::tooling::core::algos::ht::HtNode::Interior {
+                left,
+                right,
+                transfer,
+                ranks,
+            } => {
                 let nan_count = transfer.iter().filter(|v| v.is_nan()).count();
-                let max_val = transfer.iter().filter(|v| v.is_finite()).map(|v| v.abs()).fold(0.0f64, f64::max);
-                println!("  Node {i}: Interior [{left},{right}], ranks={ranks:?}, len={}, nan={nan_count}, max_abs={max_val:.6e}", transfer.len());
+                let max_val = transfer
+                    .iter()
+                    .filter(|v| v.is_finite())
+                    .map(|v| v.abs())
+                    .fold(0.0f64, f64::max);
+                println!(
+                    "  Node {i}: Interior [{left},{right}], ranks={ranks:?}, len={}, nan={nan_count}, max_abs={max_val:.6e}",
+                    transfer.len()
+                );
             }
         }
     }
@@ -80,27 +98,43 @@ fn ht_plummer_one_step() {
     let snap_for_ht = sample_on_grid(&ic, &domain);
     let ht_from_full = HtTensor::from_full(&snap_for_ht.data, snap_for_ht.shape, &domain, 1e-6);
     let from_full_density = ht_from_full.compute_density();
-    let from_full_rho_max = from_full_density.data.iter().cloned().fold(0.0_f64, f64::max);
-    println!("HT from_full: rho_max={from_full_rho_max:.6e}, rank={}", ht_from_full.total_rank());
+    let from_full_rho_max = from_full_density
+        .data
+        .iter()
+        .cloned()
+        .fold(0.0_f64, f64::max);
+    println!(
+        "HT from_full: rho_max={from_full_rho_max:.6e}, rank={}",
+        ht_from_full.total_rank()
+    );
 
     // Check initial density
     let init_density = ht.compute_density();
     let init_rho_max = init_density.data.iter().cloned().fold(0.0_f64, f64::max);
-    let init_mass: f64 = init_density.data.iter().sum::<f64>() * domain.dx().iter().product::<f64>();
-    println!("HT init: rho_max={init_rho_max:.6e}, mass={init_mass:.6e}, rank={}", ht.total_rank());
+    let init_mass: f64 =
+        init_density.data.iter().sum::<f64>() * domain.dx().iter().product::<f64>();
+    println!(
+        "HT init: rho_max={init_rho_max:.6e}, mass={init_mass:.6e}, rank={}",
+        ht.total_rank()
+    );
 
-    assert!(init_rho_max > 1e-6, "Initial rho_max should be non-trivial, got {init_rho_max}");
-    assert!(init_mass > 0.01, "Initial mass should be non-trivial, got {init_mass}");
+    assert!(
+        init_rho_max > 1e-6,
+        "Initial rho_max should be non-trivial, got {init_rho_max}"
+    );
+    assert!(
+        init_mass > 0.01,
+        "Initial mass should be non-trivial, got {init_mass}"
+    );
 
     // Also build uniform grid from same IC for comparison
     let snap = sample_on_grid(&ic, &domain);
-    let uniform = crate::tooling::core::algos::uniform::UniformGrid6D::from_snapshot(
-        snap,
-        domain.clone(),
-    );
+    let uniform =
+        crate::tooling::core::algos::uniform::UniformGrid6D::from_snapshot(snap, domain.clone());
     let uniform_density = uniform.compute_density();
     let uniform_rho_max = uniform_density.data.iter().cloned().fold(0.0_f64, f64::max);
-    let uniform_mass: f64 = uniform_density.data.iter().sum::<f64>() * domain.dx().iter().product::<f64>();
+    let uniform_mass: f64 =
+        uniform_density.data.iter().sum::<f64>() * domain.dx().iter().product::<f64>();
     println!("Uniform: rho_max={uniform_rho_max:.6e}, mass={uniform_mass:.6e}");
 
     // Compare HT vs uniform density
@@ -122,7 +156,8 @@ fn ht_plummer_one_step() {
         .build()
         .unwrap();
 
-    println!("Initial diag: E={:.6e}, T={:.6e}, W={:.6e}, virial={:.4}, mass={:.6e}",
+    println!(
+        "Initial diag: E={:.6e}, T={:.6e}, W={:.6e}, virial={:.4}, mass={:.6e}",
         sim.diagnostics.history[0].total_energy,
         sim.diagnostics.history[0].kinetic_energy,
         sim.diagnostics.history[0].potential_energy,
@@ -132,13 +167,16 @@ fn ht_plummer_one_step() {
 
     // Run exactly one step
     let exit = sim.step().unwrap();
-    println!("Step 1: exit={exit:?}, time={:.6e}, step={}", sim.time, sim.step);
+    println!(
+        "Step 1: exit={exit:?}, time={:.6e}, step={}",
+        sim.time, sim.step
+    );
 
     // Check post-step density
     let post_density = sim.repr.compute_density();
     let post_rho_max = post_density.data.iter().cloned().fold(0.0_f64, f64::max);
-    let post_mass: f64 = post_density.data.iter().sum::<f64>()
-        * sim.domain.dx().iter().product::<f64>();
+    let post_mass: f64 =
+        post_density.data.iter().sum::<f64>() * sim.domain.dx().iter().product::<f64>();
     println!("Post step 1: rho_max={post_rho_max:.6e}, mass={post_mass:.6e}");
 
     let step_mass_ratio = post_mass / init_mass.max(1e-30);

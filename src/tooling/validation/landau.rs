@@ -5,14 +5,14 @@
 fn landau_damping() {
     use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::algos::uniform::UniformGrid6D;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::integrator::TimeIntegrator as _;
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
     use crate::tooling::core::poisson::fft::FftPoisson;
-    use crate::tooling::core::time::strang::StrangSplitting;
-    use crate::tooling::core::context::SimContext;
-    use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::progress::StepProgress;
+    use crate::tooling::core::time::strang::StrangSplitting;
 
     // Warm Maxwellian (σ=2): k_J = sqrt(4π*G*ρ0)/σ ≈ sqrt(4π)/2 ≈ 1.77 (with ρ0≈1, G=1)
     // lx=1 → k_fund = π ≈ 3.14 > k_J → stable; gravitational Landau damping regime.
@@ -92,7 +92,6 @@ fn landau_damping() {
 
     for _ in 0..8 {
         let ctx = SimContext {
-
             solver: &poisson,
 
             advector: &advector,
@@ -108,14 +107,9 @@ fn landau_damping() {
             dt: dt,
 
             g: 1.0,
-
         };
 
-        integrator
-
-            .advance(&mut grid, &ctx)
-
-            .unwrap();
+        integrator.advance(&mut grid, &ctx).unwrap();
     }
 
     let rho_final = grid.compute_density();

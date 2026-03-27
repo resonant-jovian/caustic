@@ -63,7 +63,11 @@ impl Rkn6Splitting {
         sub: u8,
     ) {
         helpers::report_phase!(ctx, phase, sub, 19);
-        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(coeff)));
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            ctx.advector.drift(repr, &ctx.with_dt(coeff))
+        );
     }
 
     /// Single kick sub-step (density → potential → acceleration → kick) with timing.
@@ -78,7 +82,11 @@ impl Rkn6Splitting {
         helpers::report_phase!(ctx, StepPhase::Kick, sub, 19);
         let (_density, _potential, accel) =
             helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, ctx));
-        helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(coeff)));
+        helpers::time_ms!(
+            timings,
+            kick_ms,
+            ctx.advector.kick(repr, &accel, &ctx.with_dt(coeff))
+        );
     }
 
     /// Execute one Yoshida 4th-order step with the given (scaled) time step.
@@ -98,20 +106,19 @@ impl Rkn6Splitting {
         helpers::time_ms!(
             timings,
             drift_ms,
-            ctx.advector.drift(repr, &ctx.with_dt(YOSHIDA_W1 * dt / 2.0))
+            ctx.advector
+                .drift(repr, &ctx.with_dt(YOSHIDA_W1 * dt / 2.0))
         );
 
         // Sub-step 2: kick w1·dt
         helpers::report_phase!(ctx, StepPhase::Kick, base_sub + 1, total_sub);
-        let (_density, _potential, accel) = helpers::time_ms!(
-            timings,
-            poisson_ms,
-            helpers::solve_poisson(repr, ctx)
-        );
+        let (_density, _potential, accel) =
+            helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, ctx));
         helpers::time_ms!(
             timings,
             kick_ms,
-            ctx.advector.kick(repr, &accel, &ctx.with_dt(YOSHIDA_W1 * dt))
+            ctx.advector
+                .kick(repr, &accel, &ctx.with_dt(YOSHIDA_W1 * dt))
         );
 
         // Sub-step 3: drift (w1+w0)·dt/2
@@ -119,20 +126,19 @@ impl Rkn6Splitting {
         helpers::time_ms!(
             timings,
             drift_ms,
-            ctx.advector.drift(repr, &ctx.with_dt((YOSHIDA_W1 + YOSHIDA_W0) * dt / 2.0))
+            ctx.advector
+                .drift(repr, &ctx.with_dt((YOSHIDA_W1 + YOSHIDA_W0) * dt / 2.0))
         );
 
         // Sub-step 4: kick w0·dt
         helpers::report_phase!(ctx, StepPhase::Kick, base_sub + 3, total_sub);
-        let (_density, _potential, accel) = helpers::time_ms!(
-            timings,
-            poisson_ms,
-            helpers::solve_poisson(repr, ctx)
-        );
+        let (_density, _potential, accel) =
+            helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, ctx));
         helpers::time_ms!(
             timings,
             kick_ms,
-            ctx.advector.kick(repr, &accel, &ctx.with_dt(YOSHIDA_W0 * dt))
+            ctx.advector
+                .kick(repr, &accel, &ctx.with_dt(YOSHIDA_W0 * dt))
         );
 
         // Sub-step 5: drift (w0+w1)·dt/2
@@ -140,20 +146,19 @@ impl Rkn6Splitting {
         helpers::time_ms!(
             timings,
             drift_ms,
-            ctx.advector.drift(repr, &ctx.with_dt((YOSHIDA_W0 + YOSHIDA_W1) * dt / 2.0))
+            ctx.advector
+                .drift(repr, &ctx.with_dt((YOSHIDA_W0 + YOSHIDA_W1) * dt / 2.0))
         );
 
         // Sub-step 6: kick w1·dt
         helpers::report_phase!(ctx, StepPhase::Kick, base_sub + 5, total_sub);
-        let (_density, _potential, accel) = helpers::time_ms!(
-            timings,
-            poisson_ms,
-            helpers::solve_poisson(repr, ctx)
-        );
+        let (_density, _potential, accel) =
+            helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, ctx));
         helpers::time_ms!(
             timings,
             kick_ms,
-            ctx.advector.kick(repr, &accel, &ctx.with_dt(YOSHIDA_W1 * dt))
+            ctx.advector
+                .kick(repr, &accel, &ctx.with_dt(YOSHIDA_W1 * dt))
         );
 
         // Sub-step 7: drift w1·dt/2
@@ -161,7 +166,8 @@ impl Rkn6Splitting {
         helpers::time_ms!(
             timings,
             drift_ms,
-            ctx.advector.drift(repr, &ctx.with_dt(YOSHIDA_W1 * dt / 2.0))
+            ctx.advector
+                .drift(repr, &ctx.with_dt(YOSHIDA_W1 * dt / 2.0))
         );
     }
 }
@@ -208,13 +214,7 @@ impl TimeIntegrator for Rkn6Splitting {
             StepPhase::DriftHalf1,
             0,
         );
-        Self::rkn6_kick(
-            repr,
-            ctx,
-            k_w1_s1,
-            &mut timings,
-            1,
-        );
+        Self::rkn6_kick(repr, ctx, k_w1_s1, &mut timings, 1);
         Self::rkn6_drift(
             repr,
             ctx,
@@ -223,13 +223,7 @@ impl TimeIntegrator for Rkn6Splitting {
             StepPhase::DriftHalf2,
             2,
         );
-        Self::rkn6_kick(
-            repr,
-            ctx,
-            k_w0_s1,
-            &mut timings,
-            3,
-        );
+        Self::rkn6_kick(repr, ctx, k_w0_s1, &mut timings, 3);
         Self::rkn6_drift(
             repr,
             ctx,
@@ -238,32 +232,13 @@ impl TimeIntegrator for Rkn6Splitting {
             StepPhase::DriftHalf1,
             4,
         );
-        Self::rkn6_kick(
-            repr,
-            ctx,
-            k_w1_s1,
-            &mut timings,
-            5,
-        );
+        Self::rkn6_kick(repr, ctx, k_w1_s1, &mut timings, 5);
 
         // Merged: last drift of S₄(s₁) + first drift of S₄(s₂)
-        Self::rkn6_drift(
-            repr,
-            ctx,
-            d_seam,
-            &mut timings,
-            StepPhase::DriftHalf2,
-            6,
-        );
+        Self::rkn6_drift(repr, ctx, d_seam, &mut timings, StepPhase::DriftHalf2, 6);
 
         // ── S₄(s₂·Δt) interior ─────────────────────────────────────────────
-        Self::rkn6_kick(
-            repr,
-            ctx,
-            k_w1_s2,
-            &mut timings,
-            7,
-        );
+        Self::rkn6_kick(repr, ctx, k_w1_s2, &mut timings, 7);
         Self::rkn6_drift(
             repr,
             ctx,
@@ -272,13 +247,7 @@ impl TimeIntegrator for Rkn6Splitting {
             StepPhase::DriftHalf1,
             8,
         );
-        Self::rkn6_kick(
-            repr,
-            ctx,
-            k_w0_s2,
-            &mut timings,
-            9,
-        );
+        Self::rkn6_kick(repr, ctx, k_w0_s2, &mut timings, 9);
         Self::rkn6_drift(
             repr,
             ctx,
@@ -287,32 +256,13 @@ impl TimeIntegrator for Rkn6Splitting {
             StepPhase::DriftHalf2,
             10,
         );
-        Self::rkn6_kick(
-            repr,
-            ctx,
-            k_w1_s2,
-            &mut timings,
-            11,
-        );
+        Self::rkn6_kick(repr, ctx, k_w1_s2, &mut timings, 11);
 
         // Merged: last drift of S₄(s₂) + first drift of S₄(s₁)
-        Self::rkn6_drift(
-            repr,
-            ctx,
-            d_seam,
-            &mut timings,
-            StepPhase::DriftHalf1,
-            12,
-        );
+        Self::rkn6_drift(repr, ctx, d_seam, &mut timings, StepPhase::DriftHalf1, 12);
 
         // ── S₄(s₁·Δt) ─────────────────────────────────────────────────────
-        Self::rkn6_kick(
-            repr,
-            ctx,
-            k_w1_s1,
-            &mut timings,
-            13,
-        );
+        Self::rkn6_kick(repr, ctx, k_w1_s1, &mut timings, 13);
         Self::rkn6_drift(
             repr,
             ctx,
@@ -321,13 +271,7 @@ impl TimeIntegrator for Rkn6Splitting {
             StepPhase::DriftHalf2,
             14,
         );
-        Self::rkn6_kick(
-            repr,
-            ctx,
-            k_w0_s1,
-            &mut timings,
-            15,
-        );
+        Self::rkn6_kick(repr, ctx, k_w0_s1, &mut timings, 15);
         Self::rkn6_drift(
             repr,
             ctx,
@@ -336,13 +280,7 @@ impl TimeIntegrator for Rkn6Splitting {
             StepPhase::DriftHalf1,
             16,
         );
-        Self::rkn6_kick(
-            repr,
-            ctx,
-            k_w1_s1,
-            &mut timings,
-            17,
-        );
+        Self::rkn6_kick(repr, ctx, k_w1_s1, &mut timings, 17);
         Self::rkn6_drift(
             repr,
             ctx,
@@ -355,11 +293,8 @@ impl TimeIntegrator for Rkn6Splitting {
         helpers::report_phase!(ctx, StepPhase::StepComplete, 19, 19);
 
         // Compute end-of-step products for caller reuse
-        let (density, potential, acceleration) = helpers::time_ms!(
-            timings,
-            density_ms,
-            helpers::solve_poisson(repr, ctx)
-        );
+        let (density, potential, acceleration) =
+            helpers::time_ms!(timings, density_ms, helpers::solve_poisson(repr, ctx));
 
         self.last_timings = timings;
 

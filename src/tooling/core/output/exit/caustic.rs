@@ -11,7 +11,12 @@ use super::super::super::{
 pub struct CausticExitCondition;
 
 impl ExitCondition for CausticExitCondition {
-    fn check(&self, _diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, _ctx: &SimContext) -> Option<ExitReason> {
+    fn check(
+        &self,
+        _diag: &GlobalDiagnostics,
+        _initial: &GlobalDiagnostics,
+        _ctx: &SimContext,
+    ) -> Option<ExitReason> {
         // Stream count requires repr access; not available through GlobalDiagnostics alone
         None
     }
@@ -23,7 +28,12 @@ pub struct VirialRelaxedExit {
 }
 
 impl ExitCondition for VirialRelaxedExit {
-    fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, ctx: &SimContext) -> Option<ExitReason> {
+    fn check(
+        &self,
+        diag: &GlobalDiagnostics,
+        _initial: &GlobalDiagnostics,
+        ctx: &SimContext,
+    ) -> Option<ExitReason> {
         let virial_deviation = (diag.virial_ratio - 1.0).abs();
         let fraction = if self.tolerance > 0.0 {
             (1.0 - (virial_deviation / self.tolerance).min(1.0)).clamp(0.0, 1.0)

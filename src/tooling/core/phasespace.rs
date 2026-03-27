@@ -130,5 +130,4 @@ pub trait PhaseSpaceRepr: Send + Sync {
     fn memory_bytes(&self) -> usize {
         0
     }
-
 }

@@ -591,7 +591,7 @@ impl PoissonSolver for Multigrid {
 
 #[cfg(test)]
 mod tests {
-use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::context::SimContext;
     use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::progress::StepProgress;
@@ -651,7 +651,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
         let _progress = StepProgress::new();
 
         let _ctx = SimContext {
-
             solver: &mg as &dyn crate::tooling::core::solver::PoissonSolver,
 
             advector: &_advector,
@@ -667,7 +666,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
             dt: 0.0,
 
             g: 1.0,
-
         };
 
         let pot = mg.solve(&density, &_ctx);
@@ -813,7 +811,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
         let _progress = StepProgress::new();
 
         let _ctx = SimContext {
-
             solver: &mg as &dyn crate::tooling::core::solver::PoissonSolver,
 
             advector: &_advector,
@@ -829,7 +826,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
             dt: 0.0,
 
             g: 1.0,
-
         };
 
         let pot_mg = mg.solve(&density, &_ctx);
@@ -840,7 +836,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
         let _progress = StepProgress::new();
 
         let _ctx = SimContext {
-
             solver: &fft as &dyn crate::tooling::core::solver::PoissonSolver,
 
             advector: &_advector,
@@ -856,7 +851,6 @@ use crate::tooling::core::algos::lagrangian::SemiLagrangian;
             dt: 0.0,
 
             g: 1.0,
-
         };
 
         let pot_fft = fft.solve(&density, &_ctx);
