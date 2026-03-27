@@ -151,8 +151,6 @@ impl Simulation {
             dt = (t_final - self.time).max(0.0);
         }
 
-        tracing::debug!(dt, step = self.step, time = self.time, "Simulation::step dt");
-
         self.emitter.emit(SimEvent::TimestepComputed {
             dt,
             constraint: crate::tooling::core::events::TimestepConstraint::Dynamical,
@@ -300,10 +298,6 @@ impl Simulation {
                 .cloned()
                 .reduce(|| 0.0_f64, f64::max),
         );
-
-        if let Some(rho_max) = self.cached_rho_max {
-            tracing::debug!(rho_max, step = self.step, "Simulation::step cached_rho_max");
-        }
 
         {
             let sub = self.progress.read().sub_step;

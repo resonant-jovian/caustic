@@ -434,8 +434,6 @@ impl PoissonSolver for SphericalHarmonicsPoisson {
     /// 3. Reconstruct the Cartesian potential by summing Phi_lm(r) Y_lm(theta,phi).
     fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
         let g = ctx.g;
-        let _span = tracing::info_span!("spherical_harmonics_solve").entered();
-
         // Step 1: decompose density
         let rho_lm = decompose_density(
             density,

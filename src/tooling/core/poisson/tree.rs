@@ -290,7 +290,6 @@ impl PoissonSolver for TreePoisson {
     fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
         let t0 = std::time::Instant::now();
         let g = ctx.g;
-        let _span = tracing::info_span!("tree_poisson_solve").entered();
         let [nx, ny, nz] = density.shape;
         let dx = self.domain.dx();
 

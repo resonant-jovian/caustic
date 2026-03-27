@@ -493,7 +493,6 @@ impl PoissonSolver for Multigrid {
     /// determined up to a constant).
     fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
         let t0 = std::time::Instant::now();
-        let _span = tracing::info_span!("multigrid_solve").entered();
         let [nx, ny, nz] = self.shape;
         let n_total = nx * ny * nz;
 

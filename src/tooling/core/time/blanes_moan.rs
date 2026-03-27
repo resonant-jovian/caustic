@@ -72,7 +72,6 @@ impl TimeIntegrator for BlanesMoanSplitting {
         repr: &mut dyn PhaseSpaceRepr,
         ctx: &SimContext,
     ) -> Result<StepProducts, CausticError> {
-        let _span = tracing::info_span!("bm4_advance").entered();
         let mut timings = StepTimings::default();
         let n_sub: u8 = 11;
         let dt = ctx.dt;
@@ -84,23 +83,17 @@ impl TimeIntegrator for BlanesMoanSplitting {
         for i in 0..6 {
             // --- Drift a_i * dt ---
             helpers::report_phase!(ctx, StepPhase::DriftHalf1, 2 * i as u8, n_sub);
-            {
-                let _s = tracing::info_span!("bm4_drift", stage = i).entered();
-                helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(BM4_A[i] * dt)));
-            }
+            helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(BM4_A[i] * dt)));
 
             // --- Kick b_i * dt (5 kicks between 6 drifts) ---
             if i < 5 {
                 helpers::report_phase!(ctx, StepPhase::Kick, 2 * i as u8 + 1, n_sub);
-                {
-                    let _s = tracing::info_span!("bm4_kick", stage = i).entered();
-                    let (_density, _potential, accel) = helpers::time_ms!(
-                        timings,
-                        poisson_ms,
-                        helpers::solve_poisson(repr, ctx)
-                    );
-                    helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(BM4_B[i] * dt)));
-                }
+                let (_density, _potential, accel) = helpers::time_ms!(
+                    timings,
+                    poisson_ms,
+                    helpers::solve_poisson(repr, ctx)
+                );
+                helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(BM4_B[i] * dt)));
             }
         }
 

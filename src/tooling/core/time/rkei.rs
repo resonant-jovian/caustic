@@ -43,7 +43,6 @@ impl TimeIntegrator for RkeiIntegrator {
         repr: &mut dyn PhaseSpaceRepr,
         ctx: &SimContext,
     ) -> Result<StepProducts, CausticError> {
-        let _span = tracing::info_span!("rkei_advance").entered();
         let dt = ctx.dt;
 
         let snap_err =
@@ -58,7 +57,6 @@ impl TimeIntegrator for RkeiIntegrator {
 
         // ── Stage 1: f^(1) = advect(f^n, g^n, Δt) ──
         {
-            let _s = tracing::info_span!("rkei_stage_1").entered();
             let density = repr.compute_density();
             let potential = ctx.solver.solve(&density, ctx);
             let accel = ctx.solver.compute_acceleration(&potential);
@@ -74,7 +72,6 @@ impl TimeIntegrator for RkeiIntegrator {
         ctx.progress.set_sub_step(1, 3);
         let _f_1 = repr.to_snapshot(0.0).ok_or_else(snap_err)?;
         {
-            let _s = tracing::info_span!("rkei_stage_2").entered();
             let density = repr.compute_density();
             let potential = ctx.solver.solve(&density, ctx);
             let accel = ctx.solver.compute_acceleration(&potential);
@@ -105,7 +102,6 @@ impl TimeIntegrator for RkeiIntegrator {
         ctx.progress.set_phase(StepPhase::RkeiStage3);
         ctx.progress.set_sub_step(2, 3);
         {
-            let _s = tracing::info_span!("rkei_stage_3").entered();
             let density = repr.compute_density();
             let potential = ctx.solver.solve(&density, ctx);
             let accel = ctx.solver.compute_acceleration(&potential);

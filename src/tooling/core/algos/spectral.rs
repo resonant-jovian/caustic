@@ -586,7 +586,6 @@ impl PhaseSpaceRepr for SpectralV {
     /// Only the zeroth mode contributes because all higher modes integrate to zero
     /// (they are orthogonal to the constant = psi_0 * norm_0, and integral H_n * w du = 0 for n > 0).
     fn compute_density(&self) -> DensityField {
-        let _span = tracing::info_span!("spectral_compute_density").entered();
         let [nx, ny, nz] = self.spatial_shape;
         let n_spatial = nx * ny * nz;
         let n_modes3 = self.n_modes * self.n_modes * self.n_modes;
@@ -638,7 +637,6 @@ impl PhaseSpaceRepr for SpectralV {
     /// values directly.
     fn advect_x(&mut self, _displacement: &DisplacementField, ctx: &SimContext) {
         let dt = ctx.dt;
-        let _span = tracing::info_span!("spectral_advect_x").entered();
         let [nx, ny, nz] = self.spatial_shape;
         let n_modes = self.n_modes;
         let n_modes3 = n_modes * n_modes * n_modes;
@@ -817,7 +815,6 @@ impl PhaseSpaceRepr for SpectralV {
     /// We use forward Euler time integration of the mode coupling.
     fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext) {
         let dt = ctx.dt;
-        let _span = tracing::info_span!("spectral_advect_v").entered();
         let [nx, ny, nz] = self.spatial_shape;
         let n_modes = self.n_modes;
         let n_modes3 = n_modes * n_modes * n_modes;

@@ -57,7 +57,6 @@ impl TimeIntegrator for YoshidaSplitting {
         repr: &mut dyn PhaseSpaceRepr,
         ctx: &SimContext,
     ) -> Result<StepProducts, CausticError> {
-        let _span = tracing::info_span!("yoshida_advance").entered();
         let mut timings = StepTimings::default();
         let dt = ctx.dt;
 
@@ -70,31 +69,25 @@ impl TimeIntegrator for YoshidaSplitting {
         // Substep 1: drift w1·dt/2
         helpers::report_phase!(ctx, StepPhase::YoshidaDrift1, 0, 7);
         ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::YoshidaDrift1, step: ctx.step });
-        {
-            let _s = tracing::info_span!("yoshida_drift_1").entered();
-            helpers::time_ms!(
-                timings,
-                drift_ms,
-                ctx.advector.drift(repr, &ctx.with_dt(YOSHIDA_W1 * dt / 2.0))
-            );
-        }
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            ctx.advector.drift(repr, &ctx.with_dt(YOSHIDA_W1 * dt / 2.0))
+        );
 
         // Substep 2: kick w1·dt
         helpers::report_phase!(ctx, StepPhase::YoshidaKick1, 1, 7);
         ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::YoshidaKick1, step: ctx.step });
-        {
-            let _s = tracing::info_span!("yoshida_kick_1").entered();
-            let (_density, _potential, accel) = helpers::time_ms!(
-                timings,
-                poisson_ms,
-                helpers::solve_poisson(repr, ctx)
-            );
-            helpers::time_ms!(
-                timings,
-                kick_ms,
-                ctx.advector.kick(repr, &accel, &ctx.with_dt(YOSHIDA_W1 * dt))
-            );
-        }
+        let (_density, _potential, accel) = helpers::time_ms!(
+            timings,
+            poisson_ms,
+            helpers::solve_poisson(repr, ctx)
+        );
+        helpers::time_ms!(
+            timings,
+            kick_ms,
+            ctx.advector.kick(repr, &accel, &ctx.with_dt(YOSHIDA_W1 * dt))
+        );
 
         // Apply hypercollision damping after kick 1
         helpers::apply_hypercollision_if_spectral(repr, YOSHIDA_W1 * dt);
@@ -102,31 +95,25 @@ impl TimeIntegrator for YoshidaSplitting {
         // Substep 3: drift (w1+w0)·dt/2
         helpers::report_phase!(ctx, StepPhase::YoshidaDrift2, 2, 7);
         ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::YoshidaDrift2, step: ctx.step });
-        {
-            let _s = tracing::info_span!("yoshida_drift_2").entered();
-            helpers::time_ms!(
-                timings,
-                drift_ms,
-                ctx.advector.drift(repr, &ctx.with_dt((YOSHIDA_W1 + YOSHIDA_W0) * dt / 2.0))
-            );
-        }
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            ctx.advector.drift(repr, &ctx.with_dt((YOSHIDA_W1 + YOSHIDA_W0) * dt / 2.0))
+        );
 
         // Substep 4: kick w0·dt
         helpers::report_phase!(ctx, StepPhase::YoshidaKick2, 3, 7);
         ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::YoshidaKick2, step: ctx.step });
-        {
-            let _s = tracing::info_span!("yoshida_kick_2").entered();
-            let (_density, _potential, accel) = helpers::time_ms!(
-                timings,
-                poisson_ms,
-                helpers::solve_poisson(repr, ctx)
-            );
-            helpers::time_ms!(
-                timings,
-                kick_ms,
-                ctx.advector.kick(repr, &accel, &ctx.with_dt(YOSHIDA_W0 * dt))
-            );
-        }
+        let (_density, _potential, accel) = helpers::time_ms!(
+            timings,
+            poisson_ms,
+            helpers::solve_poisson(repr, ctx)
+        );
+        helpers::time_ms!(
+            timings,
+            kick_ms,
+            ctx.advector.kick(repr, &accel, &ctx.with_dt(YOSHIDA_W0 * dt))
+        );
 
         // Apply hypercollision damping after kick 2
         helpers::apply_hypercollision_if_spectral(repr, YOSHIDA_W0 * dt);
@@ -134,31 +121,25 @@ impl TimeIntegrator for YoshidaSplitting {
         // Substep 5: drift (w0+w1)·dt/2
         helpers::report_phase!(ctx, StepPhase::YoshidaDrift3, 4, 7);
         ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::YoshidaDrift3, step: ctx.step });
-        {
-            let _s = tracing::info_span!("yoshida_drift_3").entered();
-            helpers::time_ms!(
-                timings,
-                drift_ms,
-                ctx.advector.drift(repr, &ctx.with_dt((YOSHIDA_W0 + YOSHIDA_W1) * dt / 2.0))
-            );
-        }
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            ctx.advector.drift(repr, &ctx.with_dt((YOSHIDA_W0 + YOSHIDA_W1) * dt / 2.0))
+        );
 
         // Substep 6: kick w1·dt
         helpers::report_phase!(ctx, StepPhase::YoshidaKick3, 5, 7);
         ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::YoshidaKick3, step: ctx.step });
-        {
-            let _s = tracing::info_span!("yoshida_kick_3").entered();
-            let (_density, _potential, accel) = helpers::time_ms!(
-                timings,
-                poisson_ms,
-                helpers::solve_poisson(repr, ctx)
-            );
-            helpers::time_ms!(
-                timings,
-                kick_ms,
-                ctx.advector.kick(repr, &accel, &ctx.with_dt(YOSHIDA_W1 * dt))
-            );
-        }
+        let (_density, _potential, accel) = helpers::time_ms!(
+            timings,
+            poisson_ms,
+            helpers::solve_poisson(repr, ctx)
+        );
+        helpers::time_ms!(
+            timings,
+            kick_ms,
+            ctx.advector.kick(repr, &accel, &ctx.with_dt(YOSHIDA_W1 * dt))
+        );
 
         // Apply hypercollision damping after kick 3
         helpers::apply_hypercollision_if_spectral(repr, YOSHIDA_W1 * dt);
@@ -166,14 +147,11 @@ impl TimeIntegrator for YoshidaSplitting {
         // Substep 7: drift w1·dt/2
         helpers::report_phase!(ctx, StepPhase::YoshidaDrift4, 6, 7);
         ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::YoshidaDrift4, step: ctx.step });
-        {
-            let _s = tracing::info_span!("yoshida_drift_4").entered();
-            helpers::time_ms!(
-                timings,
-                drift_ms,
-                ctx.advector.drift(repr, &ctx.with_dt(YOSHIDA_W1 * dt / 2.0))
-            );
-        }
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            ctx.advector.drift(repr, &ctx.with_dt(YOSHIDA_W1 * dt / 2.0))
+        );
 
         // Compute end-of-step products for caller reuse
         let (density, potential, acceleration) = helpers::time_ms!(

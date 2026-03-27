@@ -196,7 +196,6 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
         repr: &mut dyn PhaseSpaceRepr,
         ctx: &SimContext,
     ) -> Result<StepProducts, CausticError> {
-        let _span = tracing::info_span!("instrumented_strang_advance").entered();
         let mut timings = StepTimings::default();
         let dt = ctx.dt;
 

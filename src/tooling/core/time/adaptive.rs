@@ -142,7 +142,6 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
         repr: &mut dyn PhaseSpaceRepr,
         ctx: &SimContext,
     ) -> Result<StepProducts, CausticError> {
-        let _span = tracing::info_span!("adaptive_strang_advance").entered();
         let mut timings = StepTimings::default();
         let dt = ctx.dt;
 
@@ -166,15 +165,11 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
             // --- Strang step: drift(dt/2) -> kick(dt) -> drift(dt/2) ---
             helpers::report_phase!(ctx, StepPhase::DriftHalf1, 0, 7);
             ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::DriftHalf1, step: ctx.step });
-            {
-                let _s = tracing::info_span!("strang_drift_half").entered();
-                helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt_try / 2.0)));
-            }
+            helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt_try / 2.0)));
 
             helpers::report_phase!(ctx, StepPhase::PoissonSolve, 1, 7);
             ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::PoissonSolve, step: ctx.step });
             let accel = {
-                let _s = tracing::info_span!("strang_poisson").entered();
                 let (_density, _potential, accel) = helpers::time_ms!(
                     timings,
                     poisson_ms,
@@ -185,17 +180,11 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
 
             helpers::report_phase!(ctx, StepPhase::Kick, 2, 7);
             ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::Kick, step: ctx.step });
-            {
-                let _s = tracing::info_span!("strang_kick").entered();
-                helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(dt_try)));
-            }
+            helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(dt_try)));
 
             helpers::report_phase!(ctx, StepPhase::DriftHalf2, 3, 7);
             ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::DriftHalf2, step: ctx.step });
-            {
-                let _s = tracing::info_span!("strang_drift_half").entered();
-                helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt_try / 2.0)));
-            }
+            helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt_try / 2.0)));
 
             // Capture Strang result before overwriting with Lie step
             let strang_snap = repr.to_snapshot(0.0).ok_or_else(|| {
@@ -207,22 +196,16 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
 
             helpers::report_phase!(ctx, StepPhase::DriftHalf1, 4, 7);
             ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::DriftHalf1, step: ctx.step });
-            {
-                let _s = tracing::info_span!("lie_drift").entered();
-                helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt_try)));
-            }
+            helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt_try)));
 
             helpers::report_phase!(ctx, StepPhase::Kick, 5, 7);
             ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::Kick, step: ctx.step });
-            {
-                let _s = tracing::info_span!("lie_kick").entered();
-                let (_density, _potential, accel) = helpers::time_ms!(
-                    timings,
-                    poisson_ms,
-                    helpers::solve_poisson(repr, ctx)
-                );
-                helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(dt_try)));
-            }
+            let (_density, _potential, accel) = helpers::time_ms!(
+                timings,
+                poisson_ms,
+                helpers::solve_poisson(repr, ctx)
+            );
+            helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(dt_try)));
 
             // --- Error estimation ---
             let lie_snap = repr.to_snapshot(0.0).ok_or_else(|| {

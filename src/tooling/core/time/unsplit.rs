@@ -316,7 +316,6 @@ impl TimeIntegrator for UnsplitIntegrator {
         repr: &mut dyn PhaseSpaceRepr,
         ctx: &SimContext,
     ) -> Result<StepProducts, CausticError> {
-        let _span = tracing::info_span!("unsplit_advance").entered();
         let dt = ctx.dt;
 
         ctx.progress.start_step();

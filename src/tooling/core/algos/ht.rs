@@ -215,7 +215,6 @@ impl HtTensor {
 
     /// Convert a full 6D array to HT format via hierarchical SVD (HSVD).
     pub fn from_full(data: &[f64], shape: [usize; 6], domain: &Domain, tolerance: f64) -> Self {
-        let _span = tracing::info_span!("ht_from_full").entered();
         assert_eq!(
             data.len(),
             shape.iter().product::<usize>(),
@@ -467,8 +466,6 @@ impl HtTensor {
             Some(c) => c,
             None => return,
         };
-        let _span = tracing::info_span!("ht_apply_velocity_filter").entered();
-
         // Velocity leaves are nodes 3, 4, 5 (v1, v2, v3).
         for leaf_idx in 3..=5 {
             let n_mu = self.shape[leaf_idx];
@@ -531,8 +528,6 @@ impl HtTensor {
     where
         F: Fn(&[f64; 3], &[f64; 3]) -> f64 + Sync,
     {
-        let _span = tracing::info_span!("ht_from_function_aca").entered();
-
         let shape = [
             domain.spatial_res.x1 as usize,
             domain.spatial_res.x2 as usize,
@@ -672,7 +667,6 @@ impl HtTensor {
                 .map(|v| v * v)
                 .sum();
             if fiber_norm < 1e-60 {
-                tracing::debug!(leaf = mu, "from_function_aca: all-zero fibers, using unit frame");
                 let mut unit = Mat::zeros(n_mu, 1);
                 unit[(n_mu / 2, 0)] = 1.0;
                 leaf_frames.push(unit);
@@ -1111,12 +1105,6 @@ impl HtTensor {
         // This catches over-ranked nodes from the bottom-up ACA construction.
         ht.truncate(tolerance);
 
-        tracing::debug!(
-            total_rank = ht.total_rank(),
-            memory_mb = ht.memory_bytes() as f64 / 1_048_576.0,
-            "HtTensor::from_function_aca complete"
-        );
-
         ht
     }
 }
@@ -1417,7 +1405,6 @@ impl HtTensor {
 impl HtTensor {
     /// Bottom-up QR: all frames orthonormal except root.
     pub fn orthogonalize_left(&mut self) {
-        let _span = tracing::info_span!("ht_orthogonalize").entered();
         for leaf in 0..NUM_LEAVES {
             self.orthogonalize_node(leaf);
         }
@@ -1520,7 +1507,6 @@ impl HtTensor {
     /// decay requirement (Zheng et al. 2025, §3.2) and the HSVD quasi-best
     /// approximation bound (Grasedyck 2010).
     pub fn truncate(&mut self, tolerance: f64) {
-        let _span = tracing::info_span!("ht_truncate").entered();
         self.orthogonalize_left();
         let decay = (2.0_f64 * 6.0 - 3.0).sqrt(); // √(2d-3) ≈ 3.0
         let eps_leaf = tolerance / decay;
@@ -2155,7 +2141,6 @@ fn build_exp_filter_kernel_ht(n: usize, cutoff_fraction: f64, order: usize) -> V
 
 impl PhaseSpaceRepr for HtTensor {
     fn compute_density(&self) -> DensityField {
-        let _span = tracing::info_span!("ht_compute_density").entered();
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.shape;
         let dv = self.domain.dv();
         let dv3 = dv[0] * dv[1] * dv[2];
@@ -2236,17 +2221,6 @@ impl PhaseSpaceRepr for HtTensor {
             })
             .collect();
 
-        let rho_max = density.iter().cloned().fold(0.0_f64, f64::max);
-        let rho_sum: f64 = density.iter().sum();
-        let nonzero = density.iter().filter(|&&v| v.abs() > 1e-30).count();
-        tracing::debug!(
-            rho_max,
-            rho_sum,
-            nonzero,
-            total = density.len(),
-            "HtTensor::compute_density"
-        );
-
         DensityField {
             data: density,
             shape: [nx1, nx2, nx3],
@@ -2255,14 +2229,11 @@ impl PhaseSpaceRepr for HtTensor {
 
     fn advect_x(&mut self, _displacement: &DisplacementField, ctx: &SimContext) {
         let dt = ctx.dt;
-        let _span = tracing::info_span!("ht_advect_x").entered();
         if dt.abs() < 1e-30 {
             return;
         }
 
         let pre_mass = self.total_mass();
-        tracing::debug!(pre_mass, dt, "HtTensor::advect_x start");
-
         let old_ht = self.clone();
         let dx = self.domain.dx();
         let dv = self.domain.dv();
@@ -2349,7 +2320,6 @@ impl PhaseSpaceRepr for HtTensor {
 
         let post_mass = self.total_mass();
         let mass_ratio = post_mass / pre_mass.max(1e-30);
-        tracing::debug!(post_mass, mass_ratio, "HtTensor::advect_x end");
         if mass_ratio < 0.01 || !post_mass.is_finite() {
             tracing::warn!(
                 pre_mass, post_mass, mass_ratio,
@@ -2360,14 +2330,11 @@ impl PhaseSpaceRepr for HtTensor {
 
     fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext) {
         let dt = ctx.dt;
-        let _span = tracing::info_span!("ht_advect_v").entered();
         if dt.abs() < 1e-30 {
             return;
         }
 
         let pre_mass = self.total_mass();
-        tracing::debug!(pre_mass, dt, "HtTensor::advect_v start");
-
         let old_ht = self.clone();
         let dx = self.domain.dx();
         let dv = self.domain.dv();
@@ -2481,7 +2448,6 @@ impl PhaseSpaceRepr for HtTensor {
 
         let post_mass = self.total_mass();
         let mass_ratio = post_mass / pre_mass.max(1e-30);
-        tracing::debug!(post_mass, mass_ratio, "HtTensor::advect_v end");
         if mass_ratio < 0.01 || !post_mass.is_finite() {
             tracing::warn!(
                 pre_mass, post_mass, mass_ratio,
@@ -2612,10 +2578,6 @@ impl PhaseSpaceRepr for HtTensor {
             // Entropy S = −∫ f·ln(f) is nonlinear and cannot be computed via
             // tree contractions; materialization is required but would exceed
             // memory for large grids. This is an expected limitation.
-            tracing::debug!(
-                "HtTensor::entropy(): full grid ({} elements) exceeds materialization limit",
-                self.shape.iter().product::<usize>()
-            );
             return f64::NAN;
         }
         let vol = self.domain.cell_volume_6d();

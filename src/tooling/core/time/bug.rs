@@ -654,7 +654,6 @@ impl TimeIntegrator for BugIntegrator {
         repr: &mut dyn PhaseSpaceRepr,
         ctx: &SimContext,
     ) -> Result<StepProducts, CausticError> {
-        let _span = tracing::info_span!("bug_advance").entered();
         let mut timings = StepTimings::default();
         let dt = ctx.dt;
 

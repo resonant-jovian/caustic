@@ -63,7 +63,6 @@ impl Rkn6Splitting {
         sub: u8,
     ) {
         helpers::report_phase!(ctx, phase, sub, 19);
-        let _s = tracing::info_span!("rkn6_drift").entered();
         helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(coeff)));
     }
 
@@ -77,7 +76,6 @@ impl Rkn6Splitting {
         sub: u8,
     ) {
         helpers::report_phase!(ctx, StepPhase::Kick, sub, 19);
-        let _s = tracing::info_span!("rkn6_kick").entered();
         let (_density, _potential, accel) =
             helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(repr, ctx));
         helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(coeff)));
@@ -97,95 +95,74 @@ impl Rkn6Splitting {
     ) {
         // Sub-step 1: drift w1·dt/2
         helpers::report_phase!(ctx, StepPhase::DriftHalf1, base_sub, total_sub);
-        {
-            let _s = tracing::info_span!("rkn6_drift").entered();
-            helpers::time_ms!(
-                timings,
-                drift_ms,
-                ctx.advector.drift(repr, &ctx.with_dt(YOSHIDA_W1 * dt / 2.0))
-            );
-        }
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            ctx.advector.drift(repr, &ctx.with_dt(YOSHIDA_W1 * dt / 2.0))
+        );
 
         // Sub-step 2: kick w1·dt
         helpers::report_phase!(ctx, StepPhase::Kick, base_sub + 1, total_sub);
-        {
-            let _s = tracing::info_span!("rkn6_kick").entered();
-            let (_density, _potential, accel) = helpers::time_ms!(
-                timings,
-                poisson_ms,
-                helpers::solve_poisson(repr, ctx)
-            );
-            helpers::time_ms!(
-                timings,
-                kick_ms,
-                ctx.advector.kick(repr, &accel, &ctx.with_dt(YOSHIDA_W1 * dt))
-            );
-        }
+        let (_density, _potential, accel) = helpers::time_ms!(
+            timings,
+            poisson_ms,
+            helpers::solve_poisson(repr, ctx)
+        );
+        helpers::time_ms!(
+            timings,
+            kick_ms,
+            ctx.advector.kick(repr, &accel, &ctx.with_dt(YOSHIDA_W1 * dt))
+        );
 
         // Sub-step 3: drift (w1+w0)·dt/2
         helpers::report_phase!(ctx, StepPhase::DriftHalf2, base_sub + 2, total_sub);
-        {
-            let _s = tracing::info_span!("rkn6_drift").entered();
-            helpers::time_ms!(
-                timings,
-                drift_ms,
-                ctx.advector.drift(repr, &ctx.with_dt((YOSHIDA_W1 + YOSHIDA_W0) * dt / 2.0))
-            );
-        }
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            ctx.advector.drift(repr, &ctx.with_dt((YOSHIDA_W1 + YOSHIDA_W0) * dt / 2.0))
+        );
 
         // Sub-step 4: kick w0·dt
         helpers::report_phase!(ctx, StepPhase::Kick, base_sub + 3, total_sub);
-        {
-            let _s = tracing::info_span!("rkn6_kick").entered();
-            let (_density, _potential, accel) = helpers::time_ms!(
-                timings,
-                poisson_ms,
-                helpers::solve_poisson(repr, ctx)
-            );
-            helpers::time_ms!(
-                timings,
-                kick_ms,
-                ctx.advector.kick(repr, &accel, &ctx.with_dt(YOSHIDA_W0 * dt))
-            );
-        }
+        let (_density, _potential, accel) = helpers::time_ms!(
+            timings,
+            poisson_ms,
+            helpers::solve_poisson(repr, ctx)
+        );
+        helpers::time_ms!(
+            timings,
+            kick_ms,
+            ctx.advector.kick(repr, &accel, &ctx.with_dt(YOSHIDA_W0 * dt))
+        );
 
         // Sub-step 5: drift (w0+w1)·dt/2
         helpers::report_phase!(ctx, StepPhase::DriftHalf1, base_sub + 4, total_sub);
-        {
-            let _s = tracing::info_span!("rkn6_drift").entered();
-            helpers::time_ms!(
-                timings,
-                drift_ms,
-                ctx.advector.drift(repr, &ctx.with_dt((YOSHIDA_W0 + YOSHIDA_W1) * dt / 2.0))
-            );
-        }
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            ctx.advector.drift(repr, &ctx.with_dt((YOSHIDA_W0 + YOSHIDA_W1) * dt / 2.0))
+        );
 
         // Sub-step 6: kick w1·dt
         helpers::report_phase!(ctx, StepPhase::Kick, base_sub + 5, total_sub);
-        {
-            let _s = tracing::info_span!("rkn6_kick").entered();
-            let (_density, _potential, accel) = helpers::time_ms!(
-                timings,
-                poisson_ms,
-                helpers::solve_poisson(repr, ctx)
-            );
-            helpers::time_ms!(
-                timings,
-                kick_ms,
-                ctx.advector.kick(repr, &accel, &ctx.with_dt(YOSHIDA_W1 * dt))
-            );
-        }
+        let (_density, _potential, accel) = helpers::time_ms!(
+            timings,
+            poisson_ms,
+            helpers::solve_poisson(repr, ctx)
+        );
+        helpers::time_ms!(
+            timings,
+            kick_ms,
+            ctx.advector.kick(repr, &accel, &ctx.with_dt(YOSHIDA_W1 * dt))
+        );
 
         // Sub-step 7: drift w1·dt/2
         helpers::report_phase!(ctx, StepPhase::DriftHalf2, base_sub + 6, total_sub);
-        {
-            let _s = tracing::info_span!("rkn6_drift").entered();
-            helpers::time_ms!(
-                timings,
-                drift_ms,
-                ctx.advector.drift(repr, &ctx.with_dt(YOSHIDA_W1 * dt / 2.0))
-            );
-        }
+        helpers::time_ms!(
+            timings,
+            drift_ms,
+            ctx.advector.drift(repr, &ctx.with_dt(YOSHIDA_W1 * dt / 2.0))
+        );
     }
 }
 
@@ -195,7 +172,6 @@ impl TimeIntegrator for Rkn6Splitting {
         repr: &mut dyn PhaseSpaceRepr,
         ctx: &SimContext,
     ) -> Result<StepProducts, CausticError> {
-        let _span = tracing::info_span!("rkn6_advance").entered();
         let mut timings = StepTimings::default();
         let dt = ctx.dt;
 

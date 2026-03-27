@@ -114,7 +114,6 @@ impl FftPoisson {
     /// Uses realfft for the z-axis (contiguous, exploits Hermitian symmetry) and
     /// standard C2C FFT for y and x axes.
     fn fft_3d_real_forward(&self, input: &[f64]) -> Vec<Complex<f64>> {
-        let _span = tracing::info_span!("fft_forward").entered();
         let [nx, ny, nz] = self.shape;
         let nz_c = nz / 2 + 1; // Hermitian-symmetric complex output length
         let n_total_c = nx * ny * nz_c;
@@ -192,7 +191,6 @@ impl FftPoisson {
 
     /// Inverse 3D FFT: C2R via x,y axes (C2C inverse) then z-axis (C2R).
     fn fft_3d_real_inverse(&self, buf: &mut [Complex<f64>]) -> Vec<f64> {
-        let _span = tracing::info_span!("fft_inverse").entered();
         let [nx, ny, nz] = self.shape;
         let nz_c = nz / 2 + 1;
 
@@ -288,7 +286,6 @@ impl PoissonSolver for FftPoisson {
     /// mode to remove the mean), and inverse-transforms (C2R) to obtain the potential.
     fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
         let t0 = std::time::Instant::now();
-        let _span = tracing::info_span!("fft_poisson_solve").entered();
         use std::f64::consts::PI;
         let [nx, ny, nz] = self.shape;
         let nz_c = nz / 2 + 1;
@@ -298,7 +295,6 @@ impl PoissonSolver for FftPoisson {
 
         // Multiply by Green's function: Φ̂ = −4πG ρ̂ / k² (parallel over rows)
         {
-            let _s = tracing::info_span!("green_multiply").entered();
             let dx = self.dx;
             let g = ctx.g;
             rho_hat
@@ -528,7 +524,6 @@ impl PoissonSolver for FftIsolated {
     /// Green's function, inverse-FFTs, and extracts the N^3 physical sub-grid.
     fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
         let t0 = std::time::Instant::now();
-        let _span = tracing::info_span!("fft_isolated_solve").entered();
         use std::f64::consts::PI;
         let [nx, ny, nz] = self.shape;
         let [nx2, ny2, nz2] = [2 * nx, 2 * ny, 2 * nz];

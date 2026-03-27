@@ -39,7 +39,6 @@ impl TimeIntegrator for LieSplitting {
         repr: &mut dyn PhaseSpaceRepr,
         ctx: &SimContext,
     ) -> Result<StepProducts, CausticError> {
-        let _span = tracing::info_span!("lie_advance").entered();
         let dt = ctx.dt;
 
         ctx.progress.start_step();

@@ -129,7 +129,6 @@ impl PoissonSolver for VgfPoisson {
     /// and extracts the N^3 potential sub-grid.
     fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
         let g = ctx.g;
-        let _span = tracing::info_span!("vgf_poisson_solve").entered();
         use std::f64::consts::PI;
         let [nx, ny, nz] = self.shape;
         let [nx2, ny2, nz2] = [2 * nx, 2 * ny, 2 * nz];

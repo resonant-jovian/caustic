@@ -217,8 +217,6 @@ impl UniformGrid6D {
             Some(c) => c,
             None => return,
         };
-        let _span = tracing::info_span!("apply_velocity_filter").entered();
-
         let [_nx1, _nx2, _nx3, nv1, nv2, nv3] = self.cached_sizes;
         let n_vel = nv1 * nv2 * nv3;
         let n_spatial = self.data.len() / n_vel;
@@ -398,7 +396,6 @@ fn filter_pencils_dim2(
 impl PhaseSpaceRepr for UniformGrid6D {
     /// Sum over the contiguous velocity block at each spatial cell (parallel over spatial cells).
     fn compute_density(&self) -> DensityField {
-        let _span = tracing::info_span!("compute_density").entered();
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
         let dv = self.cached_dv;
         let dv3 = dv[0] * dv[1] * dv[2];
@@ -425,7 +422,6 @@ impl PhaseSpaceRepr for UniformGrid6D {
     /// shifts (Catmull-Rom, WPFC, or MP7) along each spatial axis in sequence,
     /// then transposes back. Parallel over velocity cells via rayon.
     fn advect_x(&mut self, _displacement: &DisplacementField, ctx: &SimContext) {
-        let _span = tracing::info_span!("advect_x").entered();
         let dt = ctx.dt;
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
         let dx = self.cached_dx;
@@ -568,7 +564,6 @@ impl PhaseSpaceRepr for UniformGrid6D {
     /// over spatial cells. Applies velocity-space exponential filter afterwards
     /// if configured.
     fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext) {
-        let _span = tracing::info_span!("advect_v").entered();
         let dt = ctx.dt;
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
         let dv = self.cached_dv;

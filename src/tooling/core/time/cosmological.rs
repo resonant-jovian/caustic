@@ -54,7 +54,6 @@ impl TimeIntegrator for CosmologicalStrangSplitting {
         repr: &mut dyn PhaseSpaceRepr,
         ctx: &SimContext,
     ) -> Result<StepProducts, CausticError> {
-        let _span = tracing::info_span!("cosmo_strang_advance").entered();
         let mut timings = StepTimings::default();
         let a = self.scale_factor;
         let dt = ctx.dt;

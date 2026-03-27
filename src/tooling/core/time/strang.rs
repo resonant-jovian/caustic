@@ -49,7 +49,6 @@ impl TimeIntegrator for StrangSplitting {
         repr: &mut dyn PhaseSpaceRepr,
         ctx: &SimContext,
     ) -> Result<StepProducts, CausticError> {
-        let _span = tracing::info_span!("strang_advance").entered();
         let mut timings = StepTimings::default();
         let dt = ctx.dt;
 
@@ -57,16 +56,12 @@ impl TimeIntegrator for StrangSplitting {
         helpers::report_phase!(ctx, StepPhase::DriftHalf1, 0, 5);
         ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::DriftHalf1, step: ctx.step });
 
-        {
-            let _s = tracing::info_span!("drift_half").entered();
-            helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
-        }
+        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
 
         helpers::report_phase!(ctx, StepPhase::PoissonSolve, 1, 5);
         ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::PoissonSolve, step: ctx.step });
 
         let accel = {
-            let _s = tracing::info_span!("poisson_solve").entered();
             let (density, potential, accel) = helpers::time_ms!(
                 timings,
                 poisson_ms,
@@ -79,10 +74,7 @@ impl TimeIntegrator for StrangSplitting {
         helpers::report_phase!(ctx, StepPhase::Kick, 2, 5);
         ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::Kick, step: ctx.step });
 
-        {
-            let _s = tracing::info_span!("kick").entered();
-            helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(dt)));
-        }
+        helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(dt)));
 
         // Apply hypercollision damping if the representation is SpectralV
         helpers::apply_hypercollision_if_spectral(repr, dt);
@@ -90,10 +82,7 @@ impl TimeIntegrator for StrangSplitting {
         helpers::report_phase!(ctx, StepPhase::DriftHalf2, 3, 5);
         ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::DriftHalf2, step: ctx.step });
 
-        {
-            let _s = tracing::info_span!("drift_half").entered();
-            helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
-        }
+        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
 
         helpers::report_phase!(ctx, StepPhase::StepComplete, 4, 5);
         ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::StepComplete, step: ctx.step });
