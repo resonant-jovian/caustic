@@ -16,6 +16,7 @@
 //! 7. Truncate to re-compress
 //! 8. Extract to dense PotentialField
 
+use super::super::context::SimContext;
 use super::super::solver::PoissonSolver;
 use super::super::types::*;
 use super::exponential_sum::ExponentialSumCoefficients;
@@ -70,8 +71,6 @@ pub struct HtPoisson {
     near_field_enabled: bool,
     /// L2 norm of last near-field correction (stored as f64 bits for atomic access).
     last_near_field_l2: AtomicU64,
-    /// Shared progress state for intra-phase reporting.
-    progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
 impl HtPoisson {
@@ -169,7 +168,6 @@ impl HtPoisson {
             last_near_field_l2: AtomicU64::new(0u64),
             leaf_fft_plans,
             leaf_ifft_plans,
-            progress: None,
         }
     }
 
@@ -210,16 +208,13 @@ impl HtPoisson {
 }
 
 impl PoissonSolver for HtPoisson {
-    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
-        self.progress = Some(p);
-    }
-
     /// Solve the Poisson equation via HT-format convolution with the exp-sum Green's function.
     ///
     /// Pipeline: zero-pad rho -> HT decomposition -> FFT leaves -> multiply each of R_G
     /// Gaussian terms as rank-1 diagonal scaling -> sum -> IFFT leaves -> truncate ->
     /// extract N^3 subgrid -> apply near-field corrections.
-    fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
+    fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
+        let g = ctx.g;
         let [nx, ny, nz] = self.shape;
         let [px, py, pz] = self.padded_shape;
 
@@ -256,7 +251,6 @@ impl PoissonSolver for HtPoisson {
         // In HT format: scale each leaf column by the diagonal → preserves rank exactly.
         let mut phi_hat: Option<HtTensor3DComplex> = None;
 
-        let total = self.r_g as u64;
         for k in 0..self.r_g {
             let c_k = self.exp_c[k];
             let scale = self.prefactor * c_k;
@@ -268,10 +262,6 @@ impl PoissonSolver for HtPoisson {
                 None => scaled,
                 Some(acc) => add_complex_ht(&acc, &scaled),
             });
-
-            if let Some(ref p) = self.progress {
-                p.set_intra_progress(k as u64 + 1, total);
-            }
         }
 
         let phi_hat = match phi_hat {

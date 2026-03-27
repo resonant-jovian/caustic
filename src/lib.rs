@@ -144,6 +144,14 @@ pub use tooling::core::time::yoshida::YoshidaSplitting;
 // Progress tracking (shared atomics for TUI intra-step visibility)
 pub use tooling::core::progress::{ProgressSnapshot, StepPhase, StepProgress};
 
+// SimEvent observability system
+pub use tooling::core::context::SimContext;
+pub use tooling::core::events::{
+    AdvectDirection, BuildPhase, ComponentKind, ConservedQuantity, EventEmitter, EventReceiver,
+    ExitConditionKind, FftDirection, IntegratorKind, ReprKind, SimEvent, SimWarning, SlarMethod,
+    SolverKind, TimestepConstraint,
+};
+
 // Phase-space representations
 pub use tooling::core::algos::amr::AmrGrid;
 pub use tooling::core::algos::flow_map::FlowMapRepr;
@@ -371,7 +379,7 @@ pub mod prelude {
         types::*,
     };
     pub use crate::{
-        Advector, CausticError, Domain, DomainBuilder, ExitReason, PhaseSpaceRepr, PoissonSolver,
-        Simulation, TimeIntegrator,
+        Advector, CausticError, Domain, DomainBuilder, EventEmitter, EventReceiver, ExitReason,
+        PhaseSpaceRepr, PoissonSolver, SimContext, SimEvent, Simulation, TimeIntegrator,
     };
 }

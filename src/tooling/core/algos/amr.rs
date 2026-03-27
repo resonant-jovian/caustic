@@ -10,6 +10,7 @@
 //! via nearest-cell assignment, producing a standard [`DensityField`].
 
 use super::super::{
+    context::SimContext,
     init::domain::{Domain, SpatialBoundType},
     phasespace::PhaseSpaceRepr,
     types::*,
@@ -479,7 +480,8 @@ impl PhaseSpaceRepr for AmrGrid {
     /// Drift sub-step: shift leaf cell centers in spatial coordinates by v * dt.
     /// The velocity coordinates (center[3..6]) of each leaf encode its velocity,
     /// so the spatial drift is center[0..3] += center[3..6] * dt.
-    fn advect_x(&mut self, _displacement: &DisplacementField, dt: f64) {
+    fn advect_x(&mut self, _displacement: &DisplacementField, ctx: &SimContext) {
+        let dt = ctx.dt;
         let periodic = matches!(self.domain.spatial_bc, SpatialBoundType::Periodic);
         let lx = self.lx();
 
@@ -503,7 +505,8 @@ impl PhaseSpaceRepr for AmrGrid {
     /// Kick sub-step: shift leaf cell centers in velocity coordinates by a(x) * dt.
     /// The acceleration is interpolated from the AccelerationField at the leaf's
     /// spatial position.
-    fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
+    fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext) {
+        let dt = ctx.dt;
         let lx = self.lx();
         let dx = self.domain.dx();
         let nx = self.nx();

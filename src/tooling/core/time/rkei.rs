@@ -13,14 +13,11 @@
 //!   Stage 2: f^(2) = ¾ f^n + ¼ advect(f^(1), g^(1), Δt)
 //!   Stage 3: f^{n+1} = ⅓ f^n + ⅔ advect(f^(2), g^(2), Δt)
 
-use std::sync::Arc;
-
 use super::super::{
-    advecator::Advector,
+    context::SimContext,
     integrator::{StepProducts, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
-    progress::{StepPhase, StepProgress},
-    solver::PoissonSolver,
+    progress::StepPhase,
     types::*,
 };
 use super::helpers;
@@ -31,14 +28,11 @@ use rayon::prelude::*;
 ///
 /// Each stage performs a full semi-Lagrangian advection (combined drift + kick)
 /// with the acceleration field frozen at the beginning of that stage.
-pub struct RkeiIntegrator {
-    pub g: f64,
-    progress: Option<Arc<StepProgress>>,
-}
+pub struct RkeiIntegrator;
 
 impl RkeiIntegrator {
-    pub fn new(g: f64) -> Self {
-        Self { g, progress: None }
+    pub fn new() -> Self {
+        Self
     }
 }
 
@@ -46,20 +40,17 @@ impl TimeIntegrator for RkeiIntegrator {
     fn advance(
         &mut self,
         repr: &mut dyn PhaseSpaceRepr,
-        solver: &dyn PoissonSolver,
-        advector: &dyn Advector,
-        dt: f64,
+        ctx: &SimContext,
     ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("rkei_advance").entered();
+        let dt = ctx.dt;
 
         let snap_err =
             || CausticError::Solver("RKEI integrator requires to_snapshot support".into());
 
-        if let Some(ref p) = self.progress {
-            p.start_step();
-            p.set_phase(StepPhase::RkeiStage1);
-            p.set_sub_step(0, 3);
-        }
+        ctx.progress.start_step();
+        ctx.progress.set_phase(StepPhase::RkeiStage1);
+        ctx.progress.set_sub_step(0, 3);
 
         // Save f^n as a snapshot for convex combination
         let f_n = repr.to_snapshot(0.0).ok_or_else(snap_err)?;
@@ -68,29 +59,27 @@ impl TimeIntegrator for RkeiIntegrator {
         {
             let _s = tracing::info_span!("rkei_stage_1").entered();
             let density = repr.compute_density();
-            let potential = solver.solve(&density, self.g);
-            let accel = solver.compute_acceleration(&potential);
+            let potential = ctx.solver.solve(&density, ctx);
+            let accel = ctx.solver.compute_acceleration(&potential);
 
             // Full advection: drift Δt then kick Δt with frozen acceleration
-            advector.drift(repr, dt);
-            advector.kick(repr, &accel, dt);
+            ctx.advector.drift(repr, &ctx.with_dt(dt));
+            ctx.advector.kick(repr, &accel, &ctx.with_dt(dt));
         }
         // repr now holds f^(1)
 
         // ── Stage 2: f^(2) = ¾ f^n + ¼ advect(f^(1), g^(1), Δt) ──
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::RkeiStage2);
-            p.set_sub_step(1, 3);
-        }
+        ctx.progress.set_phase(StepPhase::RkeiStage2);
+        ctx.progress.set_sub_step(1, 3);
         let _f_1 = repr.to_snapshot(0.0).ok_or_else(snap_err)?;
         {
             let _s = tracing::info_span!("rkei_stage_2").entered();
             let density = repr.compute_density();
-            let potential = solver.solve(&density, self.g);
-            let accel = solver.compute_acceleration(&potential);
+            let potential = ctx.solver.solve(&density, ctx);
+            let accel = ctx.solver.compute_acceleration(&potential);
 
-            advector.drift(repr, dt);
-            advector.kick(repr, &accel, dt);
+            ctx.advector.drift(repr, &ctx.with_dt(dt));
+            ctx.advector.kick(repr, &accel, &ctx.with_dt(dt));
         }
         // repr now holds advect(f^(1), g^(1), Δt)
 
@@ -112,18 +101,16 @@ impl TimeIntegrator for RkeiIntegrator {
         // repr now holds f^(2)
 
         // ── Stage 3: f^{n+1} = ⅓ f^n + ⅔ advect(f^(2), g^(2), Δt) ──
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::RkeiStage3);
-            p.set_sub_step(2, 3);
-        }
+        ctx.progress.set_phase(StepPhase::RkeiStage3);
+        ctx.progress.set_sub_step(2, 3);
         {
             let _s = tracing::info_span!("rkei_stage_3").entered();
             let density = repr.compute_density();
-            let potential = solver.solve(&density, self.g);
-            let accel = solver.compute_acceleration(&potential);
+            let potential = ctx.solver.solve(&density, ctx);
+            let accel = ctx.solver.compute_acceleration(&potential);
 
-            advector.drift(repr, dt);
-            advector.kick(repr, &accel, dt);
+            ctx.advector.drift(repr, &ctx.with_dt(dt));
+            ctx.advector.kick(repr, &accel, &ctx.with_dt(dt));
         }
         // repr now holds advect(f^(2), g^(2), Δt)
 
@@ -144,8 +131,8 @@ impl TimeIntegrator for RkeiIntegrator {
         }
 
         let density = repr.compute_density();
-        let potential = solver.solve(&density, self.g);
-        let acceleration = solver.compute_acceleration(&potential);
+        let potential = ctx.solver.solve(&density, ctx);
+        let acceleration = ctx.solver.compute_acceleration(&potential);
         Ok(StepProducts {
             density,
             potential,
@@ -154,11 +141,7 @@ impl TimeIntegrator for RkeiIntegrator {
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
-        helpers::dynamical_timestep(repr, self.g, cfl_factor)
-    }
-
-    fn set_progress(&mut self, progress: Arc<StepProgress>) {
-        self.progress = Some(progress);
+        helpers::dynamical_timestep(repr, 1.0, cfl_factor)
     }
 }
 
@@ -170,9 +153,11 @@ mod tests {
     fn rkei_smoke_test() {
         use crate::tooling::core::algos::lagrangian::SemiLagrangian;
         use crate::tooling::core::algos::uniform::UniformGrid6D;
+        use crate::tooling::core::events::EventEmitter;
         use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
         use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
         use crate::tooling::core::poisson::fft::FftPoisson;
+        use crate::tooling::core::progress::StepProgress;
 
         let domain = Domain::builder()
             .spatial_extent(1.0)
@@ -192,10 +177,23 @@ mod tests {
 
         let poisson = FftPoisson::new(&domain);
         let advector = SemiLagrangian::new();
-        let mut integrator = RkeiIntegrator::new(1.0);
+        let emitter = EventEmitter::new();
+        let progress = StepProgress::new();
+        let mut integrator = RkeiIntegrator::new();
+
+        let ctx = SimContext {
+            solver: &poisson,
+            advector: &advector,
+            emitter: &emitter,
+            progress: &progress,
+            step: 0,
+            time: 0.0,
+            dt: 0.01,
+            g: 1.0,
+        };
 
         integrator
-            .advance(&mut grid, &poisson, &advector, 0.01)
+            .advance(&mut grid, &ctx)
             .unwrap();
 
         // Should not contain NaN

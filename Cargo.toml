@@ -17,6 +17,7 @@ anyhow = "1.0.102"  # Error handling
 thiserror = "2.0.18" # Error handling
 rustfft = "6.4.1"   # FFT Poisson solver
 rayon = "1.11.0"     # data-parallel loops over 6D grid
+crossbeam-channel = "0.5" # bounded MPMC channel for SimEvent delivery
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 realfft = "3.5.0"    # Real-to-complex FFT (Hermitian symmetry)

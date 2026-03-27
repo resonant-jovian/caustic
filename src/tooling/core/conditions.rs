@@ -1,6 +1,7 @@
 //! Exit conditions — predicates evaluated after each timestep to determine whether
 //! the simulation should terminate.
 
+use super::context::SimContext;
 use super::diagnostics::GlobalDiagnostics;
 use std::cell::Cell;
 
@@ -63,7 +64,7 @@ impl std::fmt::Display for ExitReason {
 /// let wall_exit = WallClockCondition::new(3600.0);
 /// ```
 pub trait ExitCondition {
-    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics) -> Option<ExitReason>;
+    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics, ctx: &SimContext) -> Option<ExitReason>;
 }
 
 /// Exit when simulation time reaches `t_final`.
@@ -73,7 +74,7 @@ pub struct TimeLimitCondition {
 }
 
 impl ExitCondition for TimeLimitCondition {
-    fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics) -> Option<ExitReason> {
+    fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, _ctx: &SimContext) -> Option<ExitReason> {
         if diag.time >= self.t_final {
             Some(ExitReason::TimeLimitReached)
         } else {
@@ -95,7 +96,7 @@ pub struct EnergyDriftCondition {
 }
 
 impl ExitCondition for EnergyDriftCondition {
-    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics) -> Option<ExitReason> {
+    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics, _ctx: &SimContext) -> Option<ExitReason> {
         exceeds_relative_drift(diag.total_energy, initial.total_energy, self.tolerance)
             .then_some(ExitReason::EnergyDrift)
     }
@@ -108,7 +109,7 @@ pub struct MassLossCondition {
 }
 
 impl ExitCondition for MassLossCondition {
-    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics) -> Option<ExitReason> {
+    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics, _ctx: &SimContext) -> Option<ExitReason> {
         let m0 = initial.mass_in_box.abs();
         if m0 > 1e-30 && diag.mass_in_box / m0 < self.threshold {
             Some(ExitReason::MassLoss)
@@ -125,7 +126,7 @@ pub struct CasimirDriftCondition {
 }
 
 impl ExitCondition for CasimirDriftCondition {
-    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics) -> Option<ExitReason> {
+    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics, _ctx: &SimContext) -> Option<ExitReason> {
         exceeds_relative_drift(diag.casimir_c2, initial.casimir_c2, self.tolerance)
             .then_some(ExitReason::CasimirDrift)
     }
@@ -149,7 +150,7 @@ impl WallClockCondition {
 }
 
 impl ExitCondition for WallClockCondition {
-    fn check(&self, _diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics) -> Option<ExitReason> {
+    fn check(&self, _diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, _ctx: &SimContext) -> Option<ExitReason> {
         if self.start.elapsed().as_secs_f64() > self.limit_secs {
             Some(ExitReason::WallClockLimit)
         } else {
@@ -177,7 +178,7 @@ impl SteadyStateCondition {
 }
 
 impl ExitCondition for SteadyStateCondition {
-    fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics) -> Option<ExitReason> {
+    fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, _ctx: &SimContext) -> Option<ExitReason> {
         let current = diag.entropy;
         if let Some(prev) = self.prev_entropy.get() {
             let dt = diag.time; // Approximate: use absolute time as proxy
@@ -204,7 +205,7 @@ pub struct CflViolationCondition {
 }
 
 impl ExitCondition for CflViolationCondition {
-    fn check(&self, _diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics) -> Option<ExitReason> {
+    fn check(&self, _diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, _ctx: &SimContext) -> Option<ExitReason> {
         // CFL violation is checked in Simulation::step via max_dt; this condition is a fallback
         None
     }
@@ -214,7 +215,7 @@ impl ExitCondition for CflViolationCondition {
 pub struct CausticFormationCondition;
 
 impl ExitCondition for CausticFormationCondition {
-    fn check(&self, _diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics) -> Option<ExitReason> {
+    fn check(&self, _diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, _ctx: &SimContext) -> Option<ExitReason> {
         // Stream count field is not stored in GlobalDiagnostics; requires repr access.
         // Deferred until max_stream_count is added to GlobalDiagnostics.
         None
@@ -244,7 +245,7 @@ impl VirialRelaxedCondition {
 }
 
 impl ExitCondition for VirialRelaxedCondition {
-    fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics) -> Option<ExitReason> {
+    fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, _ctx: &SimContext) -> Option<ExitReason> {
         let count = self.step_count.get();
         self.step_count.set(count + 1);
         if count < self.min_steps {

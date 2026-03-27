@@ -3,6 +3,7 @@
 
 use std::any::Any;
 
+use super::context::SimContext;
 use super::types::{
     AccelerationField, DensityField, DisplacementField, PhaseSpaceSnapshot, StreamCountField,
     Tensor,
@@ -49,12 +50,12 @@ pub trait PhaseSpaceRepr: Send + Sync {
     fn compute_density(&self) -> DensityField;
 
     /// Drift sub-step: advect f in spatial coordinates by displacement Δx = v·dt.
-    /// Pure translation in x at constant v.
-    fn advect_x(&mut self, displacement: &DisplacementField, dt: f64);
+    /// Pure translation in x at constant v. Uses `ctx.dt` for the sub-step duration.
+    fn advect_x(&mut self, displacement: &DisplacementField, ctx: &SimContext);
 
     /// Kick sub-step: advect f in velocity coordinates by Δv = g·dt.
-    /// Pure translation in v at constant x.
-    fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64);
+    /// Pure translation in v at constant x. Uses `ctx.dt` for the sub-step duration.
+    fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext);
 
     /// Compute velocity moment of order n at given spatial position.
     /// Order 0 = density, 1 = mean velocity, 2 = dispersion tensor.
@@ -130,7 +131,4 @@ pub trait PhaseSpaceRepr: Send + Sync {
         0
     }
 
-    /// Attach shared progress state for intra-phase cell-level reporting.
-    /// Implementations can use this to report progress via `StepProgress::set_intra_progress`.
-    fn set_progress(&mut self, _progress: std::sync::Arc<super::progress::StepProgress>) {}
 }

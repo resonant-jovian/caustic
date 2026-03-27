@@ -11,12 +11,11 @@
 //! across solves, avoiding redundant plan creation on each call. Scratch buffers
 //! are similarly cached behind a `Mutex` to eliminate per-call heap allocations.
 
-use super::super::{init::domain::Domain, solver::PoissonSolver, types::*};
+use super::super::{context::SimContext, init::domain::Domain, solver::PoissonSolver, types::*};
 use rayon::prelude::*;
 use realfft::RealFftPlanner;
 use rustfft::{FftPlanner, num_complex::Complex};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Three-component complex slab (gx, gy, gz) for spectral differentiation.
 type ComplexSlab = (Vec<Complex<f64>>, Vec<Complex<f64>>, Vec<Complex<f64>>);
@@ -60,8 +59,6 @@ pub struct FftPoisson {
     /// Cached scratch buffer for FFT transposes. Avoids per-call allocation.
     /// Protected by Mutex for interior mutability (PoissonSolver::solve takes &self).
     scratch_cache: std::sync::Mutex<Vec<Complex<f64>>>,
-    /// Shared progress state for intra-phase reporting.
-    progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
 impl FftPoisson {
@@ -99,7 +96,6 @@ impl FftPoisson {
             fwd,
             inv,
             scratch_cache: std::sync::Mutex::new(Vec::new()),
-            progress: None,
         }
     }
 
@@ -286,15 +282,11 @@ impl FftPoisson {
 }
 
 impl PoissonSolver for FftPoisson {
-    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
-        self.progress = Some(p);
-    }
-
     /// Solve nabla^2 Phi = 4*pi*G*rho with periodic BC via spectral Green's function.
     ///
     /// Forward-transforms rho (R2C), divides by -k^2 in Fourier space (zeroing the DC
     /// mode to remove the mean), and inverse-transforms (C2R) to obtain the potential.
-    fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
+    fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
         let _span = tracing::info_span!("fft_poisson_solve").entered();
         use std::f64::consts::PI;
         let [nx, ny, nz] = self.shape;
@@ -307,9 +299,7 @@ impl PoissonSolver for FftPoisson {
         {
             let _s = tracing::info_span!("green_multiply").entered();
             let dx = self.dx;
-            let total = (nx * ny) as u64;
-            let counter = AtomicU64::new(0);
-            let report_interval = (total / 100).max(1);
+            let g = ctx.g;
             rho_hat
                 .par_chunks_mut(nz_c)
                 .enumerate()
@@ -325,12 +315,6 @@ impl PoissonSolver for FftPoisson {
                             *c = Complex::new(0.0, 0.0);
                         } else {
                             *c *= -4.0 * PI * g / k2;
-                        }
-                    }
-                    if let Some(ref p) = self.progress {
-                        let c = counter.fetch_add(1, Ordering::Relaxed);
-                        if c.is_multiple_of(report_interval) {
-                            p.set_intra_progress(c, total);
                         }
                     }
                 });
@@ -379,9 +363,6 @@ impl PoissonSolver for FftPoisson {
         let mut gx_hat = vec![Complex::new(0.0, 0.0); n_total];
         let mut gy_hat = vec![Complex::new(0.0, 0.0); n_total];
         let mut gz_hat = vec![Complex::new(0.0, 0.0); n_total];
-        let total = nx as u64;
-        let counter = AtomicU64::new(0);
-        let report_interval = (total / 100).max(1);
 
         gx_hat
             .par_chunks_mut(slab_size)
@@ -401,12 +382,6 @@ impl PoissonSolver for FftPoisson {
                         gx_slab[local] = -i_unit * kx * p;
                         gy_slab[local] = -i_unit * ky * p;
                         gz_slab[local] = -i_unit * kz * p;
-                    }
-                }
-                if let Some(ref p) = self.progress {
-                    let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c.is_multiple_of(report_interval) {
-                        p.set_intra_progress(c, total);
                     }
                 }
             });
@@ -455,8 +430,6 @@ pub struct FftIsolated {
     inv: [Arc<dyn rustfft::Fft<f64>>; 3],
     /// Cached scratch buffer for (2N)³ FFT transposes.
     scratch_cache: std::sync::Mutex<Vec<Complex<f64>>>,
-    /// Shared progress state for intra-phase reporting.
-    progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
 #[allow(deprecated)]
@@ -537,22 +510,17 @@ impl FftIsolated {
             fwd,
             inv,
             scratch_cache: std::sync::Mutex::new(Vec::new()),
-            progress: None,
         }
     }
 }
 
 #[allow(deprecated)]
 impl PoissonSolver for FftIsolated {
-    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
-        self.progress = Some(p);
-    }
-
     /// Solve nabla^2 Phi = 4*pi*G*rho with isolated BC via Hockney-Eastwood convolution.
     ///
     /// Zero-pads rho into (2N)^3, forward-FFTs, multiplies pointwise with the cached
     /// Green's function, inverse-FFTs, and extracts the N^3 physical sub-grid.
-    fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
+    fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
         let _span = tracing::info_span!("fft_isolated_solve").entered();
         use std::f64::consts::PI;
         let [nx, ny, nz] = self.shape;
@@ -589,21 +557,12 @@ impl PoissonSolver for FftIsolated {
 
         // 3. Pointwise multiply: Φ̂ = 4πG · Ĝ · ρ̂ (parallel)
         let dx3 = self.dx[0] * self.dx[1] * self.dx[2];
-        let factor = 4.0 * PI * g * dx3;
-        let total = n2_total as u64;
-        let counter = AtomicU64::new(0);
-        let report_interval = (total / 100).max(1);
+        let factor = 4.0 * PI * ctx.g * dx3;
         rho_pad
             .par_iter_mut()
             .zip(self.green_hat.par_iter())
             .for_each(|(rho, green)| {
                 *rho = factor * green * *rho;
-                if let Some(ref p) = self.progress {
-                    let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c.is_multiple_of(report_interval) {
-                        p.set_intra_progress(c, total);
-                    }
-                }
             });
 
         // 4. Inverse FFT

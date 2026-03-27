@@ -1,6 +1,7 @@
 //! The `PoissonSolver` trait. Given a density field ρ(x), produce the gravitational
 //! potential Φ(x) by solving ∇²Φ = 4πGρ.
 
+use super::context::SimContext;
 use super::types::{AccelerationField, DensityField, PotentialField};
 
 /// Trait for all gravitational Poisson solver implementations.
@@ -21,18 +22,13 @@ use super::types::{AccelerationField, DensityField, PotentialField};
 ///     .unwrap();
 ///
 /// let poisson = FftPoisson::new(&domain);
-/// # let density = caustic::DensityField { data: vec![0.0; 16*16*16], shape: [16,16,16] };
-/// let potential = poisson.solve(&density, 1.0);
-/// let acceleration = poisson.compute_acceleration(&potential);
 /// ```
 pub trait PoissonSolver {
-    /// Solve ∇²Φ = 4πGρ and return the potential field.
-    fn solve(&self, density: &DensityField, g: f64) -> PotentialField;
+    /// Solve ∇²Φ = 4πGρ and return the potential field. Uses `ctx.g` for the
+    /// gravitational constant.
+    fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField;
 
     /// Compute the gravitational acceleration g = −∇Φ via spectral differentiation
     /// or finite differences.
     fn compute_acceleration(&self, potential: &PotentialField) -> AccelerationField;
-
-    /// Attach shared progress state for intra-phase cell-level reporting.
-    fn set_progress(&mut self, _progress: std::sync::Arc<super::progress::StepProgress>) {}
 }

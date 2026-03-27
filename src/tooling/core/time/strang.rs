@@ -9,14 +9,11 @@
 //! for most simulations. For higher accuracy use [`YoshidaSplitting`](super::yoshida::YoshidaSplitting).
 //! When the representation is `SpectralV`, hypercollision damping is applied after the kick.
 
-use std::sync::Arc;
-
 use super::super::{
-    advecator::Advector,
+    context::SimContext,
     integrator::{StepProducts, StepTimings, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
-    progress::{StepPhase, StepProgress},
-    solver::PoissonSolver,
+    progress::StepPhase,
     types::*,
 };
 use super::helpers;
@@ -27,21 +24,15 @@ use crate::CausticError;
 /// Executes drift(dt/2) -> Poisson solve -> kick(dt) -> drift(dt/2) each step.
 /// After the kick, applies hypercollision damping when the representation is `SpectralV`.
 pub struct StrangSplitting {
-    /// Gravitational constant G used when solving the Poisson equation.
-    pub g: f64,
     /// Timing breakdown from the most recent step (drift, kick, Poisson, density).
     last_timings: StepTimings,
-    /// Optional progress reporter for intra-step phase tracking by the TUI.
-    progress: Option<Arc<StepProgress>>,
 }
 
 impl StrangSplitting {
-    /// Create a new Strang splitting integrator with the given gravitational constant.
-    pub fn new(g: f64) -> Self {
+    /// Create a new Strang splitting integrator.
+    pub fn new() -> Self {
         Self {
-            g,
             last_timings: StepTimings::default(),
-            progress: None,
         }
     }
 }
@@ -54,60 +45,57 @@ impl TimeIntegrator for StrangSplitting {
     fn advance(
         &mut self,
         repr: &mut dyn PhaseSpaceRepr,
-        solver: &dyn PoissonSolver,
-        advector: &dyn Advector,
-        dt: f64,
+        ctx: &SimContext,
     ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("strang_advance").entered();
         let mut timings = StepTimings::default();
+        let dt = ctx.dt;
 
-        if let Some(ref p) = self.progress {
-            p.start_step();
-        }
-        helpers::report_phase!(self.progress, StepPhase::DriftHalf1, 0, 5);
+        ctx.progress.start_step();
+        helpers::report_phase!(ctx, StepPhase::DriftHalf1, 0, 5);
 
         {
             let _s = tracing::info_span!("drift_half").entered();
-            helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / 2.0));
+            helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
         }
 
-        helpers::report_phase!(self.progress, StepPhase::PoissonSolve, 1, 5);
+        helpers::report_phase!(ctx, StepPhase::PoissonSolve, 1, 5);
 
         let accel = {
             let _s = tracing::info_span!("poisson_solve").entered();
             let (density, potential, accel) = helpers::time_ms!(
                 timings,
                 poisson_ms,
-                helpers::solve_poisson(repr, solver, self.g)
+                helpers::solve_poisson(repr, ctx)
             );
             let _ = (density, potential);
             accel
         };
 
-        helpers::report_phase!(self.progress, StepPhase::Kick, 2, 5);
+        helpers::report_phase!(ctx, StepPhase::Kick, 2, 5);
 
         {
             let _s = tracing::info_span!("kick").entered();
-            helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, dt));
+            helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(dt)));
         }
 
         // Apply hypercollision damping if the representation is SpectralV
         helpers::apply_hypercollision_if_spectral(repr, dt);
 
-        helpers::report_phase!(self.progress, StepPhase::DriftHalf2, 3, 5);
+        helpers::report_phase!(ctx, StepPhase::DriftHalf2, 3, 5);
 
         {
             let _s = tracing::info_span!("drift_half").entered();
-            helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / 2.0));
+            helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
         }
 
-        helpers::report_phase!(self.progress, StepPhase::StepComplete, 4, 5);
+        helpers::report_phase!(ctx, StepPhase::StepComplete, 4, 5);
 
         // Compute end-of-step products for caller reuse
         let (density, potential, acceleration) = helpers::time_ms!(
             timings,
             density_ms,
-            helpers::solve_poisson(repr, solver, self.g)
+            helpers::solve_poisson(repr, ctx)
         );
 
         self.last_timings = timings;
@@ -121,17 +109,12 @@ impl TimeIntegrator for StrangSplitting {
 
     /// Estimate the maximum stable time step from the dynamical time t_dyn = 1/sqrt(G*rho_max).
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
-        helpers::dynamical_timestep(repr, self.g, cfl_factor)
+        helpers::dynamical_timestep(repr, 1.0, cfl_factor)
     }
 
     /// Return the timing breakdown from the most recent step.
     fn last_step_timings(&self) -> Option<&StepTimings> {
         Some(&self.last_timings)
-    }
-
-    /// Attach a shared progress reporter for intra-step phase tracking.
-    fn set_progress(&mut self, progress: Arc<StepProgress>) {
-        self.progress = Some(progress);
     }
 }
 
@@ -140,8 +123,10 @@ mod tests {
     use super::*;
     use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::algos::spectral::SpectralV;
+    use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::poisson::fft::FftPoisson;
+    use crate::tooling::core::progress::StepProgress;
 
     #[test]
     fn test_hypercollision_applied_for_spectral_v() {
@@ -183,10 +168,23 @@ mod tests {
 
         let poisson = FftPoisson::new(&domain);
         let advector = SemiLagrangian::new();
-        let mut integrator = StrangSplitting::new(1.0);
+        let emitter = EventEmitter::new();
+        let progress = StepProgress::new();
+        let mut integrator = StrangSplitting::new();
+
+        let ctx = SimContext {
+            solver: &poisson,
+            advector: &advector,
+            emitter: &emitter,
+            progress: &progress,
+            step: 0,
+            time: 0.0,
+            dt: 0.1,
+            g: 1.0,
+        };
 
         integrator
-            .advance(&mut spec, &poisson, &advector, 0.1)
+            .advance(&mut spec, &ctx)
             .unwrap();
 
         // The high mode (3,3,3) should be significantly damped.

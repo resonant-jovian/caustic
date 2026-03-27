@@ -11,14 +11,11 @@
 //! (3 Poisson solves vs 1), but allows much larger time steps for the same error budget.
 //! When the representation is `SpectralV`, hypercollision damping is applied after each kick.
 
-use std::sync::Arc;
-
 use super::super::{
-    advecator::Advector,
+    context::SimContext,
     integrator::{StepProducts, StepTimings, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
-    progress::{StepPhase, StepProgress},
-    solver::PoissonSolver,
+    progress::StepPhase,
     types::*,
 };
 use super::helpers;
@@ -35,21 +32,15 @@ const YOSHIDA_W0: f64 = -1.7024143839193153;
 /// Composes 7 sub-steps (4 drifts, 3 kicks with Poisson solves) using the Yoshida (1990)
 /// triple-jump coefficients to achieve O(dt^4) accuracy while preserving symplecticity.
 pub struct YoshidaSplitting {
-    /// Gravitational constant G used when solving the Poisson equation.
-    pub g: f64,
     /// Timing breakdown from the most recent step (drift, kick, Poisson, density).
     last_timings: StepTimings,
-    /// Optional progress reporter for intra-step phase tracking by the TUI.
-    progress: Option<Arc<StepProgress>>,
 }
 
 impl YoshidaSplitting {
-    /// Create a new Yoshida splitting integrator with the given gravitational constant.
-    pub fn new(g: f64) -> Self {
+    /// Create a new Yoshida splitting integrator.
+    pub fn new() -> Self {
         Self {
-            g,
             last_timings: StepTimings::default(),
-            progress: None,
         }
     }
 }
@@ -62,45 +53,42 @@ impl TimeIntegrator for YoshidaSplitting {
     fn advance(
         &mut self,
         repr: &mut dyn PhaseSpaceRepr,
-        solver: &dyn PoissonSolver,
-        advector: &dyn Advector,
-        dt: f64,
+        ctx: &SimContext,
     ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("yoshida_advance").entered();
         let mut timings = StepTimings::default();
+        let dt = ctx.dt;
 
-        if let Some(ref p) = self.progress {
-            p.start_step();
-        }
+        ctx.progress.start_step();
 
         // Optimized 3-substep form with 4 drifts and 3 kicks:
         //   drift(w1·dt/2) → kick(w1·dt) → drift((w1+w0)·dt/2) → kick(w0·dt)
         //   → drift((w0+w1)·dt/2) → kick(w1·dt) → drift(w1·dt/2)
 
         // Substep 1: drift w1·dt/2
-        helpers::report_phase!(self.progress, StepPhase::YoshidaDrift1, 0, 7);
+        helpers::report_phase!(ctx, StepPhase::YoshidaDrift1, 0, 7);
         {
             let _s = tracing::info_span!("yoshida_drift_1").entered();
             helpers::time_ms!(
                 timings,
                 drift_ms,
-                advector.drift(repr, YOSHIDA_W1 * dt / 2.0)
+                ctx.advector.drift(repr, &ctx.with_dt(YOSHIDA_W1 * dt / 2.0))
             );
         }
 
         // Substep 2: kick w1·dt
-        helpers::report_phase!(self.progress, StepPhase::YoshidaKick1, 1, 7);
+        helpers::report_phase!(ctx, StepPhase::YoshidaKick1, 1, 7);
         {
             let _s = tracing::info_span!("yoshida_kick_1").entered();
             let (_density, _potential, accel) = helpers::time_ms!(
                 timings,
                 poisson_ms,
-                helpers::solve_poisson(repr, solver, self.g)
+                helpers::solve_poisson(repr, ctx)
             );
             helpers::time_ms!(
                 timings,
                 kick_ms,
-                advector.kick(repr, &accel, YOSHIDA_W1 * dt)
+                ctx.advector.kick(repr, &accel, &ctx.with_dt(YOSHIDA_W1 * dt))
             );
         }
 
@@ -108,29 +96,29 @@ impl TimeIntegrator for YoshidaSplitting {
         helpers::apply_hypercollision_if_spectral(repr, YOSHIDA_W1 * dt);
 
         // Substep 3: drift (w1+w0)·dt/2
-        helpers::report_phase!(self.progress, StepPhase::YoshidaDrift2, 2, 7);
+        helpers::report_phase!(ctx, StepPhase::YoshidaDrift2, 2, 7);
         {
             let _s = tracing::info_span!("yoshida_drift_2").entered();
             helpers::time_ms!(
                 timings,
                 drift_ms,
-                advector.drift(repr, (YOSHIDA_W1 + YOSHIDA_W0) * dt / 2.0)
+                ctx.advector.drift(repr, &ctx.with_dt((YOSHIDA_W1 + YOSHIDA_W0) * dt / 2.0))
             );
         }
 
         // Substep 4: kick w0·dt
-        helpers::report_phase!(self.progress, StepPhase::YoshidaKick2, 3, 7);
+        helpers::report_phase!(ctx, StepPhase::YoshidaKick2, 3, 7);
         {
             let _s = tracing::info_span!("yoshida_kick_2").entered();
             let (_density, _potential, accel) = helpers::time_ms!(
                 timings,
                 poisson_ms,
-                helpers::solve_poisson(repr, solver, self.g)
+                helpers::solve_poisson(repr, ctx)
             );
             helpers::time_ms!(
                 timings,
                 kick_ms,
-                advector.kick(repr, &accel, YOSHIDA_W0 * dt)
+                ctx.advector.kick(repr, &accel, &ctx.with_dt(YOSHIDA_W0 * dt))
             );
         }
 
@@ -138,29 +126,29 @@ impl TimeIntegrator for YoshidaSplitting {
         helpers::apply_hypercollision_if_spectral(repr, YOSHIDA_W0 * dt);
 
         // Substep 5: drift (w0+w1)·dt/2
-        helpers::report_phase!(self.progress, StepPhase::YoshidaDrift3, 4, 7);
+        helpers::report_phase!(ctx, StepPhase::YoshidaDrift3, 4, 7);
         {
             let _s = tracing::info_span!("yoshida_drift_3").entered();
             helpers::time_ms!(
                 timings,
                 drift_ms,
-                advector.drift(repr, (YOSHIDA_W0 + YOSHIDA_W1) * dt / 2.0)
+                ctx.advector.drift(repr, &ctx.with_dt((YOSHIDA_W0 + YOSHIDA_W1) * dt / 2.0))
             );
         }
 
         // Substep 6: kick w1·dt
-        helpers::report_phase!(self.progress, StepPhase::YoshidaKick3, 5, 7);
+        helpers::report_phase!(ctx, StepPhase::YoshidaKick3, 5, 7);
         {
             let _s = tracing::info_span!("yoshida_kick_3").entered();
             let (_density, _potential, accel) = helpers::time_ms!(
                 timings,
                 poisson_ms,
-                helpers::solve_poisson(repr, solver, self.g)
+                helpers::solve_poisson(repr, ctx)
             );
             helpers::time_ms!(
                 timings,
                 kick_ms,
-                advector.kick(repr, &accel, YOSHIDA_W1 * dt)
+                ctx.advector.kick(repr, &accel, &ctx.with_dt(YOSHIDA_W1 * dt))
             );
         }
 
@@ -168,13 +156,13 @@ impl TimeIntegrator for YoshidaSplitting {
         helpers::apply_hypercollision_if_spectral(repr, YOSHIDA_W1 * dt);
 
         // Substep 7: drift w1·dt/2
-        helpers::report_phase!(self.progress, StepPhase::YoshidaDrift4, 6, 7);
+        helpers::report_phase!(ctx, StepPhase::YoshidaDrift4, 6, 7);
         {
             let _s = tracing::info_span!("yoshida_drift_4").entered();
             helpers::time_ms!(
                 timings,
                 drift_ms,
-                advector.drift(repr, YOSHIDA_W1 * dt / 2.0)
+                ctx.advector.drift(repr, &ctx.with_dt(YOSHIDA_W1 * dt / 2.0))
             );
         }
 
@@ -182,7 +170,7 @@ impl TimeIntegrator for YoshidaSplitting {
         let (density, potential, acceleration) = helpers::time_ms!(
             timings,
             density_ms,
-            helpers::solve_poisson(repr, solver, self.g)
+            helpers::solve_poisson(repr, ctx)
         );
 
         self.last_timings = timings;
@@ -196,16 +184,11 @@ impl TimeIntegrator for YoshidaSplitting {
 
     /// Estimate the maximum stable time step from the dynamical time t_dyn = 1/sqrt(G*rho_max).
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
-        helpers::dynamical_timestep(repr, self.g, cfl_factor)
+        helpers::dynamical_timestep(repr, 1.0, cfl_factor)
     }
 
     /// Return the timing breakdown from the most recent step.
     fn last_step_timings(&self) -> Option<&StepTimings> {
         Some(&self.last_timings)
-    }
-
-    /// Attach a shared progress reporter for intra-step phase tracking.
-    fn set_progress(&mut self, progress: Arc<StepProgress>) {
-        self.progress = Some(progress);
     }
 }

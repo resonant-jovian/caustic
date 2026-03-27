@@ -8,7 +8,7 @@
 //! updated after every advection sub-step via CIC deposition of sheet
 //! particles into newly transitioned grid cells.
 
-use super::super::{init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
+use super::super::{context::SimContext, init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
 use super::{sheet::SheetTracker, uniform::UniformGrid6D};
 use rayon::prelude::*;
 use std::any::Any;
@@ -271,21 +271,21 @@ impl PhaseSpaceRepr for HybridRepr {
     }
 
     /// Spatial drift: advance both sheet and grid, then update the interface mask.
-    fn advect_x(&mut self, displacement: &DisplacementField, dt: f64) {
+    fn advect_x(&mut self, displacement: &DisplacementField, ctx: &SimContext) {
         // Advect sheet particles everywhere (cheap, just x += v*dt)
-        self.sheet.advect_x(displacement, dt);
+        self.sheet.advect_x(displacement, ctx);
         // Advect grid in grid-mode cells
-        self.grid.advect_x(displacement, dt);
+        self.grid.advect_x(displacement, ctx);
         // Update interface after advection
         self.update_interface();
     }
 
     /// Velocity kick: advance both sheet and grid, then update the interface mask.
-    fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
+    fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext) {
         // Advect sheet particles everywhere (v += a*dt via trilinear interp)
-        self.sheet.advect_v(acceleration, dt);
+        self.sheet.advect_v(acceleration, ctx);
         // Advect grid in grid-mode cells
-        self.grid.advect_v(acceleration, dt);
+        self.grid.advect_v(acceleration, ctx);
         // Update interface after advection
         self.update_interface();
     }

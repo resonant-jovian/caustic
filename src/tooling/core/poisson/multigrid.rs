@@ -8,10 +8,9 @@
 //! Complexity: O(N³) work per V-cycle, O(N³ log(1/ε)) total for tolerance ε.
 
 use rayon::prelude::*;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::super::{
+    context::SimContext,
     init::domain::{Domain, SpatialBoundType},
     solver::PoissonSolver,
     types::*,
@@ -34,8 +33,6 @@ pub struct Multigrid {
     pub n_smooth: usize,
     /// Relative residual convergence tolerance for the iterative V-cycle loop.
     pub tolerance: f64,
-    /// Shared progress state for intra-phase reporting.
-    progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
 impl Multigrid {
@@ -78,7 +75,6 @@ impl Multigrid {
             bc,
             n_smooth: smoothing_steps,
             tolerance: 1e-10,
-            progress: None,
         }
     }
 }
@@ -488,24 +484,19 @@ fn l2_norm(v: &[f64]) -> f64 {
 }
 
 impl PoissonSolver for Multigrid {
-    /// Register a shared progress handle for intra-step reporting to the TUI.
-    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
-        self.progress = Some(p);
-    }
-
     /// Solve ∇²Φ = 4πGρ using multigrid V-cycles.
     ///
     /// Iterates V-cycles until the relative residual drops below `tolerance`
     /// or the maximum iteration count (100) is reached. For periodic BC, the
     /// mean of phi is subtracted after solving (since the solution is only
     /// determined up to a constant).
-    fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
+    fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
         let _span = tracing::info_span!("multigrid_solve").entered();
         let [nx, ny, nz] = self.shape;
         let n_total = nx * ny * nz;
 
         // Build RHS = 4πGρ (the Poisson equation is ∇²Φ = 4πGρ)
-        let four_pi_g = 4.0 * std::f64::consts::PI * g;
+        let four_pi_g = 4.0 * std::f64::consts::PI * ctx.g;
         let rhs: Vec<f64> = density.data.iter().map(|&r| four_pi_g * r).collect();
 
         let rhs_norm = l2_norm(&rhs);
@@ -515,9 +506,6 @@ impl PoissonSolver for Multigrid {
 
         let max_iter = 100u64;
         for _iter in 0..max_iter {
-            if let Some(ref p) = self.progress {
-                p.set_intra_progress(_iter, max_iter);
-            }
             v_cycle(
                 &mut phi,
                 &rhs,

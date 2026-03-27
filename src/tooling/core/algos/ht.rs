@@ -18,6 +18,7 @@
 //! the balanced tree has depth log₂(d) instead of d.
 
 use super::super::{
+    context::SimContext,
     init::domain::{Domain, SpatialBoundType, VelocityBoundType},
     phasespace::PhaseSpaceRepr,
     types::*,
@@ -94,8 +95,6 @@ pub struct HtTensor {
     pub max_rank: usize,
     /// Interpolation mode used in SLAR advection (advect_x / advect_v).
     pub interpolation_mode: InterpolationMode,
-    /// Shared progress state for intra-phase reporting to the TUI.
-    progress: Option<Arc<super::super::progress::StepProgress>>,
     /// Whether to enforce positivity after each advection step.
     pub positivity_limiter: bool,
     /// Velocity-space exponential filter configuration for filamentation control.

@@ -5,15 +5,12 @@
 //! rank growth to specific algorithmic phases.
 
 use std::collections::VecDeque;
-use std::sync::Arc;
-use std::time::Instant;
 
 use super::super::{
-    advecator::Advector,
+    context::SimContext,
     integrator::{StepProducts, StepTimings, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
-    progress::{StepPhase, StepProgress},
-    solver::PoissonSolver,
+    progress::StepPhase,
 };
 use super::helpers;
 use crate::CausticError;
@@ -176,19 +173,17 @@ pub struct InstrumentedStrangSplitting {
     /// The diagnostics from the most recent `advance()` call.
     pub last_diagnostics: StepRankDiagnostics,
     last_timings: StepTimings,
-    progress: Option<Arc<StepProgress>>,
     /// Ring buffer of the last `RANK_HISTORY_LEN` max-rank values for
     /// exponential growth rate estimation.
     rank_history: VecDeque<f64>,
 }
 
 impl InstrumentedStrangSplitting {
-    pub fn new(g: f64) -> Self {
+    pub fn new() -> Self {
         Self {
-            inner: super::strang::StrangSplitting::new(g),
+            inner: super::strang::StrangSplitting::new(),
             last_diagnostics: StepRankDiagnostics::default(),
             last_timings: StepTimings::default(),
-            progress: None,
             rank_history: VecDeque::with_capacity(RANK_HISTORY_LEN),
         }
     }
@@ -198,17 +193,14 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
     fn advance(
         &mut self,
         repr: &mut dyn PhaseSpaceRepr,
-        solver: &dyn PoissonSolver,
-        advector: &dyn Advector,
-        dt: f64,
+        ctx: &SimContext,
     ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("instrumented_strang_advance").entered();
         let mut timings = StepTimings::default();
+        let dt = ctx.dt;
 
-        if let Some(ref p) = self.progress {
-            p.start_step();
-        }
-        helpers::report_phase!(self.progress, StepPhase::DriftHalf1, 0, 5);
+        ctx.progress.start_step();
+        helpers::report_phase!(ctx, StepPhase::DriftHalf1, 0, 5);
 
         let mut diag = StepRankDiagnostics {
             pre_drift_ranks: extract_ranks(&*repr),
@@ -216,23 +208,23 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
         };
 
         // Drift half-step
-        helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / 2.0));
+        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
         diag.post_drift_ranks = extract_ranks(&*repr);
 
         // Poisson solve + kick
-        helpers::report_phase!(self.progress, StepPhase::PoissonSolve, 1, 5);
+        helpers::report_phase!(ctx, StepPhase::PoissonSolve, 1, 5);
         let (_density, _potential, accel) = helpers::time_ms!(
             timings,
             poisson_ms,
-            helpers::solve_poisson(repr, solver, self.inner.g)
+            helpers::solve_poisson(repr, ctx)
         );
-        helpers::report_phase!(self.progress, StepPhase::Kick, 2, 5);
-        helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, dt));
+        helpers::report_phase!(ctx, StepPhase::Kick, 2, 5);
+        helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(dt)));
         diag.post_kick_ranks = extract_ranks(&*repr);
 
         // Drift half-step
-        helpers::report_phase!(self.progress, StepPhase::DriftHalf2, 3, 5);
-        helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / 2.0));
+        helpers::report_phase!(ctx, StepPhase::DriftHalf2, 3, 5);
+        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
         diag.post_final_ranks = extract_ranks(&*repr);
 
         // Compute amplification ratios
@@ -291,12 +283,12 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
             }
         }
 
-        helpers::report_phase!(self.progress, StepPhase::StepComplete, 4, 5);
+        helpers::report_phase!(ctx, StepPhase::StepComplete, 4, 5);
 
         let (density, potential, acceleration) = helpers::time_ms!(
             timings,
             density_ms,
-            helpers::solve_poisson(repr, solver, self.inner.g)
+            helpers::solve_poisson(repr, ctx)
         );
 
         self.last_diagnostics = diag;
@@ -316,10 +308,6 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
     fn last_step_timings(&self) -> Option<&StepTimings> {
         Some(&self.last_timings)
     }
-
-    fn set_progress(&mut self, progress: Arc<StepProgress>) {
-        self.progress = Some(progress);
-    }
 }
 
 #[cfg(test)]
@@ -331,9 +319,11 @@ mod tests {
         // When repr is UniformGrid6D, all rank fields should be None
         use crate::tooling::core::algos::lagrangian::SemiLagrangian;
         use crate::tooling::core::algos::uniform::UniformGrid6D;
+        use crate::tooling::core::events::EventEmitter;
         use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
         use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
         use crate::tooling::core::poisson::fft::FftPoisson;
+        use crate::tooling::core::progress::StepProgress;
 
         let domain = Domain::builder()
             .spatial_extent(1.0)
@@ -354,10 +344,23 @@ mod tests {
 
         let poisson = FftPoisson::new(&domain);
         let advector = SemiLagrangian::new();
-        let mut integrator = InstrumentedStrangSplitting::new(1.0);
+        let emitter = EventEmitter::new();
+        let progress = StepProgress::new();
+        let mut integrator = InstrumentedStrangSplitting::new();
+
+        let ctx = SimContext {
+            solver: &poisson,
+            advector: &advector,
+            emitter: &emitter,
+            progress: &progress,
+            step: 0,
+            time: 0.0,
+            dt: 0.01,
+            g: 1.0,
+        };
 
         integrator
-            .advance(&mut grid, &poisson, &advector, 0.01)
+            .advance(&mut grid, &ctx)
             .unwrap();
 
         // UniformGrid6D is not HtTensor, so all rank fields should be None
@@ -393,8 +396,10 @@ mod tests {
         // nearly constant rank, giving a growth rate near zero.
         use crate::tooling::core::algos::ht::HtTensor;
         use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+        use crate::tooling::core::events::EventEmitter;
         use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
         use crate::tooling::core::poisson::fft::FftPoisson;
+        use crate::tooling::core::progress::StepProgress;
 
         let n = 4usize;
         let domain = Domain::builder()
@@ -436,13 +441,25 @@ mod tests {
         ht.max_rank = 16;
         let poisson = FftPoisson::new(&domain);
         let advector = SemiLagrangian::new();
-        let mut integrator = InstrumentedStrangSplitting::new(1.0);
+        let emitter = EventEmitter::new();
+        let progress = StepProgress::new();
+        let mut integrator = InstrumentedStrangSplitting::new();
 
         // Run enough steps to populate the rank history (>= 3)
         let dt = 0.001;
         for _ in 0..5 {
+            let ctx = SimContext {
+                solver: &poisson,
+                advector: &advector,
+                emitter: &emitter,
+                progress: &progress,
+                step: 0,
+                time: 0.0,
+                dt,
+                g: 1.0,
+            };
             integrator
-                .advance(&mut ht, &poisson, &advector, dt)
+                .advance(&mut ht, &ctx)
                 .unwrap();
         }
 
@@ -469,8 +486,10 @@ mod tests {
         // on the tiny 4^6 grid.
         use crate::tooling::core::algos::ht::HtTensor;
         use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+        use crate::tooling::core::events::EventEmitter;
         use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
         use crate::tooling::core::poisson::fft::FftPoisson;
+        use crate::tooling::core::progress::StepProgress;
 
         let n = 4usize;
         let domain = Domain::builder()
@@ -517,11 +536,24 @@ mod tests {
         ht.max_rank = 16;
         let poisson = FftPoisson::new(&domain);
         let advector = SemiLagrangian::new();
+        let emitter = EventEmitter::new();
+        let progress = StepProgress::new();
         // G = 0: pure free streaming, no Poisson kick — keeps frames well-conditioned
-        let mut integrator = InstrumentedStrangSplitting::new(0.0);
+        let mut integrator = InstrumentedStrangSplitting::new();
+
+        let ctx = SimContext {
+            solver: &poisson,
+            advector: &advector,
+            emitter: &emitter,
+            progress: &progress,
+            step: 0,
+            time: 0.0,
+            dt: 0.001,
+            g: 0.0,
+        };
 
         integrator
-            .advance(&mut ht, &poisson, &advector, 0.001)
+            .advance(&mut ht, &ctx)
             .unwrap();
 
         let diag = &integrator.last_diagnostics;

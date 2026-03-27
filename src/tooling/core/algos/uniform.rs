@@ -29,6 +29,7 @@
 //! should match its semantics and can be validated against it.
 
 use super::super::{
+    context::SimContext,
     init::domain::{Domain, SpatialBoundType, VelocityBoundType},
     phasespace::PhaseSpaceRepr,
     types::*,
@@ -42,7 +43,6 @@ use rustfft::{Fft, FftPlanner};
 use std::any::Any;
 use std::cell::RefCell;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Velocity-space exponential filter configuration.
 #[derive(Clone, Copy, Debug)]
@@ -107,7 +107,6 @@ pub struct UniformGrid6D {
     advection_scheme: AdvectionScheme,
     positivity_limiter: bool,
     velocity_filter: Option<VelocityFilterConfig>,
-    progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
 struct CachedGrid {
@@ -158,7 +157,6 @@ impl UniformGrid6D {
             advection_scheme: AdvectionScheme::default(),
             positivity_limiter: false,
             velocity_filter: None,
-            progress: None,
         }
     }
 
@@ -187,7 +185,6 @@ impl UniformGrid6D {
             advection_scheme: AdvectionScheme::default(),
             positivity_limiter: false,
             velocity_filter: None,
-            progress: None,
         }
     }
 
@@ -399,11 +396,6 @@ fn filter_pencils_dim2(
 }
 
 impl PhaseSpaceRepr for UniformGrid6D {
-    /// Store an `Arc<StepProgress>` for intra-step progress reporting to the TUI.
-    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
-        self.progress = Some(p);
-    }
-
     /// Sum over the contiguous velocity block at each spatial cell (parallel over spatial cells).
     fn compute_density(&self) -> DensityField {
         let _span = tracing::info_span!("compute_density").entered();
@@ -413,20 +405,11 @@ impl PhaseSpaceRepr for UniformGrid6D {
 
         let n_spatial = nx1 * nx2 * nx3;
         let n_vel = nv1 * nv2 * nv3;
-        let counter = AtomicU64::new(0);
-        let report_interval = (n_spatial / 100).max(1) as u64;
         let data: Vec<f64> = (0..n_spatial)
             .into_par_iter()
             .map(|si| {
                 let base = si * n_vel;
-                let result = self.data[base..base + n_vel].iter().sum::<f64>() * dv3;
-                if let Some(ref p) = self.progress {
-                    let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c.is_multiple_of(report_interval) {
-                        p.set_intra_progress(c, n_spatial as u64);
-                    }
-                }
-                result
+                self.data[base..base + n_vel].iter().sum::<f64>() * dv3
             })
             .collect();
 
@@ -441,9 +424,9 @@ impl PhaseSpaceRepr for UniformGrid6D {
     /// Transposes data to group spatial pencils by velocity cell, applies 1D
     /// shifts (Catmull-Rom, WPFC, or MP7) along each spatial axis in sequence,
     /// then transposes back. Parallel over velocity cells via rayon.
-    fn advect_x(&mut self, _displacement: &DisplacementField, dt: f64) {
+    fn advect_x(&mut self, _displacement: &DisplacementField, ctx: &SimContext) {
         let _span = tracing::info_span!("advect_x").entered();
-        let progress = self.progress.clone();
+        let dt = ctx.dt;
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
         let dx = self.cached_dx;
         let dv = self.cached_dv;
@@ -463,9 +446,6 @@ impl PhaseSpaceRepr for UniformGrid6D {
         std::mem::swap(&mut self.data, &mut self.scratch);
         let src = std::mem::take(&mut self.scratch);
         let mut intermediates = std::mem::take(&mut self.data);
-
-        let counter = AtomicU64::new(0);
-        let report_interval = (n_vel / 100).max(1) as u64;
 
         intermediates
             .par_chunks_mut(n_sp)
@@ -564,13 +544,6 @@ impl PhaseSpaceRepr for UniformGrid6D {
                 if positivity {
                     zhang_shu_limiter(local, 0.0);
                 }
-
-                if let Some(ref p) = progress {
-                    let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c.is_multiple_of(report_interval) {
-                        p.set_intra_progress(c, n_vel as u64);
-                    }
-                }
             });
 
         // Parallel transpose: intermediates[vi * n_sp + si] → new_data[si * n_vel + vi]
@@ -594,9 +567,9 @@ impl PhaseSpaceRepr for UniformGrid6D {
     /// along v1, v2, v3 using the selected 1D interpolation scheme. Parallel
     /// over spatial cells. Applies velocity-space exponential filter afterwards
     /// if configured.
-    fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
+    fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext) {
         let _span = tracing::info_span!("advect_v").entered();
-        let progress = self.progress.clone();
+        let dt = ctx.dt;
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
         let dv = self.cached_dv;
         let lv = self.cached_lv;
@@ -612,9 +585,6 @@ impl PhaseSpaceRepr for UniformGrid6D {
         std::mem::swap(&mut self.data, &mut self.scratch);
         let src = std::mem::take(&mut self.scratch);
         let mut result = std::mem::take(&mut self.data);
-
-        let counter = AtomicU64::new(0);
-        let report_interval = (n_sp / 100).max(1) as u64;
 
         result
             .par_chunks_mut(n_vel)
@@ -707,13 +677,6 @@ impl PhaseSpaceRepr for UniformGrid6D {
 
                 if positivity {
                     zhang_shu_limiter(local, 0.0);
-                }
-
-                if let Some(ref p) = progress {
-                    let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c.is_multiple_of(report_interval) {
-                        p.set_intra_progress(c, n_sp as u64);
-                    }
                 }
             });
 

@@ -8,14 +8,11 @@
 //! difference between a Lie step and a Strang step provides a local truncation
 //! error estimate. Also useful as a baseline for convergence comparisons.
 
-use std::sync::Arc;
-
 use super::super::{
-    advecator::Advector,
+    context::SimContext,
     integrator::{StepProducts, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
-    progress::{StepPhase, StepProgress},
-    solver::PoissonSolver,
+    progress::StepPhase,
     types::*,
 };
 use super::helpers;
@@ -25,17 +22,12 @@ use crate::CausticError;
 ///
 /// Not symplectic. Mainly used as a cheap error estimator for adaptive methods
 /// or as a convergence baseline.
-pub struct LieSplitting {
-    /// Gravitational constant G used in the Poisson solve.
-    pub g: f64,
-    /// Optional lock-free progress reporter for TUI sub-step tracking.
-    progress: Option<Arc<StepProgress>>,
-}
+pub struct LieSplitting;
 
 impl LieSplitting {
-    /// Creates a Lie splitting integrator with the given gravitational constant.
-    pub fn new(g: f64) -> Self {
-        Self { g, progress: None }
+    /// Creates a Lie splitting integrator.
+    pub fn new() -> Self {
+        Self
     }
 }
 
@@ -43,39 +35,34 @@ impl TimeIntegrator for LieSplitting {
     fn advance(
         &mut self,
         repr: &mut dyn PhaseSpaceRepr,
-        solver: &dyn PoissonSolver,
-        advector: &dyn Advector,
-        dt: f64,
+        ctx: &SimContext,
     ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("lie_advance").entered();
+        let dt = ctx.dt;
 
-        if let Some(ref p) = self.progress {
-            p.start_step();
-            p.set_phase(StepPhase::DriftHalf1);
-            p.set_sub_step(0, 2);
-        }
+        ctx.progress.start_step();
+        ctx.progress.set_phase(StepPhase::DriftHalf1);
+        ctx.progress.set_sub_step(0, 2);
 
         // 1. Drift full step
-        advector.drift(repr, dt);
+        ctx.advector.drift(repr, &ctx.with_dt(dt));
 
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::Kick);
-            p.set_sub_step(1, 2);
-        }
+        ctx.progress.set_phase(StepPhase::Kick);
+        ctx.progress.set_sub_step(1, 2);
 
         // 2. Compute density → Poisson → acceleration → kick full step
         let density = repr.compute_density();
-        let potential = solver.solve(&density, self.g);
-        let accel = solver.compute_acceleration(&potential);
-        advector.kick(repr, &accel, dt);
+        let potential = ctx.solver.solve(&density, ctx);
+        let accel = ctx.solver.compute_acceleration(&potential);
+        ctx.advector.kick(repr, &accel, &ctx.with_dt(dt));
 
         // Apply hypercollision damping if the representation is SpectralV
         helpers::apply_hypercollision_if_spectral(repr, dt);
 
         // Compute end-of-step products for caller reuse
         let density = repr.compute_density();
-        let potential = solver.solve(&density, self.g);
-        let acceleration = solver.compute_acceleration(&potential);
+        let potential = ctx.solver.solve(&density, ctx);
+        let acceleration = ctx.solver.compute_acceleration(&potential);
 
         Ok(StepProducts {
             density,
@@ -85,10 +72,6 @@ impl TimeIntegrator for LieSplitting {
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
-        helpers::dynamical_timestep(repr, self.g, cfl_factor)
-    }
-
-    fn set_progress(&mut self, progress: Arc<StepProgress>) {
-        self.progress = Some(progress);
+        helpers::dynamical_timestep(repr, 1.0, cfl_factor)
     }
 }

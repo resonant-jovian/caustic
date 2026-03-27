@@ -11,7 +11,7 @@
 //! advects along the r and v_r dimensions. The centrifugal pseudo-force
 //! L^2 / r^3 is included in the velocity kick sub-step.
 
-use super::super::{init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
+use super::super::{context::SimContext, init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
 use std::any::Any;
 
 /// Spherically symmetric phase-space representation on a (r, v_r, L) grid.
@@ -91,8 +91,6 @@ impl SphericalRepr {
 }
 
 impl PhaseSpaceRepr for SphericalRepr {
-    fn set_progress(&mut self, _p: std::sync::Arc<super::super::progress::StepProgress>) {}
-
     /// Compute spherically averaged density rho(r) by integrating f over v_r and L.
     fn compute_density(&self) -> DensityField {
         // Compute spherically averaged density rho(r) = integral f dv_r dL * 4*pi*r^2
@@ -118,7 +116,8 @@ impl PhaseSpaceRepr for SphericalRepr {
     }
 
     /// Radial drift sub-step: semi-Lagrangian shift along r with dr/dt = v_r.
-    fn advect_x(&mut self, _displacement: &DisplacementField, dt: f64) {
+    fn advect_x(&mut self, _displacement: &DisplacementField, ctx: &SimContext) {
+        let dt = ctx.dt;
         // Radial advection: dr/dt = v_r
         let [nr, nv, nl] = self.shape;
         let src = self.data.clone();
@@ -151,7 +150,8 @@ impl PhaseSpaceRepr for SphericalRepr {
 
     /// Velocity kick sub-step: semi-Lagrangian shift along v_r with
     /// dv_r/dt = -dPhi/dr + L^2/r^3 (gravitational + centrifugal acceleration).
-    fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
+    fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext) {
+        let dt = ctx.dt;
         // Velocity kick: dv_r/dt = -dPhi/dr + L^2/(r^3)
         let [nr, nv, nl] = self.shape;
         let src = self.data.clone();

@@ -5,8 +5,8 @@
 //! progress reporting, and SpectralV hypercollision dispatch.
 
 use super::super::{
+    context::SimContext,
     phasespace::PhaseSpaceRepr,
-    solver::PoissonSolver,
     types::{AccelerationField, DensityField, PotentialField},
 };
 
@@ -36,12 +36,11 @@ pub fn dynamical_timestep(repr: &dyn PhaseSpaceRepr, g: f64, cfl_factor: f64) ->
 /// three fields so the caller can use them for diagnostics and conservation.
 pub fn solve_poisson(
     repr: &dyn PhaseSpaceRepr,
-    solver: &dyn PoissonSolver,
-    g: f64,
+    ctx: &SimContext,
 ) -> (DensityField, PotentialField, AccelerationField) {
     let density = repr.compute_density();
-    let potential = solver.solve(&density, g);
-    let acceleration = solver.compute_acceleration(&potential);
+    let potential = ctx.solver.solve(&density, ctx);
+    let acceleration = ctx.solver.compute_acceleration(&potential);
     (density, potential, acceleration)
 }
 
@@ -72,14 +71,12 @@ macro_rules! time_ms {
 
 /// Report integrator phase and sub-step progress to the TUI.
 ///
-/// No-op if progress is `None`. Usage:
-/// `report_phase!(self.progress, StepPhase::DriftHalf1, 0, 5);`
+/// Usage:
+/// `report_phase!(ctx, StepPhase::DriftHalf1, 0, 5);`
 macro_rules! report_phase {
-    ($progress:expr, $phase:expr, $step:expr, $total:expr) => {
-        if let Some(p) = &$progress {
-            p.set_phase($phase);
-            p.set_sub_step($step, $total);
-        }
+    ($ctx:expr, $phase:expr, $step:expr, $total:expr) => {
+        $ctx.progress.set_phase($phase);
+        $ctx.progress.set_sub_step($step, $total);
     };
 }
 
