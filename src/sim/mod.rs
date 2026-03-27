@@ -11,7 +11,7 @@ use crate::tooling::core::{
     conservation::lomac::LoMaC,
     context::SimContext,
     diagnostics::{Diagnostics, GlobalDiagnostics},
-    events::EventEmitter,
+    events::{EventEmitter, SimEvent},
     init::{domain::Domain, input::optional::OptionalParams},
     integrator::{StepTimings, TimeIntegrator},
     io::{IOManager, OutputFormat},
@@ -101,6 +101,11 @@ impl Simulation {
                         });
                 let history = self.diagnostics.history.clone();
                 let wall_secs = self.start_time.elapsed().as_secs_f64();
+                self.emitter.emit(SimEvent::SimComplete {
+                    reason,
+                    total_steps: self.step,
+                    wall_secs,
+                });
                 return Ok(ExitPackage::assemble(
                     snapshot,
                     history,
@@ -116,6 +121,7 @@ impl Simulation {
 
     /// Advance by a single timestep. Returns `Some(reason)` if the simulation should stop.
     pub fn step(&mut self) -> anyhow::Result<Option<ExitReason>> {
+        let step_start = std::time::Instant::now();
         let cfl_factor = self.opts.cfl_factor_f64();
 
         // Use cached ρ_max from previous step to avoid redundant compute_density().
@@ -147,6 +153,13 @@ impl Simulation {
 
         tracing::debug!(dt, step = self.step, time = self.time, "Simulation::step dt");
 
+        self.emitter.emit(SimEvent::TimestepComputed {
+            dt,
+            constraint: crate::tooling::core::events::TimestepConstraint::Dynamical,
+            rho_max: 0.0,
+            cfl_factor,
+        });
+
         let ctx = SimContext {
             solver: &*self.poisson,
             advector: &*self.advector,
@@ -157,6 +170,12 @@ impl Simulation {
             dt,
             g: self.g,
         };
+
+        self.emitter.emit(SimEvent::StepStarted {
+            step: self.step,
+            time: self.time,
+            dt,
+        });
 
         let products = self.integrator.advance(&mut *self.repr, &ctx)?;
 
@@ -302,6 +321,8 @@ impl Simulation {
         );
         timings.diagnostics_ms += t0.elapsed().as_secs_f64() * 1000.0;
 
+        self.emitter.emit(SimEvent::DiagnosticsComputed(Box::new(diag)));
+
         self.last_step_timings = timings;
 
         // Cache density, potential, and acceleration for TUI reuse
@@ -313,7 +334,19 @@ impl Simulation {
 
         self.progress.set_phase(StepPhase::StepComplete);
 
-        Ok(self.exit_evaluator.check(&diag, &ctx))
+        let exit_result = self.exit_evaluator.check(&diag, &ctx);
+        if let Some(reason) = exit_result {
+            self.emitter.emit(SimEvent::ExitTriggered { reason });
+        }
+
+        self.emitter.emit(SimEvent::StepComplete {
+            step: self.step - 1,
+            dt,
+            wall_ms: step_start.elapsed().as_secs_f64() * 1000.0,
+            timings: self.last_step_timings.clone(),
+        });
+
+        Ok(exit_result)
     }
 
     /// Attach shared progress state for intra-step TUI visibility.

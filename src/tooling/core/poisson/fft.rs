@@ -11,7 +11,7 @@
 //! across solves, avoiding redundant plan creation on each call. Scratch buffers
 //! are similarly cached behind a `Mutex` to eliminate per-call heap allocations.
 
-use super::super::{context::SimContext, init::domain::Domain, solver::PoissonSolver, types::*};
+use super::super::{context::SimContext, events::{SimEvent, SolverKind}, init::domain::Domain, solver::PoissonSolver, types::*};
 use rayon::prelude::*;
 use realfft::RealFftPlanner;
 use rustfft::{FftPlanner, num_complex::Complex};
@@ -287,6 +287,7 @@ impl PoissonSolver for FftPoisson {
     /// Forward-transforms rho (R2C), divides by -k^2 in Fourier space (zeroing the DC
     /// mode to remove the mean), and inverse-transforms (C2R) to obtain the potential.
     fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
+        let t0 = std::time::Instant::now();
         let _span = tracing::info_span!("fft_poisson_solve").entered();
         use std::f64::consts::PI;
         let [nx, ny, nz] = self.shape;
@@ -325,10 +326,15 @@ impl PoissonSolver for FftPoisson {
         let inv_n = 1.0 / (nx * ny * nz) as f64;
         phi.par_iter_mut().for_each(|v| *v *= inv_n);
 
-        PotentialField {
+        let result = PotentialField {
             data: phi,
             shape: density.shape,
-        }
+        };
+        ctx.emitter.emit(SimEvent::PoissonSolveComplete {
+            solver: SolverKind::Fft,
+            wall_us: t0.elapsed().as_micros() as u64,
+        });
+        result
     }
 
     /// Compute the gravitational acceleration g = -grad(Phi) via spectral differentiation.
@@ -521,6 +527,7 @@ impl PoissonSolver for FftIsolated {
     /// Zero-pads rho into (2N)^3, forward-FFTs, multiplies pointwise with the cached
     /// Green's function, inverse-FFTs, and extracts the N^3 physical sub-grid.
     fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
+        let t0 = std::time::Instant::now();
         let _span = tracing::info_span!("fft_isolated_solve").entered();
         use std::f64::consts::PI;
         let [nx, ny, nz] = self.shape;
@@ -588,10 +595,15 @@ impl PoissonSolver for FftIsolated {
             }
         });
 
-        PotentialField {
+        let result = PotentialField {
             data: phi,
             shape: density.shape,
-        }
+        };
+        ctx.emitter.emit(SimEvent::PoissonSolveComplete {
+            solver: SolverKind::FftIsolated,
+            wall_us: t0.elapsed().as_micros() as u64,
+        });
+        result
     }
 
     /// Compute gravitational acceleration via second-order centered finite differences.

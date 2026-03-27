@@ -3,6 +3,7 @@
 
 use super::context::SimContext;
 use super::diagnostics::GlobalDiagnostics;
+use super::events::{ExitConditionKind, SimEvent};
 use std::cell::Cell;
 
 /// Reason why the simulation terminated.
@@ -74,7 +75,19 @@ pub struct TimeLimitCondition {
 }
 
 impl ExitCondition for TimeLimitCondition {
-    fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, _ctx: &SimContext) -> Option<ExitReason> {
+    fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, ctx: &SimContext) -> Option<ExitReason> {
+        let fraction = if self.t_final > 0.0 {
+            (diag.time / self.t_final).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        ctx.emitter.emit(SimEvent::ExitConditionStatus {
+            condition: ExitConditionKind::TimeLimit,
+            current_value: diag.time,
+            threshold: self.t_final,
+            fraction_to_threshold: fraction,
+        });
+
         if diag.time >= self.t_final {
             Some(ExitReason::TimeLimitReached)
         } else {
@@ -96,7 +109,25 @@ pub struct EnergyDriftCondition {
 }
 
 impl ExitCondition for EnergyDriftCondition {
-    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics, _ctx: &SimContext) -> Option<ExitReason> {
+    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics, ctx: &SimContext) -> Option<ExitReason> {
+        let ref_val = initial.total_energy.abs();
+        let relative_drift = if ref_val > 1e-30 {
+            (diag.total_energy - initial.total_energy).abs() / ref_val
+        } else {
+            0.0
+        };
+        let fraction = if self.tolerance > 0.0 {
+            (relative_drift / self.tolerance).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        ctx.emitter.emit(SimEvent::ExitConditionStatus {
+            condition: ExitConditionKind::EnergyDrift,
+            current_value: relative_drift,
+            threshold: self.tolerance,
+            fraction_to_threshold: fraction,
+        });
+
         exceeds_relative_drift(diag.total_energy, initial.total_energy, self.tolerance)
             .then_some(ExitReason::EnergyDrift)
     }
@@ -109,9 +140,24 @@ pub struct MassLossCondition {
 }
 
 impl ExitCondition for MassLossCondition {
-    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics, _ctx: &SimContext) -> Option<ExitReason> {
+    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics, ctx: &SimContext) -> Option<ExitReason> {
         let m0 = initial.mass_in_box.abs();
-        if m0 > 1e-30 && diag.mass_in_box / m0 < self.threshold {
+        let mass_fraction = if m0 > 1e-30 { diag.mass_in_box / m0 } else { 1.0 };
+        let relative_change = (1.0 - mass_fraction).abs();
+        let loss_threshold = (1.0 - self.threshold).abs();
+        let fraction = if loss_threshold > 0.0 {
+            (relative_change / loss_threshold).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        ctx.emitter.emit(SimEvent::ExitConditionStatus {
+            condition: ExitConditionKind::MassLoss,
+            current_value: relative_change,
+            threshold: loss_threshold,
+            fraction_to_threshold: fraction,
+        });
+
+        if m0 > 1e-30 && mass_fraction < self.threshold {
             Some(ExitReason::MassLoss)
         } else {
             None
@@ -126,7 +172,25 @@ pub struct CasimirDriftCondition {
 }
 
 impl ExitCondition for CasimirDriftCondition {
-    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics, _ctx: &SimContext) -> Option<ExitReason> {
+    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics, ctx: &SimContext) -> Option<ExitReason> {
+        let ref_val = initial.casimir_c2.abs();
+        let relative_drift = if ref_val > 1e-30 {
+            (diag.casimir_c2 - initial.casimir_c2).abs() / ref_val
+        } else {
+            0.0
+        };
+        let fraction = if self.tolerance > 0.0 {
+            (relative_drift / self.tolerance).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        ctx.emitter.emit(SimEvent::ExitConditionStatus {
+            condition: ExitConditionKind::CasimirDrift,
+            current_value: relative_drift,
+            threshold: self.tolerance,
+            fraction_to_threshold: fraction,
+        });
+
         exceeds_relative_drift(diag.casimir_c2, initial.casimir_c2, self.tolerance)
             .then_some(ExitReason::CasimirDrift)
     }
@@ -150,8 +214,21 @@ impl WallClockCondition {
 }
 
 impl ExitCondition for WallClockCondition {
-    fn check(&self, _diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, _ctx: &SimContext) -> Option<ExitReason> {
-        if self.start.elapsed().as_secs_f64() > self.limit_secs {
+    fn check(&self, _diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, ctx: &SimContext) -> Option<ExitReason> {
+        let elapsed = self.start.elapsed().as_secs_f64();
+        let fraction = if self.limit_secs > 0.0 {
+            (elapsed / self.limit_secs).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        ctx.emitter.emit(SimEvent::ExitConditionStatus {
+            condition: ExitConditionKind::WallClock,
+            current_value: elapsed,
+            threshold: self.limit_secs,
+            fraction_to_threshold: fraction,
+        });
+
+        if elapsed > self.limit_secs {
             Some(ExitReason::WallClockLimit)
         } else {
             None
@@ -178,7 +255,7 @@ impl SteadyStateCondition {
 }
 
 impl ExitCondition for SteadyStateCondition {
-    fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, _ctx: &SimContext) -> Option<ExitReason> {
+    fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, ctx: &SimContext) -> Option<ExitReason> {
         let current = diag.entropy;
         if let Some(prev) = self.prev_entropy.get() {
             let dt = diag.time; // Approximate: use absolute time as proxy
@@ -188,6 +265,21 @@ impl ExitCondition for SteadyStateCondition {
                 f64::MAX
             };
             self.prev_entropy.set(Some(current));
+
+            // Fraction is inverted: rate < threshold means steady state,
+            // so fraction_to_threshold = 1.0 when rate has dropped to threshold.
+            let fraction = if rate < f64::MAX && self.threshold > 0.0 {
+                (1.0 - (rate / self.threshold).min(1.0)).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            ctx.emitter.emit(SimEvent::ExitConditionStatus {
+                condition: ExitConditionKind::SteadyState,
+                current_value: rate,
+                threshold: self.threshold,
+                fraction_to_threshold: fraction,
+            });
+
             if rate < self.threshold {
                 return Some(ExitReason::SteadyState);
             }
@@ -245,13 +337,29 @@ impl VirialRelaxedCondition {
 }
 
 impl ExitCondition for VirialRelaxedCondition {
-    fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, _ctx: &SimContext) -> Option<ExitReason> {
+    fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, ctx: &SimContext) -> Option<ExitReason> {
         let count = self.step_count.get();
         self.step_count.set(count + 1);
+
+        let virial_deviation = (diag.virial_ratio - 1.0).abs();
+        // Fraction is inverted: deviation < tolerance means virial equilibrium,
+        // so fraction_to_threshold = 1.0 when deviation has dropped to tolerance.
+        let fraction = if self.tolerance > 0.0 {
+            (1.0 - (virial_deviation / self.tolerance).min(1.0)).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        ctx.emitter.emit(SimEvent::ExitConditionStatus {
+            condition: ExitConditionKind::VirialRelaxed,
+            current_value: virial_deviation,
+            threshold: self.tolerance,
+            fraction_to_threshold: fraction,
+        });
+
         if count < self.min_steps {
             return None;
         }
-        if (diag.virial_ratio - 1.0).abs() < self.tolerance {
+        if virial_deviation < self.tolerance {
             Some(ExitReason::VirialRelaxed)
         } else {
             None

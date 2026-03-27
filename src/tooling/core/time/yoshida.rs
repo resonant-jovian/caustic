@@ -13,6 +13,7 @@
 
 use super::super::{
     context::SimContext,
+    events::SimEvent,
     integrator::{StepProducts, StepTimings, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
     progress::StepPhase,
@@ -31,6 +32,7 @@ const YOSHIDA_W0: f64 = -1.7024143839193153;
 ///
 /// Composes 7 sub-steps (4 drifts, 3 kicks with Poisson solves) using the Yoshida (1990)
 /// triple-jump coefficients to achieve O(dt^4) accuracy while preserving symplecticity.
+#[derive(Default)]
 pub struct YoshidaSplitting {
     /// Timing breakdown from the most recent step (drift, kick, Poisson, density).
     last_timings: StepTimings,
@@ -67,6 +69,7 @@ impl TimeIntegrator for YoshidaSplitting {
 
         // Substep 1: drift w1·dt/2
         helpers::report_phase!(ctx, StepPhase::YoshidaDrift1, 0, 7);
+        ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::YoshidaDrift1, step: ctx.step });
         {
             let _s = tracing::info_span!("yoshida_drift_1").entered();
             helpers::time_ms!(
@@ -78,6 +81,7 @@ impl TimeIntegrator for YoshidaSplitting {
 
         // Substep 2: kick w1·dt
         helpers::report_phase!(ctx, StepPhase::YoshidaKick1, 1, 7);
+        ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::YoshidaKick1, step: ctx.step });
         {
             let _s = tracing::info_span!("yoshida_kick_1").entered();
             let (_density, _potential, accel) = helpers::time_ms!(
@@ -97,6 +101,7 @@ impl TimeIntegrator for YoshidaSplitting {
 
         // Substep 3: drift (w1+w0)·dt/2
         helpers::report_phase!(ctx, StepPhase::YoshidaDrift2, 2, 7);
+        ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::YoshidaDrift2, step: ctx.step });
         {
             let _s = tracing::info_span!("yoshida_drift_2").entered();
             helpers::time_ms!(
@@ -108,6 +113,7 @@ impl TimeIntegrator for YoshidaSplitting {
 
         // Substep 4: kick w0·dt
         helpers::report_phase!(ctx, StepPhase::YoshidaKick2, 3, 7);
+        ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::YoshidaKick2, step: ctx.step });
         {
             let _s = tracing::info_span!("yoshida_kick_2").entered();
             let (_density, _potential, accel) = helpers::time_ms!(
@@ -127,6 +133,7 @@ impl TimeIntegrator for YoshidaSplitting {
 
         // Substep 5: drift (w0+w1)·dt/2
         helpers::report_phase!(ctx, StepPhase::YoshidaDrift3, 4, 7);
+        ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::YoshidaDrift3, step: ctx.step });
         {
             let _s = tracing::info_span!("yoshida_drift_3").entered();
             helpers::time_ms!(
@@ -138,6 +145,7 @@ impl TimeIntegrator for YoshidaSplitting {
 
         // Substep 6: kick w1·dt
         helpers::report_phase!(ctx, StepPhase::YoshidaKick3, 5, 7);
+        ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::YoshidaKick3, step: ctx.step });
         {
             let _s = tracing::info_span!("yoshida_kick_3").entered();
             let (_density, _potential, accel) = helpers::time_ms!(
@@ -157,6 +165,7 @@ impl TimeIntegrator for YoshidaSplitting {
 
         // Substep 7: drift w1·dt/2
         helpers::report_phase!(ctx, StepPhase::YoshidaDrift4, 6, 7);
+        ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::YoshidaDrift4, step: ctx.step });
         {
             let _s = tracing::info_span!("yoshida_drift_4").entered();
             helpers::time_ms!(

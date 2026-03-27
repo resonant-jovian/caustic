@@ -11,6 +11,7 @@
 
 use super::super::{
     context::SimContext,
+    events::SimEvent,
     integrator::{StepProducts, StepTimings, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
     progress::StepPhase,
@@ -23,6 +24,7 @@ use crate::CausticError;
 ///
 /// Executes drift(dt/2) -> Poisson solve -> kick(dt) -> drift(dt/2) each step.
 /// After the kick, applies hypercollision damping when the representation is `SpectralV`.
+#[derive(Default)]
 pub struct StrangSplitting {
     /// Timing breakdown from the most recent step (drift, kick, Poisson, density).
     last_timings: StepTimings,
@@ -53,6 +55,7 @@ impl TimeIntegrator for StrangSplitting {
 
         ctx.progress.start_step();
         helpers::report_phase!(ctx, StepPhase::DriftHalf1, 0, 5);
+        ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::DriftHalf1, step: ctx.step });
 
         {
             let _s = tracing::info_span!("drift_half").entered();
@@ -60,6 +63,7 @@ impl TimeIntegrator for StrangSplitting {
         }
 
         helpers::report_phase!(ctx, StepPhase::PoissonSolve, 1, 5);
+        ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::PoissonSolve, step: ctx.step });
 
         let accel = {
             let _s = tracing::info_span!("poisson_solve").entered();
@@ -73,6 +77,7 @@ impl TimeIntegrator for StrangSplitting {
         };
 
         helpers::report_phase!(ctx, StepPhase::Kick, 2, 5);
+        ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::Kick, step: ctx.step });
 
         {
             let _s = tracing::info_span!("kick").entered();
@@ -83,6 +88,7 @@ impl TimeIntegrator for StrangSplitting {
         helpers::apply_hypercollision_if_spectral(repr, dt);
 
         helpers::report_phase!(ctx, StepPhase::DriftHalf2, 3, 5);
+        ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::DriftHalf2, step: ctx.step });
 
         {
             let _s = tracing::info_span!("drift_half").entered();
@@ -90,6 +96,7 @@ impl TimeIntegrator for StrangSplitting {
         }
 
         helpers::report_phase!(ctx, StepPhase::StepComplete, 4, 5);
+        ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::StepComplete, step: ctx.step });
 
         // Compute end-of-step products for caller reuse
         let (density, potential, acceleration) = helpers::time_ms!(

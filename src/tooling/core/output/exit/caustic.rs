@@ -4,6 +4,7 @@ use super::super::super::{
     conditions::{ExitCondition, ExitReason},
     context::SimContext,
     diagnostics::GlobalDiagnostics,
+    events::{ExitConditionKind, SimEvent},
 };
 
 /// Exit when the first caustic forms (max stream count > 1).
@@ -22,8 +23,21 @@ pub struct VirialRelaxedExit {
 }
 
 impl ExitCondition for VirialRelaxedExit {
-    fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, _ctx: &SimContext) -> Option<ExitReason> {
-        if (diag.virial_ratio - 1.0).abs() < self.tolerance {
+    fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, ctx: &SimContext) -> Option<ExitReason> {
+        let virial_deviation = (diag.virial_ratio - 1.0).abs();
+        let fraction = if self.tolerance > 0.0 {
+            (1.0 - (virial_deviation / self.tolerance).min(1.0)).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        ctx.emitter.emit(SimEvent::ExitConditionStatus {
+            condition: ExitConditionKind::VirialRelaxed,
+            current_value: virial_deviation,
+            threshold: self.tolerance,
+            fraction_to_threshold: fraction,
+        });
+
+        if virial_deviation < self.tolerance {
             Some(ExitReason::VirialRelaxed)
         } else {
             None

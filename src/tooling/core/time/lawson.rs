@@ -32,6 +32,7 @@ use crate::CausticError;
 ///
 /// Wraps each step in a Strang-style drift/2 -- RK4 kick -- drift/2 sequence,
 /// where the drift is solved exactly and the kick uses four Poisson solves.
+#[derive(Default)]
 pub struct LawsonRkIntegrator {
     last_timings: StepTimings,
 }

@@ -38,6 +38,7 @@ const YOSHIDA_W0: f64 = -1.7024143839193153;
 /// Higher accuracy than Yoshida alone (4th-order), at the cost of 3x
 /// the sub-steps per time step. Useful when very tight energy conservation
 /// is required or when large time steps are desirable.
+#[derive(Default)]
 pub struct Rkn6Splitting {
     /// Timing breakdown from the most recent `advance` call.
     last_timings: StepTimings,

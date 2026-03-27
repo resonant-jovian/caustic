@@ -168,6 +168,7 @@ fn compute_growth_rate(history: &VecDeque<f64>) -> Option<f64> {
 }
 
 /// Instrumented version of `StrangSplitting` that records per-sub-step ranks and timings.
+#[derive(Default)]
 pub struct InstrumentedStrangSplitting {
     pub inner: super::strang::StrangSplitting,
     /// The diagnostics from the most recent `advance()` call.

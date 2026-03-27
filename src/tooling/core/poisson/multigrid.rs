@@ -11,6 +11,7 @@ use rayon::prelude::*;
 
 use super::super::{
     context::SimContext,
+    events::{SimEvent, SolverKind},
     init::domain::{Domain, SpatialBoundType},
     solver::PoissonSolver,
     types::*,
@@ -491,6 +492,7 @@ impl PoissonSolver for Multigrid {
     /// mean of phi is subtracted after solving (since the solution is only
     /// determined up to a constant).
     fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
+        let t0 = std::time::Instant::now();
         let _span = tracing::info_span!("multigrid_solve").entered();
         let [nx, ny, nz] = self.shape;
         let n_total = nx * ny * nz;
@@ -505,7 +507,11 @@ impl PoissonSolver for Multigrid {
         let mut phi = vec![0.0; n_total];
 
         let max_iter = 100u64;
-        for _iter in 0..max_iter {
+        let mut converged = false;
+        let mut final_iter = 0u32;
+        let mut initial_residual = 0.0f64;
+        let mut final_residual = 0.0f64;
+        for iter in 0..max_iter {
             v_cycle(
                 &mut phi,
                 &rhs,
@@ -522,14 +528,41 @@ impl PoissonSolver for Multigrid {
             let res = residual(&phi, &rhs, self.shape, self.dx, &self.bc);
             let res_norm = l2_norm(&res);
 
+            if iter == 0 {
+                initial_residual = res_norm;
+            }
+            final_residual = res_norm;
+            final_iter = iter as u32 + 1;
+
             if rhs_norm < 1e-15 {
                 // RHS is essentially zero — phi = 0 is the solution
+                converged = true;
                 break;
             }
 
             if res_norm / rhs_norm < self.tolerance {
+                converged = true;
                 break;
             }
+        }
+
+        if converged {
+            let convergence_rate = if initial_residual > 1e-30 && final_iter > 1 {
+                (final_residual / initial_residual).powf(1.0 / (final_iter - 1) as f64)
+            } else {
+                0.0
+            };
+            ctx.emitter.emit(SimEvent::MultigridConverged {
+                iterations: final_iter,
+                initial_residual,
+                final_residual,
+                convergence_rate,
+            });
+        } else {
+            ctx.emitter.emit(SimEvent::MultigridDiverged {
+                iterations: final_iter,
+                residual: final_residual,
+            });
         }
 
         // For periodic BC, subtract the mean (solution is unique only up to a constant)
@@ -540,10 +573,15 @@ impl PoissonSolver for Multigrid {
             }
         }
 
-        PotentialField {
+        let result = PotentialField {
             data: phi,
             shape: self.shape,
-        }
+        };
+        ctx.emitter.emit(SimEvent::PoissonSolveComplete {
+            solver: SolverKind::Multigrid,
+            wall_us: t0.elapsed().as_micros() as u64,
+        });
+        result
     }
 
     /// Compute gravitational acceleration g = -∇Φ via second-order centered finite differences.

@@ -11,7 +11,7 @@
 
 use rayon::prelude::*;
 
-use super::super::{context::SimContext, init::domain::Domain, solver::PoissonSolver, types::*};
+use super::super::{context::SimContext, events::{SimEvent, SolverKind}, init::domain::Domain, solver::PoissonSolver, types::*};
 
 // ---------------------------------------------------------------------------
 // Octree data structure
@@ -288,6 +288,7 @@ impl PoissonSolver for TreePoisson {
     /// Solve for the gravitational potential Φ by building an octree and performing
     /// an O(N log N) tree walk at each grid point.
     fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
+        let t0 = std::time::Instant::now();
         let g = ctx.g;
         let _span = tracing::info_span!("tree_poisson_solve").entered();
         let [nx, ny, nz] = density.shape;
@@ -326,10 +327,15 @@ impl PoissonSolver for TreePoisson {
             }
         }
 
-        PotentialField {
+        let result = PotentialField {
             data: phi,
             shape: density.shape,
-        }
+        };
+        ctx.emitter.emit(SimEvent::PoissonSolveComplete {
+            solver: SolverKind::Tree,
+            wall_us: t0.elapsed().as_micros() as u64,
+        });
+        result
     }
 
     /// Compute gravitational acceleration g = -∇Φ via second-order centered finite differences.

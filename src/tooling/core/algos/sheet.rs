@@ -600,7 +600,7 @@ impl PhaseSpaceRepr for SheetTracker {
         let sx2 = nx[2] * sx3;
         let sx1 = nx[1] * sx2;
 
-        for (_pi, p) in self.particles.iter().enumerate() {
+        for p in self.particles.iter() {
             // Spatial CIC indices
             let mut x_ci = [0isize; 3];
             let mut x_frac = [0.0f64; 3];

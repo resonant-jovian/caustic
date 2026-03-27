@@ -51,6 +51,7 @@ const BM4_B: [f64; 5] = [
 /// but achieves significantly smaller leading-order error coefficients, making
 /// it preferable when drift and kick evaluations are cheap relative to the
 /// accuracy gain.
+#[derive(Default)]
 pub struct BlanesMoanSplitting {
     /// Timing breakdown from the most recent `advance` call.
     last_timings: StepTimings,

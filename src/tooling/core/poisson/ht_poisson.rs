@@ -17,6 +17,7 @@
 //! 8. Extract to dense PotentialField
 
 use super::super::context::SimContext;
+use super::super::events::{SimEvent, SolverKind};
 use super::super::solver::PoissonSolver;
 use super::super::types::*;
 use super::exponential_sum::ExponentialSumCoefficients;
@@ -214,6 +215,7 @@ impl PoissonSolver for HtPoisson {
     /// Gaussian terms as rank-1 diagonal scaling -> sum -> IFFT leaves -> truncate ->
     /// extract N^3 subgrid -> apply near-field corrections.
     fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
+        let t0 = std::time::Instant::now();
         let g = ctx.g;
         let [nx, ny, nz] = self.shape;
         let [px, py, pz] = self.padded_shape;
@@ -268,10 +270,15 @@ impl PoissonSolver for HtPoisson {
             Some(h) => h,
             None => {
                 // No terms — return zero potential
-                return PotentialField {
+                let result = PotentialField {
                     data: vec![0.0; nx * ny * nz],
                     shape: [nx, ny, nz],
                 };
+                ctx.emitter.emit(SimEvent::PoissonSolveComplete {
+                    solver: SolverKind::HtPoisson,
+                    wall_us: t0.elapsed().as_micros() as u64,
+                });
+                return result;
             }
         };
 
@@ -326,10 +333,15 @@ impl PoissonSolver for HtPoisson {
         self.last_near_field_l2
             .store(corr_l2_sq.sqrt().to_bits(), Ordering::Relaxed);
 
-        PotentialField {
+        let result = PotentialField {
             data,
             shape: [nx, ny, nz],
-        }
+        };
+        ctx.emitter.emit(SimEvent::PoissonSolveComplete {
+            solver: SolverKind::HtPoisson,
+            wall_us: t0.elapsed().as_micros() as u64,
+        });
+        result
     }
 
     /// Compute acceleration g = -grad(Phi) via second-order centered finite differences.

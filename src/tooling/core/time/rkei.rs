@@ -28,6 +28,7 @@ use rayon::prelude::*;
 ///
 /// Each stage performs a full semi-Lagrangian advection (combined drift + kick)
 /// with the acceleration field frozen at the beginning of that stage.
+#[derive(Default)]
 pub struct RkeiIntegrator;
 
 impl RkeiIntegrator {

@@ -12,6 +12,7 @@
 
 use super::super::{
     context::SimContext,
+    events::SimEvent,
     integrator::{StepProducts, StepTimings, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
     progress::StepPhase,
@@ -149,6 +150,7 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
 
         // Use suggested dt from controller if available, but don't exceed input dt
         let mut dt_try = self.suggested_dt.unwrap_or(dt).min(dt);
+        let mut rejection_count = 0u32;
 
         for _retry in 0..self.max_retries {
             // Take two snapshots of the initial state. PhaseSpaceSnapshot is not
@@ -163,12 +165,14 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
 
             // --- Strang step: drift(dt/2) -> kick(dt) -> drift(dt/2) ---
             helpers::report_phase!(ctx, StepPhase::DriftHalf1, 0, 7);
+            ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::DriftHalf1, step: ctx.step });
             {
                 let _s = tracing::info_span!("strang_drift_half").entered();
                 helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt_try / 2.0)));
             }
 
             helpers::report_phase!(ctx, StepPhase::PoissonSolve, 1, 7);
+            ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::PoissonSolve, step: ctx.step });
             let accel = {
                 let _s = tracing::info_span!("strang_poisson").entered();
                 let (_density, _potential, accel) = helpers::time_ms!(
@@ -180,12 +184,14 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
             };
 
             helpers::report_phase!(ctx, StepPhase::Kick, 2, 7);
+            ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::Kick, step: ctx.step });
             {
                 let _s = tracing::info_span!("strang_kick").entered();
                 helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(dt_try)));
             }
 
             helpers::report_phase!(ctx, StepPhase::DriftHalf2, 3, 7);
+            ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::DriftHalf2, step: ctx.step });
             {
                 let _s = tracing::info_span!("strang_drift_half").entered();
                 helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt_try / 2.0)));
@@ -200,12 +206,14 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
             repr.load_snapshot(snap_for_lie)?;
 
             helpers::report_phase!(ctx, StepPhase::DriftHalf1, 4, 7);
+            ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::DriftHalf1, step: ctx.step });
             {
                 let _s = tracing::info_span!("lie_drift").entered();
                 helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt_try)));
             }
 
             helpers::report_phase!(ctx, StepPhase::Kick, 5, 7);
+            ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::Kick, step: ctx.step });
             {
                 let _s = tracing::info_span!("lie_kick").entered();
                 let (_density, _potential, accel) = helpers::time_ms!(
@@ -223,15 +231,27 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
             let err = Self::relative_error(&strang_snap.data, &lie_snap.data);
 
             helpers::report_phase!(ctx, StepPhase::Diagnostics, 6, 7);
+            ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::Diagnostics, step: ctx.step });
 
             let (dt_new, accepted) = self.controller.step(dt_try, err);
             self.suggested_dt = Some(dt_new);
 
             if accepted {
+                ctx.emitter.emit(SimEvent::AdaptiveDtAccepted {
+                    dt: dt_try,
+                    error_estimate: err,
+                });
                 // Accept Strang result (higher order)
                 repr.load_snapshot(strang_snap)?;
                 break;
             } else {
+                rejection_count += 1;
+                ctx.emitter.emit(SimEvent::AdaptiveDtRejected {
+                    attempted_dt: dt_try,
+                    error_estimate: err,
+                    new_dt: dt_new,
+                    rejection_count,
+                });
                 // Reject: reload the original initial state and retry with smaller dt
                 repr.load_snapshot(snap_for_rollback)?;
                 dt_try = dt_new.min(dt);
@@ -239,6 +259,7 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
         }
 
         helpers::report_phase!(ctx, StepPhase::StepComplete, 0, 0);
+        ctx.emitter.emit(SimEvent::PhaseEntered { phase: StepPhase::StepComplete, step: ctx.step });
 
         let (density, potential, acceleration) = helpers::time_ms!(
             timings,
