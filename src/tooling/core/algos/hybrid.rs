@@ -8,7 +8,9 @@
 //! updated after every advection sub-step via CIC deposition of sheet
 //! particles into newly transitioned grid cells.
 
-use super::super::{context::SimContext, init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
+use super::super::{
+    context::SimContext, init::domain::Domain, phasespace::PhaseSpaceRepr, types::*,
+};
 use super::{sheet::SheetTracker, uniform::UniformGrid6D};
 use rayon::prelude::*;
 use std::any::Any;

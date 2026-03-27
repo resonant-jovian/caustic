@@ -975,12 +975,12 @@ impl PhaseSpaceRepr for FlowMapRepr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
+    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::context::SimContext;
     use crate::tooling::core::events::EventEmitter;
-    use crate::tooling::core::progress::StepProgress;
-    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::poisson::fft::FftPoisson;
+    use crate::tooling::core::progress::StepProgress;
 
     fn test_domain() -> Domain {
         Domain::builder()
@@ -1068,51 +1068,33 @@ mod tests {
 
         let __advector = SemiLagrangian::new();
 
-
         let __emitter = EventEmitter::sink();
-
 
         let __progress = StepProgress::new();
 
-
         // Dummy solver for advect context
-
 
         let __domain_tmp = repr.domain.clone();
 
-
         let __solver = FftPoisson::new(&__domain_tmp);
 
-
         let __ctx = SimContext {
-
-
             solver: &__solver,
-
 
             advector: &__advector,
 
-
             emitter: &__emitter,
-
 
             progress: &__progress,
 
-
             step: 0,
-
 
             time: 0.0,
 
-
             dt: dt,
 
-
             g: 0.0,
-
-
         };
-
 
         repr.advect_x(&dummy_disp, &__ctx);
 
@@ -1160,7 +1142,6 @@ mod tests {
         let __solver = FftPoisson::new(&__domain_tmp);
 
         let __ctx = SimContext {
-
             solver: &__solver,
 
             advector: &__advector,
@@ -1176,7 +1157,6 @@ mod tests {
             dt: 0.1,
 
             g: 0.0,
-
         };
 
         repr.advect_x(&dummy_disp, &__ctx);
@@ -1208,7 +1188,6 @@ mod tests {
         let __solver = FftPoisson::new(&__domain_tmp);
 
         let __ctx = SimContext {
-
             solver: &__solver,
 
             advector: &__advector,
@@ -1224,7 +1203,6 @@ mod tests {
             dt: 0.05,
 
             g: 0.0,
-
         };
 
         repr.advect_v(&acc, &__ctx);

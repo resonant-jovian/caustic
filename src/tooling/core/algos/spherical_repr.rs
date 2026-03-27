@@ -11,7 +11,9 @@
 //! advects along the r and v_r dimensions. The centrifugal pseudo-force
 //! L^2 / r^3 is included in the velocity kick sub-step.
 
-use super::super::{context::SimContext, init::domain::Domain, phasespace::PhaseSpaceRepr, types::*};
+use super::super::{
+    context::SimContext, init::domain::Domain, phasespace::PhaseSpaceRepr, types::*,
+};
 use std::any::Any;
 
 /// Spherically symmetric phase-space representation on a (r, v_r, L) grid.

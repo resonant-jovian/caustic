@@ -836,7 +836,6 @@ impl PhaseSpaceRepr for TensorTrain {
                     }
                 }
             }
-
         }
 
         // Apply positivity limiter before TT rebuild
@@ -956,7 +955,6 @@ impl PhaseSpaceRepr for TensorTrain {
                     }
                 }
             }
-
         }
 
         // Apply positivity limiter before TT rebuild
@@ -1330,13 +1328,13 @@ fn transpose(mat: &Mat<f64>) -> Mat<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::algos::uniform::UniformGrid6D;
-    use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::context::SimContext;
     use crate::tooling::core::events::EventEmitter;
-    use crate::tooling::core::progress::StepProgress;
-    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::poisson::fft::FftPoisson;
+    use crate::tooling::core::progress::StepProgress;
 
     fn test_domain(n: i128) -> Domain {
         Domain::builder()
@@ -1612,7 +1610,6 @@ mod tests {
         let __solver = FftPoisson::new(&__domain_tmp);
 
         let __ctx = SimContext {
-
             solver: &__solver,
 
             advector: &__advector,
@@ -1628,7 +1625,6 @@ mod tests {
             dt: 0.01,
 
             g: 0.0,
-
         };
 
         tt.advect_x(&dummy, &__ctx);
@@ -1952,7 +1948,6 @@ mod tests {
         let __solver = FftPoisson::new(&__domain_tmp);
 
         let __ctx = SimContext {
-
             solver: &__solver,
 
             advector: &__advector,
@@ -1968,7 +1963,6 @@ mod tests {
             dt: 0.01,
 
             g: 0.0,
-
         };
 
         tt_no_lim.advect_x(&dummy_no, &__ctx);
@@ -2002,7 +1996,6 @@ mod tests {
         let __solver = FftPoisson::new(&__domain_tmp);
 
         let __ctx = SimContext {
-
             solver: &__solver,
 
             advector: &__advector,
@@ -2018,7 +2011,6 @@ mod tests {
             dt: 0.01,
 
             g: 0.0,
-
         };
 
         tt.advect_x(&dummy, &__ctx);
@@ -2108,7 +2100,6 @@ mod tests {
         let __solver = FftPoisson::new(&__domain_tmp);
 
         let __ctx = SimContext {
-
             solver: &__solver,
 
             advector: &__advector,
@@ -2124,7 +2115,6 @@ mod tests {
             dt: 0.01,
 
             g: 0.0,
-
         };
 
         tt.advect_x(&dummy, &__ctx);

@@ -792,7 +792,6 @@ impl PhaseSpaceRepr for SpectralV {
                             }
                         }
                     }
-
                 });
 
             // Move results for next dimension pass (avoids clone)
@@ -882,7 +881,6 @@ impl PhaseSpaceRepr for SpectralV {
                         }
                     }
                 }
-
             });
 
         // Apply positivity limiter if enabled
@@ -1350,13 +1348,13 @@ fn spatial_gradient_1d_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
-    use std::f64::consts::PI;
+    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::context::SimContext;
     use crate::tooling::core::events::EventEmitter;
-    use crate::tooling::core::progress::StepProgress;
-    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::poisson::fft::FftPoisson;
+    use crate::tooling::core::progress::StepProgress;
+    use std::f64::consts::PI;
 
     fn test_domain(n: i128) -> Domain {
         Domain::builder()
@@ -1567,7 +1565,6 @@ mod tests {
         let __solver = FftPoisson::new(&__domain_tmp);
 
         let __ctx = SimContext {
-
             solver: &__solver,
 
             advector: &__advector,
@@ -1583,7 +1580,6 @@ mod tests {
             dt: 0.1,
 
             g: 0.0,
-
         };
 
         spec.advect_v(&accel, &__ctx);
@@ -1726,7 +1722,6 @@ mod tests {
         let __solver = FftPoisson::new(&__domain_tmp);
 
         let __ctx = SimContext {
-
             solver: &__solver,
 
             advector: &__advector,
@@ -1742,7 +1737,6 @@ mod tests {
             dt: 0.01,
 
             g: 0.0,
-
         };
 
         spec.advect_x(&disp, &__ctx);
@@ -1910,7 +1904,6 @@ mod tests {
         let __solver = FftPoisson::new(&__domain_tmp);
 
         let __ctx = SimContext {
-
             solver: &__solver,
 
             advector: &__advector,
@@ -1926,7 +1919,6 @@ mod tests {
             dt: 0.01,
 
             g: 0.0,
-
         };
 
         spec.advect_v(&accel, &__ctx);

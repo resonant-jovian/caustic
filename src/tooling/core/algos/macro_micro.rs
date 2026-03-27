@@ -273,7 +273,6 @@ impl PhaseSpaceRepr for MacroMicroRepr {
             * std::mem::size_of::<f64>();
         macro_bytes + self.inner.memory_bytes()
     }
-
 }
 
 #[cfg(test)]

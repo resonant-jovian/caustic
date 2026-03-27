@@ -7,7 +7,9 @@
 //! Both periodic and open (absorbing) boundary conditions are supported,
 //! with an optimised sliding-window path that reuses stencil data.
 
-use super::super::{advecator::Advector, context::SimContext, phasespace::PhaseSpaceRepr, types::*};
+use super::super::{
+    advecator::Advector, context::SimContext, phasespace::PhaseSpaceRepr, types::*,
+};
 
 /// Semi-Lagrangian advector with Catmull-Rom cubic spline interpolation.
 ///
@@ -51,12 +53,22 @@ impl Advector for SemiLagrangian {
     }
 
     /// Perform the velocity kick sub-step: f(x, v) -> f(x, v - g*dt).
-    fn kick(&self, repr: &mut dyn PhaseSpaceRepr, acceleration: &AccelerationField, ctx: &SimContext) {
+    fn kick(
+        &self,
+        repr: &mut dyn PhaseSpaceRepr,
+        acceleration: &AccelerationField,
+        ctx: &SimContext,
+    ) {
         repr.advect_v(acceleration, ctx);
     }
 
     /// Perform one full unsplit step (kick then drift).
-    fn step(&self, repr: &mut dyn PhaseSpaceRepr, acceleration: &AccelerationField, ctx: &SimContext) {
+    fn step(
+        &self,
+        repr: &mut dyn PhaseSpaceRepr,
+        acceleration: &AccelerationField,
+        ctx: &SimContext,
+    ) {
         self.kick(repr, acceleration, ctx);
         self.drift(repr, ctx);
     }

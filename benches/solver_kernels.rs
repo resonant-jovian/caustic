@@ -197,13 +197,9 @@ fn bench_fft_poisson(c: &mut Criterion) {
             dt: 0.0,
             g: 1.0,
         };
-        group.bench_with_input(
-            BenchmarkId::new("N", n),
-            &(),
-            |b, _| {
-                b.iter(|| poisson.solve(&density, &ctx));
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("N", n), &(), |b, _| {
+            b.iter(|| poisson.solve(&density, &ctx));
+        });
     }
     group.finish();
 }
@@ -234,13 +230,9 @@ fn bench_fft_isolated(c: &mut Criterion) {
             dt: 0.0,
             g: 1.0,
         };
-        group.bench_with_input(
-            BenchmarkId::new("N", n),
-            &(),
-            |b, _| {
-                b.iter(|| poisson.solve(&density, &ctx));
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("N", n), &(), |b, _| {
+            b.iter(|| poisson.solve(&density, &ctx));
+        });
     }
     group.finish();
 }

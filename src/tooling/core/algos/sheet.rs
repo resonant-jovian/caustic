@@ -716,12 +716,12 @@ impl PhaseSpaceRepr for SheetTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
+    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::context::SimContext;
     use crate::tooling::core::events::EventEmitter;
-    use crate::tooling::core::progress::StepProgress;
-    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::poisson::fft::FftPoisson;
+    use crate::tooling::core::progress::StepProgress;
 
     fn test_domain() -> Domain {
         Domain::builder()
@@ -765,7 +765,6 @@ mod tests {
         let __solver = FftPoisson::new(&__domain_tmp);
 
         let __ctx = SimContext {
-
             solver: &__solver,
 
             advector: &__advector,
@@ -781,7 +780,6 @@ mod tests {
             dt: dt,
 
             g: 0.0,
-
         };
 
         sheet.advect_x(&dummy_disp, &__ctx);
@@ -844,7 +842,6 @@ mod tests {
             let __solver = FftPoisson::new(&__domain_tmp);
 
             let __ctx = SimContext {
-
                 solver: &__solver,
 
                 advector: &__advector,
@@ -860,7 +857,6 @@ mod tests {
                 dt: 0.01,
 
                 g: 0.0,
-
             };
 
             sheet.advect_x(&dummy, &__ctx);
@@ -975,7 +971,6 @@ mod tests {
         let __solver = FftPoisson::new(&__domain_tmp);
 
         let __ctx = SimContext {
-
             solver: &__solver,
 
             advector: &__advector,
@@ -991,7 +986,6 @@ mod tests {
             dt: dt,
 
             g: 0.0,
-
         };
 
         sheet.advect_v(&accel, &__ctx);

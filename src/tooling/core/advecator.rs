@@ -12,11 +12,21 @@ use super::types::AccelerationField;
 pub trait Advector {
     /// Advance f in phase space by `ctx.dt` using the given acceleration.
     /// Mutates the representation in place.
-    fn step(&self, repr: &mut dyn PhaseSpaceRepr, acceleration: &AccelerationField, ctx: &SimContext);
+    fn step(
+        &self,
+        repr: &mut dyn PhaseSpaceRepr,
+        acceleration: &AccelerationField,
+        ctx: &SimContext,
+    );
 
     /// Spatial-only drift step (free streaming): advance f by v * ctx.dt in position.
     fn drift(&self, repr: &mut dyn PhaseSpaceRepr, ctx: &SimContext);
 
     /// Velocity-only kick step: advance f by g * ctx.dt in velocity.
-    fn kick(&self, repr: &mut dyn PhaseSpaceRepr, acceleration: &AccelerationField, ctx: &SimContext);
+    fn kick(
+        &self,
+        repr: &mut dyn PhaseSpaceRepr,
+        acceleration: &AccelerationField,
+        ctx: &SimContext,
+    );
 }

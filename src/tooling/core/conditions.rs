@@ -65,7 +65,12 @@ impl std::fmt::Display for ExitReason {
 /// let wall_exit = WallClockCondition::new(3600.0);
 /// ```
 pub trait ExitCondition {
-    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics, ctx: &SimContext) -> Option<ExitReason>;
+    fn check(
+        &self,
+        diag: &GlobalDiagnostics,
+        initial: &GlobalDiagnostics,
+        ctx: &SimContext,
+    ) -> Option<ExitReason>;
 }
 
 /// Exit when simulation time reaches `t_final`.
@@ -75,7 +80,12 @@ pub struct TimeLimitCondition {
 }
 
 impl ExitCondition for TimeLimitCondition {
-    fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, ctx: &SimContext) -> Option<ExitReason> {
+    fn check(
+        &self,
+        diag: &GlobalDiagnostics,
+        _initial: &GlobalDiagnostics,
+        ctx: &SimContext,
+    ) -> Option<ExitReason> {
         let fraction = if self.t_final > 0.0 {
             (diag.time / self.t_final).clamp(0.0, 1.0)
         } else {
@@ -109,7 +119,12 @@ pub struct EnergyDriftCondition {
 }
 
 impl ExitCondition for EnergyDriftCondition {
-    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics, ctx: &SimContext) -> Option<ExitReason> {
+    fn check(
+        &self,
+        diag: &GlobalDiagnostics,
+        initial: &GlobalDiagnostics,
+        ctx: &SimContext,
+    ) -> Option<ExitReason> {
         let ref_val = initial.total_energy.abs();
         let relative_drift = if ref_val > 1e-30 {
             (diag.total_energy - initial.total_energy).abs() / ref_val
@@ -140,9 +155,18 @@ pub struct MassLossCondition {
 }
 
 impl ExitCondition for MassLossCondition {
-    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics, ctx: &SimContext) -> Option<ExitReason> {
+    fn check(
+        &self,
+        diag: &GlobalDiagnostics,
+        initial: &GlobalDiagnostics,
+        ctx: &SimContext,
+    ) -> Option<ExitReason> {
         let m0 = initial.mass_in_box.abs();
-        let mass_fraction = if m0 > 1e-30 { diag.mass_in_box / m0 } else { 1.0 };
+        let mass_fraction = if m0 > 1e-30 {
+            diag.mass_in_box / m0
+        } else {
+            1.0
+        };
         let relative_change = (1.0 - mass_fraction).abs();
         let loss_threshold = (1.0 - self.threshold).abs();
         let fraction = if loss_threshold > 0.0 {
@@ -172,7 +196,12 @@ pub struct CasimirDriftCondition {
 }
 
 impl ExitCondition for CasimirDriftCondition {
-    fn check(&self, diag: &GlobalDiagnostics, initial: &GlobalDiagnostics, ctx: &SimContext) -> Option<ExitReason> {
+    fn check(
+        &self,
+        diag: &GlobalDiagnostics,
+        initial: &GlobalDiagnostics,
+        ctx: &SimContext,
+    ) -> Option<ExitReason> {
         let ref_val = initial.casimir_c2.abs();
         let relative_drift = if ref_val > 1e-30 {
             (diag.casimir_c2 - initial.casimir_c2).abs() / ref_val
@@ -214,7 +243,12 @@ impl WallClockCondition {
 }
 
 impl ExitCondition for WallClockCondition {
-    fn check(&self, _diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, ctx: &SimContext) -> Option<ExitReason> {
+    fn check(
+        &self,
+        _diag: &GlobalDiagnostics,
+        _initial: &GlobalDiagnostics,
+        ctx: &SimContext,
+    ) -> Option<ExitReason> {
         let elapsed = self.start.elapsed().as_secs_f64();
         let fraction = if self.limit_secs > 0.0 {
             (elapsed / self.limit_secs).clamp(0.0, 1.0)
@@ -255,7 +289,12 @@ impl SteadyStateCondition {
 }
 
 impl ExitCondition for SteadyStateCondition {
-    fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, ctx: &SimContext) -> Option<ExitReason> {
+    fn check(
+        &self,
+        diag: &GlobalDiagnostics,
+        _initial: &GlobalDiagnostics,
+        ctx: &SimContext,
+    ) -> Option<ExitReason> {
         let current = diag.entropy;
         if let Some(prev) = self.prev_entropy.get() {
             let dt = diag.time; // Approximate: use absolute time as proxy
@@ -297,7 +336,12 @@ pub struct CflViolationCondition {
 }
 
 impl ExitCondition for CflViolationCondition {
-    fn check(&self, _diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, _ctx: &SimContext) -> Option<ExitReason> {
+    fn check(
+        &self,
+        _diag: &GlobalDiagnostics,
+        _initial: &GlobalDiagnostics,
+        _ctx: &SimContext,
+    ) -> Option<ExitReason> {
         // CFL violation is checked in Simulation::step via max_dt; this condition is a fallback
         None
     }
@@ -307,7 +351,12 @@ impl ExitCondition for CflViolationCondition {
 pub struct CausticFormationCondition;
 
 impl ExitCondition for CausticFormationCondition {
-    fn check(&self, _diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, _ctx: &SimContext) -> Option<ExitReason> {
+    fn check(
+        &self,
+        _diag: &GlobalDiagnostics,
+        _initial: &GlobalDiagnostics,
+        _ctx: &SimContext,
+    ) -> Option<ExitReason> {
         // Stream count field is not stored in GlobalDiagnostics; requires repr access.
         // Deferred until max_stream_count is added to GlobalDiagnostics.
         None
@@ -337,7 +386,12 @@ impl VirialRelaxedCondition {
 }
 
 impl ExitCondition for VirialRelaxedCondition {
-    fn check(&self, diag: &GlobalDiagnostics, _initial: &GlobalDiagnostics, ctx: &SimContext) -> Option<ExitReason> {
+    fn check(
+        &self,
+        diag: &GlobalDiagnostics,
+        _initial: &GlobalDiagnostics,
+        ctx: &SimContext,
+    ) -> Option<ExitReason> {
         let count = self.step_count.get();
         self.step_count.set(count + 1);
 

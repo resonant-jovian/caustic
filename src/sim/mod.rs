@@ -315,7 +315,8 @@ impl Simulation {
         );
         timings.diagnostics_ms += t0.elapsed().as_secs_f64() * 1000.0;
 
-        self.emitter.emit(SimEvent::DiagnosticsComputed(Box::new(diag)));
+        self.emitter
+            .emit(SimEvent::DiagnosticsComputed(Box::new(diag)));
 
         self.last_step_timings = timings;
 

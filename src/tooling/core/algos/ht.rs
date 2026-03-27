@@ -690,11 +690,12 @@ impl HtTensor {
             let frame = q.subcols(0, k_mu).to_owned();
 
             // Guard against NaN from QR of near-zero matrices
-            let has_nan = frame
-                .col_iter()
-                .any(|col| col.iter().any(|v| v.is_nan()));
+            let has_nan = frame.col_iter().any(|col| col.iter().any(|v| v.is_nan()));
             if has_nan {
-                tracing::warn!(leaf = mu, "from_function_aca: QR produced NaN frame, using unit frame");
+                tracing::warn!(
+                    leaf = mu,
+                    "from_function_aca: QR produced NaN frame, using unit frame"
+                );
                 let mut unit = Mat::zeros(n_mu, 1);
                 unit[(n_mu / 2, 0)] = 1.0;
                 leaf_frames.push(unit);
@@ -2322,7 +2323,9 @@ impl PhaseSpaceRepr for HtTensor {
         let mass_ratio = post_mass / pre_mass.max(1e-30);
         if mass_ratio < 0.01 || !post_mass.is_finite() {
             tracing::warn!(
-                pre_mass, post_mass, mass_ratio,
+                pre_mass,
+                post_mass,
+                mass_ratio,
                 "SLAR advect_x: mass collapsed after tensor reconstruction"
             );
         }
@@ -2450,7 +2453,9 @@ impl PhaseSpaceRepr for HtTensor {
         let mass_ratio = post_mass / pre_mass.max(1e-30);
         if mass_ratio < 0.01 || !post_mass.is_finite() {
             tracing::warn!(
-                pre_mass, post_mass, mass_ratio,
+                pre_mass,
+                post_mass,
+                mass_ratio,
                 "SLAR advect_v: mass collapsed after tensor reconstruction"
             );
         }
@@ -3771,12 +3776,12 @@ mod tests {
         // complementary indices so is O(N⁵ or N⁶). Future ACA on interior nodes
         // will bring this down. For now, verify the algorithm runs at all grid sizes
         // and produces correct results.
+        use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+        use crate::tooling::core::context::SimContext;
+        use crate::tooling::core::events::EventEmitter;
+        use crate::tooling::core::poisson::fft::FftPoisson;
+        use crate::tooling::core::progress::StepProgress;
         use std::sync::atomic::{AtomicUsize, Ordering};
-    use crate::tooling::core::context::SimContext;
-    use crate::tooling::core::events::EventEmitter;
-    use crate::tooling::core::progress::StepProgress;
-    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
-    use crate::tooling::core::poisson::fft::FftPoisson;
 
         let counts: Vec<(usize, f64)> = [4, 6, 8]
             .iter()
@@ -3950,7 +3955,6 @@ mod tests {
         let __solver = FftPoisson::new(&__domain_tmp);
 
         let __ctx = SimContext {
-
             solver: &__solver,
 
             advector: &__advector,
@@ -3966,7 +3970,6 @@ mod tests {
             dt: dt,
 
             g: 0.0,
-
         };
 
         ht.advect_x(&dummy_disp, &__ctx);
@@ -4052,51 +4055,33 @@ mod tests {
 
         let __advector = SemiLagrangian::new();
 
-
         let __emitter = EventEmitter::sink();
-
 
         let __progress = StepProgress::new();
 
-
         // Dummy solver for advect context
-
 
         let __domain_tmp = ht.domain.clone();
 
-
         let __solver = FftPoisson::new(&__domain_tmp);
 
-
         let __ctx = SimContext {
-
-
             solver: &__solver,
-
 
             advector: &__advector,
 
-
             emitter: &__emitter,
-
 
             progress: &__progress,
 
-
             step: 0,
-
 
             time: 0.0,
 
-
             dt: dt,
 
-
             g: 0.0,
-
-
         };
-
 
         ht.advect_v(&accel, &__ctx);
 
@@ -4188,7 +4173,6 @@ mod tests {
         let __solver = FftPoisson::new(&__domain_tmp);
 
         let __ctx = SimContext {
-
             solver: &__solver,
 
             advector: &__advector,
@@ -4204,7 +4188,6 @@ mod tests {
             dt: dt,
 
             g: 0.0,
-
         };
 
         ht.advect_x(&dummy_disp, &__ctx);
@@ -4257,7 +4240,6 @@ mod tests {
         let __solver = FftPoisson::new(&__domain_tmp);
 
         let __ctx = SimContext {
-
             solver: &__solver,
 
             advector: &__advector,
@@ -4273,7 +4255,6 @@ mod tests {
             dt: dt,
 
             g: 0.0,
-
         };
 
         ht.advect_x(&dummy_disp, &__ctx);
@@ -4336,7 +4317,6 @@ mod tests {
         let __solver = FftPoisson::new(&__domain_tmp);
 
         let __ctx = SimContext {
-
             solver: &__solver,
 
             advector: &__advector,
@@ -4352,7 +4332,6 @@ mod tests {
             dt: dt / 2.0,
 
             g: 0.0,
-
         };
 
         ht.advect_x(&dummy_disp, &__ctx);
@@ -4369,7 +4348,6 @@ mod tests {
         let __solver = FftPoisson::new(&__domain_tmp);
 
         let __ctx = SimContext {
-
             solver: &__solver,
 
             advector: &__advector,
@@ -4385,7 +4363,6 @@ mod tests {
             dt: dt,
 
             g: 0.0,
-
         };
 
         ht.advect_v(&accel, &__ctx);
@@ -4402,7 +4379,6 @@ mod tests {
         let __solver = FftPoisson::new(&__domain_tmp);
 
         let __ctx = SimContext {
-
             solver: &__solver,
 
             advector: &__advector,
@@ -4418,7 +4394,6 @@ mod tests {
             dt: dt / 2.0,
 
             g: 0.0,
-
         };
 
         ht.advect_x(&dummy_disp, &__ctx);
