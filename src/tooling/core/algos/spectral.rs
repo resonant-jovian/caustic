@@ -8,6 +8,7 @@
 //! Spatial advection acts independently on each coefficient grid via semi-Lagrangian shifts.
 
 use super::super::{
+    context::SimContext,
     init::domain::{Domain, SpatialBoundType, VelocityBoundType},
     phasespace::PhaseSpaceRepr,
     types::*,
@@ -16,7 +17,6 @@ use super::lagrangian::sl_shift_1d;
 use rayon::prelude::*;
 use std::any::Any;
 use std::f64::consts::PI;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Spectral-in-velocity representation using orthonormal Hermite function basis.
@@ -48,8 +48,6 @@ pub struct SpectralV {
     pub velocity_scale: f64,
     /// Domain specification.
     pub domain: Domain,
-    /// Optional progress reporter for intra-step TUI updates.
-    progress: Option<Arc<super::super::progress::StepProgress>>,
     /// Whether to enable adaptive velocity rescaling each step.
     pub adaptive_rescale: bool,
     /// Hypercollision coefficient (0 = disabled). Damps high modes to
@@ -88,7 +86,6 @@ impl SpectralV {
             n_modes,
             velocity_scale: sigma,
             domain,
-            progress: None,
             adaptive_rescale: false,
             hypercollision_nu: 0.0,
             hypercollision_order: 2,
@@ -486,7 +483,6 @@ impl SpectralV {
             n_modes,
             velocity_scale: sigma,
             domain: domain.clone(),
-            progress: None,
             adaptive_rescale: false,
             hypercollision_nu: 0.0,
             hypercollision_order: 2,
@@ -582,10 +578,6 @@ impl SpectralV {
 }
 
 impl PhaseSpaceRepr for SpectralV {
-    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
-        self.progress = Some(p);
-    }
-
     /// Compute density rho(x) = integral f(x,v) dv^3.
     ///
     /// In the Hermite representation:
@@ -600,25 +592,11 @@ impl PhaseSpaceRepr for SpectralV {
         let n_modes3 = self.n_modes * self.n_modes * self.n_modes;
         let norm = self.density_normalization();
 
-        let counter = AtomicU64::new(0);
-        let report_interval = (n_spatial as u64 / 100).max(1);
-
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, n_spatial as u64);
-        }
-
         let data: Vec<f64> = (0..n_spatial)
             .into_par_iter()
             .map(|si| {
                 // The (0,0,0) mode is at index 0 within each spatial cell's coefficient block
-                let result = self.coefficients[si * n_modes3] * norm;
-                if let Some(ref p) = self.progress {
-                    let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c.is_multiple_of(report_interval) {
-                        p.set_intra_progress(c, n_spatial as u64);
-                    }
-                }
-                result
+                self.coefficients[si * n_modes3] * norm
             })
             .collect();
 
@@ -658,7 +636,8 @@ impl PhaseSpaceRepr for SpectralV {
     /// displacement field (which encodes v*dt averaged over the domain). This is exact
     /// for uniform advection; for non-uniform v fields, we use the displacement field
     /// values directly.
-    fn advect_x(&mut self, _displacement: &DisplacementField, dt: f64) {
+    fn advect_x(&mut self, _displacement: &DisplacementField, ctx: &SimContext) {
+        let dt = ctx.dt;
         let _span = tracing::info_span!("spectral_advect_x").entered();
         let [nx, ny, nz] = self.spatial_shape;
         let n_modes = self.n_modes;
@@ -745,11 +724,6 @@ impl PhaseSpaceRepr for SpectralV {
             // Compute spatial gradient via centered differences — parallel over spatial cells
             let spatial_shape = self.spatial_shape;
             let n_spatial = nx * ny * nz;
-            let advect_x_counter = AtomicU64::new(0);
-            let advect_x_report = (n_spatial as u64 / 100).max(1);
-            if let Some(ref p) = self.progress {
-                p.set_intra_progress(0, n_spatial as u64);
-            }
             new_coeffs
                 .par_chunks_mut(n_modes3)
                 .enumerate()
@@ -821,12 +795,6 @@ impl PhaseSpaceRepr for SpectralV {
                         }
                     }
 
-                    if let Some(ref p) = self.progress {
-                        let c = advect_x_counter.fetch_add(1, Ordering::Relaxed);
-                        if c.is_multiple_of(advect_x_report) {
-                            p.set_intra_progress(c, n_spatial as u64);
-                        }
-                    }
                 });
 
             // Move results for next dimension pass (avoids clone)
@@ -847,7 +815,8 @@ impl PhaseSpaceRepr for SpectralV {
     /// This is applied per velocity dimension, per spatial cell. The coupling is
     /// tridiagonal in mode space and exact for constant acceleration within a cell.
     /// We use forward Euler time integration of the mode coupling.
-    fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
+    fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext) {
+        let dt = ctx.dt;
         let _span = tracing::info_span!("spectral_advect_v").entered();
         let [nx, ny, nz] = self.spatial_shape;
         let n_modes = self.n_modes;
@@ -863,11 +832,6 @@ impl PhaseSpaceRepr for SpectralV {
 
         // Parallelize over spatial cells — each cell's coupling is independent
         let n_spatial = nx * ny * nz;
-        let advect_v_counter = AtomicU64::new(0);
-        let advect_v_report = (n_spatial as u64 / 100).max(1);
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, n_spatial as u64);
-        }
         self.coefficients
             .par_chunks_mut(n_modes3)
             .enumerate()
@@ -922,12 +886,6 @@ impl PhaseSpaceRepr for SpectralV {
                     }
                 }
 
-                if let Some(ref p) = self.progress {
-                    let c = advect_v_counter.fetch_add(1, Ordering::Relaxed);
-                    if c.is_multiple_of(advect_v_report) {
-                        p.set_intra_progress(c, n_spatial as u64);
-                    }
-                }
             });
 
         // Apply positivity limiter if enabled
@@ -1100,11 +1058,6 @@ impl PhaseSpaceRepr for SpectralV {
         let dv3 = dv_q[0] * dv_q[1] * dv_q[2];
 
         let n_spatial = self.n_spatial();
-        let counter = AtomicU64::new(0);
-        let entropy_report = (n_spatial as u64 / 100).max(1);
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, n_spatial as u64);
-        }
         let entropy: f64 = (0..n_spatial)
             .into_par_iter()
             .map(|si| {
@@ -1122,12 +1075,6 @@ impl PhaseSpaceRepr for SpectralV {
                                 local_s -= f * f.ln();
                             }
                         }
-                    }
-                }
-                if let Some(ref p) = self.progress {
-                    let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c.is_multiple_of(entropy_report) {
-                        p.set_intra_progress(c, n_spatial as u64);
                     }
                 }
                 local_s
@@ -1150,12 +1097,8 @@ impl PhaseSpaceRepr for SpectralV {
         let dv3 = 2.0 * lv[2] / nv_margin as f64;
 
         let mut counts = vec![0u32; n_spatial];
-        let sc_report = (n_spatial as u64 / 100).max(1);
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, n_spatial as u64);
-        }
 
-        for (sc_counter, (si, count)) in
+        for (_sc_counter, (si, count)) in
             (0_u64..).zip(counts.iter_mut().enumerate().take(n_spatial))
         {
             // Build marginal f(v_x) = integral f(v_x, v_y, v_z) dv_y dv_z
@@ -1185,12 +1128,6 @@ impl PhaseSpaceRepr for SpectralV {
                 }
             }
             *count = peaks;
-
-            if let Some(ref p) = self.progress
-                && sc_counter.is_multiple_of(sc_report)
-            {
-                p.set_intra_progress(sc_counter, n_spatial as u64);
-            }
         }
 
         StreamCountField {
@@ -1248,11 +1185,6 @@ impl PhaseSpaceRepr for SpectralV {
         let dv3 = dv_q[0] * dv_q[1] * dv_q[2];
 
         let n_spatial = self.n_spatial();
-        let counter = AtomicU64::new(0);
-        let ke_report = (n_spatial as u64 / 100).max(1);
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, n_spatial as u64);
-        }
         let ke: f64 = (0..n_spatial)
             .into_par_iter()
             .map(|si| {
@@ -1269,12 +1201,6 @@ impl PhaseSpaceRepr for SpectralV {
                             let v2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
                             local_ke += f * v2;
                         }
-                    }
-                }
-                if let Some(ref p) = self.progress {
-                    let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c.is_multiple_of(ke_report) {
-                        p.set_intra_progress(c, n_spatial as u64);
                     }
                 }
                 local_ke
@@ -1296,11 +1222,7 @@ impl PhaseSpaceRepr for SpectralV {
 
         let mut data = vec![0.0; n_total];
         let snap_n_spatial = self.n_spatial();
-        let snap_report = (snap_n_spatial as u64 / 100).max(1);
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, snap_n_spatial as u64);
-        }
-        for (snap_counter, si) in (0_u64..).zip(0..snap_n_spatial) {
+        for si in 0..snap_n_spatial {
             for iv1 in 0..nv1 {
                 for iv2 in 0..nv2 {
                     for iv3 in 0..nv3 {
@@ -1313,11 +1235,6 @@ impl PhaseSpaceRepr for SpectralV {
                         data[si * n_vel + vi] = self.reconstruct_at(si, v);
                     }
                 }
-            }
-            if let Some(ref p) = self.progress
-                && snap_counter.is_multiple_of(snap_report)
-            {
-                p.set_intra_progress(snap_counter, snap_n_spatial as u64);
             }
         }
 
@@ -1438,6 +1355,11 @@ mod tests {
     use super::*;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use std::f64::consts::PI;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
+    use crate::tooling::core::progress::StepProgress;
+    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::poisson::fft::FftPoisson;
 
     fn test_domain(n: i128) -> Domain {
         Domain::builder()
@@ -1635,7 +1557,39 @@ mod tests {
             gz: vec![0.0; n_sp],
             shape: [4, 4, 4],
         };
-        spec.advect_v(&accel, 0.1);
+        let __advector = SemiLagrangian::new();
+
+        let __emitter = EventEmitter::sink();
+
+        let __progress = StepProgress::new();
+
+        // Dummy solver for advect context
+
+        let __domain_tmp = spec.domain.clone();
+
+        let __solver = FftPoisson::new(&__domain_tmp);
+
+        let __ctx = SimContext {
+
+            solver: &__solver,
+
+            advector: &__advector,
+
+            emitter: &__emitter,
+
+            progress: &__progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.1,
+
+            g: 0.0,
+
+        };
+
+        spec.advect_v(&accel, &__ctx);
 
         let m1 = spec.total_mass();
         // Mass should be approximately conserved (forward Euler introduces some error)
@@ -1762,7 +1716,39 @@ mod tests {
             dz: vec![0.0; n_sp],
             shape: [4, 4, 4],
         };
-        spec.advect_x(&disp, 0.01);
+        let __advector = SemiLagrangian::new();
+
+        let __emitter = EventEmitter::sink();
+
+        let __progress = StepProgress::new();
+
+        // Dummy solver for advect context
+
+        let __domain_tmp = spec.domain.clone();
+
+        let __solver = FftPoisson::new(&__domain_tmp);
+
+        let __ctx = SimContext {
+
+            solver: &__solver,
+
+            advector: &__advector,
+
+            emitter: &__emitter,
+
+            progress: &__progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.01,
+
+            g: 0.0,
+
+        };
+
+        spec.advect_x(&disp, &__ctx);
 
         // Should still have finite coefficients
         assert!(
@@ -1914,7 +1900,39 @@ mod tests {
             gz: vec![0.0; n_sp],
             shape: [4, 4, 4],
         };
-        spec.advect_v(&accel, 0.01);
+        let __advector = SemiLagrangian::new();
+
+        let __emitter = EventEmitter::sink();
+
+        let __progress = StepProgress::new();
+
+        // Dummy solver for advect context
+
+        let __domain_tmp = spec.domain.clone();
+
+        let __solver = FftPoisson::new(&__domain_tmp);
+
+        let __ctx = SimContext {
+
+            solver: &__solver,
+
+            advector: &__advector,
+
+            emitter: &__emitter,
+
+            progress: &__progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.01,
+
+            g: 0.0,
+
+        };
+
+        spec.advect_v(&accel, &__ctx);
         assert_eq!(
             spec.positivity_violations(),
             0,

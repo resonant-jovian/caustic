@@ -7,18 +7,14 @@
 //! Reference: Ceruti, Kusch & Lubich (2024), "A parallel rank-adaptive
 //! integrator for dynamical low-rank approximation".
 
-use std::sync::Arc;
-use std::time::Instant;
-
 use faer::Mat;
 
 use super::super::{
-    advecator::Advector,
     algos::ht::HtTensor,
+    context::SimContext,
     integrator::{StepProducts, StepTimings, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
-    progress::{StepPhase, StepProgress},
-    solver::PoissonSolver,
+    progress::StepPhase,
     types::*,
 };
 use super::helpers;
@@ -67,20 +63,15 @@ impl Default for ParallelBugConfig {
 pub struct ParallelBugIntegrator {
     /// BUG truncation, rank, rejection, and conservation settings.
     pub config: ParallelBugConfig,
-    /// Gravitational constant G.
-    pub g: f64,
     last_timings: StepTimings,
-    progress: Option<Arc<StepProgress>>,
 }
 
 impl ParallelBugIntegrator {
-    /// Create a new parallel BUG integrator with the given gravitational constant and config.
-    pub fn new(g: f64, config: ParallelBugConfig) -> Self {
+    /// Create a new parallel BUG integrator with the given config.
+    pub fn new(config: ParallelBugConfig) -> Self {
         Self {
             config,
-            g,
             last_timings: StepTimings::default(),
-            progress: None,
         }
     }
 
@@ -169,7 +160,7 @@ impl ParallelBugIntegrator {
     fn parallel_bug_step(
         &self,
         repr: &mut dyn PhaseSpaceRepr,
-        solver: &dyn PoissonSolver,
+        ctx: &SimContext,
         dt: f64,
         timings: &mut StepTimings,
     ) {
@@ -185,7 +176,7 @@ impl ParallelBugIntegrator {
         };
 
         // Phase 1: Half drift — parallel K-steps for spatial leaves
-        helpers::report_phase!(self.progress, StepPhase::BugKStep, 0, 5);
+        helpers::report_phase!(ctx, StepPhase::BugKStep, 0, 5);
         helpers::time_ms!(timings, drift_ms, {
             let results = Self::parallel_drift_k_steps(ht, dt / 2.0, &self.config);
             for (d, (new_frame, r_mat)) in results.into_iter().enumerate() {
@@ -195,15 +186,15 @@ impl ParallelBugIntegrator {
         });
 
         // Poisson solve at midpoint
-        helpers::report_phase!(self.progress, StepPhase::BugLStep, 1, 5);
+        helpers::report_phase!(ctx, StepPhase::BugLStep, 1, 5);
         let (_, _, accel) = helpers::time_ms!(
             timings,
             poisson_ms,
-            helpers::solve_poisson(ht, solver, self.g)
+            helpers::solve_poisson(ht, ctx)
         );
 
         // Phase 2: Full kick — parallel K-steps for velocity leaves
-        helpers::report_phase!(self.progress, StepPhase::BugLStep, 2, 5);
+        helpers::report_phase!(ctx, StepPhase::BugLStep, 2, 5);
         helpers::time_ms!(timings, kick_ms, {
             let results = Self::parallel_kick_k_steps(ht, &accel, dt, &self.config);
             for (i, (new_frame, r_mat)) in results.into_iter().enumerate() {
@@ -214,7 +205,7 @@ impl ParallelBugIntegrator {
         });
 
         // Phase 3: Half drift — parallel K-steps for spatial leaves
-        helpers::report_phase!(self.progress, StepPhase::BugLStep, 3, 5);
+        helpers::report_phase!(ctx, StepPhase::BugLStep, 3, 5);
         helpers::time_ms!(timings, drift_ms, {
             let results = Self::parallel_drift_k_steps(ht, dt / 2.0, &self.config);
             for (d, (new_frame, r_mat)) in results.into_iter().enumerate() {
@@ -224,7 +215,7 @@ impl ParallelBugIntegrator {
         });
 
         // SVD-truncate interior nodes
-        helpers::report_phase!(self.progress, StepPhase::BugSStep, 4, 5);
+        helpers::report_phase!(ctx, StepPhase::BugSStep, 4, 5);
         ht.truncate(self.config.tolerance);
 
         if let Some(ref dens) = density_before {
@@ -283,22 +274,21 @@ impl ParallelBugIntegrator {
     fn strang_fallback(
         &self,
         repr: &mut dyn PhaseSpaceRepr,
-        solver: &dyn PoissonSolver,
-        advector: &dyn Advector,
+        ctx: &SimContext,
         dt: f64,
         timings: &mut StepTimings,
     ) {
-        helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / 2.0));
+        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
 
         let (_, _, accel) = helpers::time_ms!(
             timings,
             poisson_ms,
-            helpers::solve_poisson(repr, solver, self.g)
+            helpers::solve_poisson(repr, ctx)
         );
 
-        helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, dt));
+        helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(dt)));
 
-        helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / 2.0));
+        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
     }
 }
 
@@ -306,32 +296,29 @@ impl TimeIntegrator for ParallelBugIntegrator {
     fn advance(
         &mut self,
         repr: &mut dyn PhaseSpaceRepr,
-        solver: &dyn PoissonSolver,
-        advector: &dyn Advector,
-        dt: f64,
+        ctx: &SimContext,
     ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("parallel_bug_advance").entered();
         let mut timings = StepTimings::default();
+        let dt = ctx.dt;
 
-        if let Some(ref p) = self.progress {
-            p.start_step();
-        }
+        ctx.progress.start_step();
 
         let is_ht = repr.as_any().downcast_ref::<HtTensor>().is_some();
 
         if is_ht {
-            self.parallel_bug_step(repr, solver, dt, &mut timings);
+            self.parallel_bug_step(repr, ctx, dt, &mut timings);
         } else {
-            self.strang_fallback(repr, solver, advector, dt, &mut timings);
+            self.strang_fallback(repr, ctx, dt, &mut timings);
         }
 
-        helpers::report_phase!(self.progress, StepPhase::StepComplete, 5, 5);
+        helpers::report_phase!(ctx, StepPhase::StepComplete, 5, 5);
 
         // Compute end-of-step products for caller reuse
         let (density, potential, acceleration) = helpers::time_ms!(
             timings,
             density_ms,
-            helpers::solve_poisson(repr, solver, self.g)
+            helpers::solve_poisson(repr, ctx)
         );
 
         self.last_timings = timings;
@@ -344,15 +331,11 @@ impl TimeIntegrator for ParallelBugIntegrator {
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
-        helpers::dynamical_timestep(repr, self.g, cfl_factor)
+        helpers::dynamical_timestep(repr, 1.0, cfl_factor)
     }
 
     fn last_step_timings(&self) -> Option<&StepTimings> {
         Some(&self.last_timings)
-    }
-
-    fn set_progress(&mut self, progress: Arc<StepProgress>) {
-        self.progress = Some(progress);
     }
 }
 

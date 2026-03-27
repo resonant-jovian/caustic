@@ -9,10 +9,13 @@
 fn strong_landau_damping() {
     use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::algos::uniform::UniformGrid6D;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::integrator::TimeIntegrator as _;
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
     use crate::tooling::core::poisson::fft::FftPoisson;
+    use crate::tooling::core::progress::StepProgress;
     use crate::tooling::core::solver::PoissonSolver as _;
     use crate::tooling::core::time::strang::StrangSplitting;
 
@@ -84,14 +87,36 @@ fn strong_landau_damping() {
     // ── Evolve with manual time stepping to track field energy ────────
     let poisson = FftPoisson::new(&domain);
     let advector = SemiLagrangian::new();
-    let mut integrator = StrangSplitting::new(g);
+    let emitter = EventEmitter::sink();
+    let progress = StepProgress::new();
+    let make_ctx = |dt: f64| SimContext {
+        solver: &poisson,
+        advector: &advector,
+        emitter: &emitter,
+        progress: &progress,
+        step: 0,
+        time: 0.0,
+        dt,
+        g,
+    };
+    let mut integrator = StrangSplitting::new();
     let dt = 0.1_f64;
     let n_steps = (t_final / dt) as usize;
 
     // Compute initial field energy: E_field = 0.5 * ∫ |∇Φ|² dx³
     let compute_field_energy = |grid: &UniformGrid6D, poisson: &FftPoisson, dx: &[f64; 3]| {
         let rho = grid.compute_density();
-        let potential = poisson.solve(&rho, g);
+        let solve_ctx = SimContext {
+            solver: poisson as &dyn crate::tooling::core::solver::PoissonSolver,
+            advector: &advector,
+            emitter: &emitter,
+            progress: &progress,
+            step: 0,
+            time: 0.0,
+            dt: 0.0,
+            g,
+        };
+        let potential = poisson.solve(&rho, &solve_ctx);
         let accel = poisson.compute_acceleration(&potential);
         let dx3 = dx[0] * dx[1] * dx[2];
         // E_field = 0.5 * Σ |g|² * dx³  (g = -∇Φ, so |g|² = |∇Φ|²)
@@ -111,7 +136,7 @@ fn strong_landau_damping() {
 
     // Record initial total energy for conservation check
     let rho_init = grid.compute_density();
-    let pot_init = poisson.solve(&rho_init, g);
+    let pot_init = poisson.solve(&rho_init, &make_ctx(0.0));
     let dx3 = dx[0] * dx[1] * dx[2];
     let w_init: f64 = rho_init
         .data
@@ -125,7 +150,7 @@ fn strong_landau_damping() {
 
     for step in 0..n_steps {
         integrator
-            .advance(&mut grid, &poisson, &advector, dt)
+            .advance(&mut grid, &make_ctx(dt))
             .unwrap();
 
         // Sample field energy at regular intervals
@@ -143,7 +168,7 @@ fn strong_landau_damping() {
     );
 
     // (1) Energy conservation: compute final total energy
-    let pot_final = poisson.solve(&rho_final, g);
+    let pot_final = poisson.solve(&rho_final, &make_ctx(0.0));
     let w_final: f64 = rho_final
         .data
         .iter()

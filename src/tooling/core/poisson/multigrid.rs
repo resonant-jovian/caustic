@@ -554,6 +554,12 @@ impl PoissonSolver for Multigrid {
 
 #[cfg(test)]
 mod tests {
+use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
+    use crate::tooling::core::progress::StepProgress;
+    use crate::tooling::core::solver::PoissonSolver as _;
+
     use super::*;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use std::f64::consts::PI;
@@ -601,7 +607,33 @@ mod tests {
             data: rho,
             shape: [nx, ny, nz],
         };
-        let pot = mg.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+        let _emitter = EventEmitter::sink();
+
+        let _progress = StepProgress::new();
+
+        let _ctx = SimContext {
+
+            solver: &mg as &dyn crate::tooling::core::solver::PoissonSolver,
+
+            advector: &_advector,
+
+            emitter: &_emitter,
+
+            progress: &_progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.0,
+
+            g: 1.0,
+
+        };
+
+        let pot = mg.solve(&density, &_ctx);
 
         // Check a few interior points
         let mid = nx / 2;
@@ -645,20 +677,39 @@ mod tests {
         let rho8 = make_rho(mg8.shape, mg8.dx);
         let rho16 = make_rho(mg16.shape, mg16.dx);
 
-        let pot8 = mg8.solve(
-            &DensityField {
-                data: rho8,
-                shape: mg8.shape,
-            },
-            1.0,
-        );
-        let pot16 = mg16.solve(
-            &DensityField {
-                data: rho16,
-                shape: mg16.shape,
-            },
-            1.0,
-        );
+        let _advector = SemiLagrangian::new();
+        let _emitter = EventEmitter::sink();
+        let _progress = StepProgress::new();
+        let _ctx8 = SimContext {
+            solver: &mg8 as &dyn crate::tooling::core::solver::PoissonSolver,
+            advector: &_advector,
+            emitter: &_emitter,
+            progress: &_progress,
+            step: 0,
+            time: 0.0,
+            dt: 0.0,
+            g: 1.0,
+        };
+        let density8 = DensityField {
+            data: rho8,
+            shape: mg8.shape,
+        };
+        let pot8 = mg8.solve(&density8, &_ctx8);
+        let _ctx16 = SimContext {
+            solver: &mg16 as &dyn crate::tooling::core::solver::PoissonSolver,
+            advector: &_advector,
+            emitter: &_emitter,
+            progress: &_progress,
+            step: 0,
+            time: 0.0,
+            dt: 0.0,
+            g: 1.0,
+        };
+        let density16 = DensityField {
+            data: rho16,
+            shape: mg16.shape,
+        };
+        let pot16 = mg16.solve(&density16, &_ctx16);
 
         // Compute max error at cell centers vs analytic
         let err = |pot: &PotentialField, dx: [f64; 3]| -> f64 {
@@ -718,8 +769,60 @@ mod tests {
             data: rho,
             shape: [nx, ny, nz],
         };
-        let pot_mg = mg.solve(&density, 1.0);
-        let pot_fft = fft.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+        let _emitter = EventEmitter::sink();
+
+        let _progress = StepProgress::new();
+
+        let _ctx = SimContext {
+
+            solver: &mg as &dyn crate::tooling::core::solver::PoissonSolver,
+
+            advector: &_advector,
+
+            emitter: &_emitter,
+
+            progress: &_progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.0,
+
+            g: 1.0,
+
+        };
+
+        let pot_mg = mg.solve(&density, &_ctx);
+        let _advector = SemiLagrangian::new();
+
+        let _emitter = EventEmitter::sink();
+
+        let _progress = StepProgress::new();
+
+        let _ctx = SimContext {
+
+            solver: &fft as &dyn crate::tooling::core::solver::PoissonSolver,
+
+            advector: &_advector,
+
+            emitter: &_emitter,
+
+            progress: &_progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.0,
+
+            g: 1.0,
+
+        };
+
+        let pot_fft = fft.solve(&density, &_ctx);
 
         // Subtract means (multigrid and FFT may differ by a constant)
         let mean_mg: f64 = pot_mg.data.iter().sum::<f64>() / pot_mg.data.len() as f64;

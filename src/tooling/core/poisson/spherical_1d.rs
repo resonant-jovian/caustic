@@ -8,7 +8,7 @@
 //! Designed for use with `SphericalRepr` where the density is purely
 //! radial, avoiding the cost of a full 3D solve.
 
-use super::super::{solver::PoissonSolver, types::*};
+use super::super::{context::SimContext, solver::PoissonSolver, types::*};
 
 /// 1D Poisson solver for spherically symmetric density on a uniform radial grid.
 pub struct Spherical1DPoisson {
@@ -34,10 +34,9 @@ impl Spherical1DPoisson {
 }
 
 impl PoissonSolver for Spherical1DPoisson {
-    fn set_progress(&mut self, _p: std::sync::Arc<super::super::progress::StepProgress>) {}
-
     /// Solve for the radial potential via the Thomas algorithm on the tridiagonal system.
-    fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
+    fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
+        let g = ctx.g;
         let nr = density.data.len();
         let four_pi_g = 4.0 * std::f64::consts::PI * g;
 

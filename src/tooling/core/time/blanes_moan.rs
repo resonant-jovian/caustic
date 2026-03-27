@@ -12,14 +12,11 @@
 //! Runge-Kutta and Runge-Kutta-Nystrom methods",
 //! J. Comput. Appl. Math. 142 (2002), 313-330, method SRKN₆b.
 
-use std::sync::Arc;
-
 use super::super::{
-    advecator::Advector,
+    context::SimContext,
     integrator::{StepProducts, StepTimings, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
-    progress::{StepPhase, StepProgress},
-    solver::PoissonSolver,
+    progress::StepPhase,
     types::*,
 };
 use super::helpers;
@@ -55,21 +52,15 @@ const BM4_B: [f64; 5] = [
 /// it preferable when drift and kick evaluations are cheap relative to the
 /// accuracy gain.
 pub struct BlanesMoanSplitting {
-    /// Gravitational constant G used in the Poisson solve.
-    pub g: f64,
     /// Timing breakdown from the most recent `advance` call.
     last_timings: StepTimings,
-    /// Optional lock-free progress reporter for TUI sub-step tracking.
-    progress: Option<Arc<StepProgress>>,
 }
 
 impl BlanesMoanSplitting {
-    /// Creates a Blanes-Moan 4th-order integrator with the given gravitational constant.
-    pub fn new(g: f64) -> Self {
+    /// Creates a Blanes-Moan 4th-order integrator.
+    pub fn new() -> Self {
         Self {
-            g,
             last_timings: StepTimings::default(),
-            progress: None,
         }
     }
 }
@@ -78,50 +69,47 @@ impl TimeIntegrator for BlanesMoanSplitting {
     fn advance(
         &mut self,
         repr: &mut dyn PhaseSpaceRepr,
-        solver: &dyn PoissonSolver,
-        advector: &dyn Advector,
-        dt: f64,
+        ctx: &SimContext,
     ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("bm4_advance").entered();
         let mut timings = StepTimings::default();
         let n_sub: u8 = 11;
+        let dt = ctx.dt;
 
-        if let Some(ref p) = self.progress {
-            p.start_step();
-        }
+        ctx.progress.start_step();
 
         // DKD palindromic: D(a0) K(b0) D(a1) K(b1) D(a2) K(b2) D(a3) K(b3) D(a4) K(b4) D(a5)
         // = 6 drifts interleaved with 5 kicks = 11 sub-steps.
         for i in 0..6 {
             // --- Drift a_i * dt ---
-            helpers::report_phase!(self.progress, StepPhase::DriftHalf1, 2 * i as u8, n_sub);
+            helpers::report_phase!(ctx, StepPhase::DriftHalf1, 2 * i as u8, n_sub);
             {
                 let _s = tracing::info_span!("bm4_drift", stage = i).entered();
-                helpers::time_ms!(timings, drift_ms, advector.drift(repr, BM4_A[i] * dt));
+                helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(BM4_A[i] * dt)));
             }
 
             // --- Kick b_i * dt (5 kicks between 6 drifts) ---
             if i < 5 {
-                helpers::report_phase!(self.progress, StepPhase::Kick, 2 * i as u8 + 1, n_sub);
+                helpers::report_phase!(ctx, StepPhase::Kick, 2 * i as u8 + 1, n_sub);
                 {
                     let _s = tracing::info_span!("bm4_kick", stage = i).entered();
                     let (_density, _potential, accel) = helpers::time_ms!(
                         timings,
                         poisson_ms,
-                        helpers::solve_poisson(repr, solver, self.g)
+                        helpers::solve_poisson(repr, ctx)
                     );
-                    helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, BM4_B[i] * dt));
+                    helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(BM4_B[i] * dt)));
                 }
             }
         }
 
-        helpers::report_phase!(self.progress, StepPhase::StepComplete, n_sub, n_sub);
+        helpers::report_phase!(ctx, StepPhase::StepComplete, n_sub, n_sub);
 
         // Compute end-of-step products for caller reuse
         let (density, potential, acceleration) = helpers::time_ms!(
             timings,
             density_ms,
-            helpers::solve_poisson(repr, solver, self.g)
+            helpers::solve_poisson(repr, ctx)
         );
 
         self.last_timings = timings;
@@ -134,14 +122,10 @@ impl TimeIntegrator for BlanesMoanSplitting {
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
-        helpers::dynamical_timestep(repr, self.g, cfl_factor)
+        helpers::dynamical_timestep(repr, 1.0, cfl_factor)
     }
 
     fn last_step_timings(&self) -> Option<&StepTimings> {
         Some(&self.last_timings)
-    }
-
-    fn set_progress(&mut self, progress: Arc<StepProgress>) {
-        self.progress = Some(progress);
     }
 }

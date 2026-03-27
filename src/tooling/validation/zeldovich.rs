@@ -11,6 +11,9 @@ fn zeldovich_pancake() {
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
     use crate::tooling::core::poisson::fft::FftPoisson;
     use crate::tooling::core::time::strang::StrangSplitting;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
+    use crate::tooling::core::progress::StepProgress;
 
     // Setup: 1D plane wave in x1. v₀(x) = -A*sin(k*x1) (converging flow toward x=0).
     // t_col = 1/A (with k=1, H=1): at t=1 the caustic forms.
@@ -87,15 +90,39 @@ fn zeldovich_pancake() {
 
     let poisson = FftPoisson::new(&domain);
     let advector = SemiLagrangian::new();
-    let mut integrator = StrangSplitting::new(g);
+    let mut integrator = StrangSplitting::new();
+    let emitter = EventEmitter::sink();
+    let progress = StepProgress::new();
 
     // Run toward the caustic: t_col=1, run to t=0.8
     let dt = 0.05f64;
     let n_steps = 16; // 16 * 0.05 = 0.8 * t_col
 
     for _ in 0..n_steps {
+        let ctx = SimContext {
+
+            solver: &poisson,
+
+            advector: &advector,
+
+            emitter: &emitter,
+
+            progress: &progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: dt,
+
+            g: 1.0,
+
+        };
+
         integrator
-            .advance(&mut grid, &poisson, &advector, dt)
+
+            .advance(&mut grid, &ctx)
+
             .unwrap();
     }
 

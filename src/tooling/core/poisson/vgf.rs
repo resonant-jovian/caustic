@@ -7,10 +7,9 @@
 //! Reference: Vico, Greengard & Ferrando, "Fast convolution with free-space
 //! Green's functions", J. Comput. Phys. 323 (2016), 191–203.
 
-use super::super::{init::domain::Domain, solver::PoissonSolver, types::*};
+use super::super::{context::SimContext, init::domain::Domain, solver::PoissonSolver, types::*};
 use rayon::prelude::*;
 use rustfft::{FftPlanner, num_complex::Complex};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Vico–Greengard–Ferrando isolated Poisson solver.
@@ -32,8 +31,6 @@ pub struct VgfPoisson {
     inv: [Arc<dyn rustfft::Fft<f64>>; 3],
     /// Cached scratch buffer for (2N)³ FFT transposes.
     scratch_cache: Mutex<Vec<Complex<f64>>>,
-    /// Shared progress state for intra-phase reporting.
-    progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
 impl VgfPoisson {
@@ -107,7 +104,6 @@ impl VgfPoisson {
             fwd,
             inv,
             scratch_cache: Mutex::new(Vec::new()),
-            progress: None,
         }
     }
 }
@@ -127,16 +123,12 @@ fn wavenumber(i: usize, n: usize, cell_size: f64) -> f64 {
 }
 
 impl PoissonSolver for VgfPoisson {
-    /// Attach a shared progress handle for intra-step reporting.
-    fn set_progress(&mut self, p: Arc<super::super::progress::StepProgress>) {
-        self.progress = Some(p);
-    }
-
     /// Solve the Poisson equation for the given density field.
     ///
     /// Zero-pads rho into (2N)^3, convolves with the VGF kernel in Fourier space,
     /// and extracts the N^3 potential sub-grid.
-    fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
+    fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
+        let g = ctx.g;
         let _span = tracing::info_span!("vgf_poisson_solve").entered();
         use std::f64::consts::PI;
         let [nx, ny, nz] = self.shape;
@@ -174,20 +166,11 @@ impl PoissonSolver for VgfPoisson {
         // 3. Pointwise multiply: Φ̂ = 4πG · dx³ · Ĝ_VGF · ρ̂ (parallel)
         let dx3 = self.dx[0] * self.dx[1] * self.dx[2];
         let factor = 4.0 * PI * g * dx3;
-        let total = n2_total as u64;
-        let counter = AtomicU64::new(0);
-        let report_interval = (total / 100).max(1);
         rho_pad
             .par_iter_mut()
             .zip(self.green_hat.par_iter())
             .for_each(|(rho, green)| {
                 *rho = factor * green * *rho;
-                if let Some(ref p) = self.progress {
-                    let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c.is_multiple_of(report_interval) {
-                        p.set_intra_progress(c, total);
-                    }
-                }
             });
 
         // 4. Inverse FFT

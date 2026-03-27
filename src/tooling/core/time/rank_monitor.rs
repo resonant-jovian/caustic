@@ -344,7 +344,7 @@ mod tests {
 
         let poisson = FftPoisson::new(&domain);
         let advector = SemiLagrangian::new();
-        let emitter = EventEmitter::new();
+        let emitter = EventEmitter::sink();
         let progress = StepProgress::new();
         let mut integrator = InstrumentedStrangSplitting::new();
 
@@ -441,7 +441,7 @@ mod tests {
         ht.max_rank = 16;
         let poisson = FftPoisson::new(&domain);
         let advector = SemiLagrangian::new();
-        let emitter = EventEmitter::new();
+        let emitter = EventEmitter::sink();
         let progress = StepProgress::new();
         let mut integrator = InstrumentedStrangSplitting::new();
 
@@ -536,7 +536,7 @@ mod tests {
         ht.max_rank = 16;
         let poisson = FftPoisson::new(&domain);
         let advector = SemiLagrangian::new();
-        let emitter = EventEmitter::new();
+        let emitter = EventEmitter::sink();
         let progress = StepProgress::new();
         // G = 0: pure free streaming, no Poisson kick — keeps frames well-conditioned
         let mut integrator = InstrumentedStrangSplitting::new();

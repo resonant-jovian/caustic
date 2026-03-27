@@ -9,6 +9,9 @@ fn jeans_stability() {
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
     use crate::tooling::core::poisson::fft::FftPoisson;
     use crate::tooling::core::time::strang::StrangSplitting;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
+    use crate::tooling::core::progress::StepProgress;
 
     // Large sigma=3.0, small box lx=0.5:
     // k_J = sqrt(4πGρ0)/σ ≈ sqrt(4π)/3 ≈ 1.18 (ρ0≈1, G=1)
@@ -78,12 +81,36 @@ fn jeans_stability() {
 
     let poisson = FftPoisson::new(&domain);
     let advector = SemiLagrangian::new();
-    let mut integrator = StrangSplitting::new(g);
+    let mut integrator = StrangSplitting::new();
+    let emitter = EventEmitter::sink();
+    let progress = StepProgress::new();
     let dt = 0.05f64;
 
     for _ in 0..5 {
+        let ctx = SimContext {
+
+            solver: &poisson,
+
+            advector: &advector,
+
+            emitter: &emitter,
+
+            progress: &progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: dt,
+
+            g: 1.0,
+
+        };
+
         integrator
-            .advance(&mut grid, &poisson, &advector, dt)
+
+            .advance(&mut grid, &ctx)
+
             .unwrap();
     }
 

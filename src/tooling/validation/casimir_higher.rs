@@ -69,7 +69,7 @@ fn casimir_higher_order() {
         .domain(domain.clone())
         .poisson_solver(poisson)
         .advector(SemiLagrangian::new())
-        .integrator(StrangSplitting::new(1.0))
+        .integrator(StrangSplitting::new())
         .initial_conditions(snap)
         .time_final(2.0)
         .gravitational_constant(1.0)

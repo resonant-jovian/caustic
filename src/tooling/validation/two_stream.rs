@@ -11,6 +11,9 @@ fn two_stream_instability() {
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
     use crate::tooling::core::poisson::fft::FftPoisson;
     use crate::tooling::core::time::strang::StrangSplitting;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
+    use crate::tooling::core::progress::StepProgress;
 
     // Two-stream: f(x,v) = C * v₁² * exp(-v²/2) * (1 + ε cos(k x₁))
     // The v² factor creates two beams moving in ±x₁ direction.
@@ -82,14 +85,38 @@ fn two_stream_instability() {
 
     let poisson = FftPoisson::new(&domain);
     let advector = SemiLagrangian::new();
-    let mut integrator = StrangSplitting::new(g);
+    let mut integrator = StrangSplitting::new();
+    let emitter = EventEmitter::sink();
+    let progress = StepProgress::new();
     let dt = 0.05f64;
 
     // Track amplitude over time for saturation detection
     let mut max_amp = amp_init;
     for step in 0..40 {
+        let ctx = SimContext {
+
+            solver: &poisson,
+
+            advector: &advector,
+
+            emitter: &emitter,
+
+            progress: &progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: dt,
+
+            g: 1.0,
+
+        };
+
         integrator
-            .advance(&mut grid, &poisson, &advector, dt)
+
+            .advance(&mut grid, &ctx)
+
             .unwrap();
 
         if (step + 1) % 10 == 0 {

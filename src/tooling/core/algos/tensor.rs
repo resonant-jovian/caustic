@@ -11,6 +11,7 @@
 //! where Gk is a 3-way core of shape (r_k, n_k, r_{k+1}).
 
 use super::super::{
+    context::SimContext,
     init::domain::{Domain, SpatialBoundType, VelocityBoundType},
     phasespace::PhaseSpaceRepr,
     types::*,
@@ -19,7 +20,6 @@ use super::lagrangian::sl_shift_1d;
 use faer::Mat;
 use rayon::prelude::*;
 use std::any::Any;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // ─── TT Core ─────────────────────────────────────────────────────────────────
@@ -137,8 +137,6 @@ pub struct TensorTrain {
     pub tolerance: f64,
     /// Maximum allowed TT rank.
     pub max_rank: usize,
-    /// Optional shared progress state for intra-phase reporting.
-    progress: Option<Arc<super::super::progress::StepProgress>>,
     /// If true, apply Zhang-Shu positivity limiter after each advection step.
     positivity_limiter: bool,
     /// Number of negative-value cells corrected by the positivity limiter.
@@ -169,7 +167,6 @@ impl TensorTrain {
             domain,
             tolerance: 1e-10,
             max_rank,
-            progress: None,
             positivity_limiter: false,
             positivity_violations: AtomicU64::new(0),
         }
@@ -319,7 +316,6 @@ impl TensorTrain {
             domain: domain.clone(),
             tolerance,
             max_rank,
-            progress: None,
             positivity_limiter: false,
             positivity_violations: AtomicU64::new(0),
         }
@@ -355,13 +351,6 @@ impl TensorTrain {
         let [n0, n1, n2, n3, n4, n5] = self.shape;
         let stride_0 = n1 * n2 * n3 * n4 * n5;
 
-        let counter = AtomicU64::new(0);
-        let report_interval = (n0 as u64 / 100).max(1);
-
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, n0 as u64);
-        }
-
         // Parallelize over i0 — each slab is independent
         (0..n0)
             .into_par_iter()
@@ -376,13 +365,6 @@ impl TensorTrain {
                                 }
                             }
                         }
-                    }
-                }
-
-                if let Some(ref p) = self.progress {
-                    let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c.is_multiple_of(report_interval) {
-                        p.set_intra_progress(c, n0 as u64);
                     }
                 }
                 slab
@@ -558,7 +540,6 @@ impl TensorTrain {
             domain: self.domain.clone(),
             tolerance: self.tolerance.min(other.tolerance),
             max_rank: self.max_rank.max(other.max_rank),
-            progress: None,
             positivity_limiter: self.positivity_limiter,
             positivity_violations: AtomicU64::new(0),
         };
@@ -694,10 +675,6 @@ impl TensorTrain {
 // ─── PhaseSpaceRepr implementation ───────────────────────────────────────────
 
 impl PhaseSpaceRepr for TensorTrain {
-    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
-        self.progress = Some(p);
-    }
-
     fn compute_density(&self) -> DensityField {
         let [n0, n1, n2, _n3, _n4, _n5] = self.shape;
         let n_spatial = n0 * n1 * n2;
@@ -710,13 +687,6 @@ impl PhaseSpaceRepr for TensorTrain {
         let c0 = &self.cores[0];
         let c1 = &self.cores[1];
         let c2 = &self.cores[2];
-
-        let counter = AtomicU64::new(0);
-        let report_interval = (n0 as u64 / 100).max(1);
-
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, n0 as u64);
-        }
 
         let data: Vec<f64> = (0..n0)
             .into_par_iter()
@@ -755,12 +725,6 @@ impl PhaseSpaceRepr for TensorTrain {
                     }
                 }
 
-                if let Some(ref p) = self.progress {
-                    let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c.is_multiple_of(report_interval) {
-                        p.set_intra_progress(c, n0 as u64);
-                    }
-                }
                 slab
             })
             .collect();
@@ -771,7 +735,8 @@ impl PhaseSpaceRepr for TensorTrain {
         }
     }
 
-    fn advect_x(&mut self, _displacement: &DisplacementField, dt: f64) {
+    fn advect_x(&mut self, _displacement: &DisplacementField, ctx: &SimContext) {
+        let dt = ctx.dt;
         // Semi-Lagrangian approach: expand to full, apply shifts, rebuild TT.
         // For small grids this is feasible; for large grids a proper TT-cross
         // approach should be used (future work).
@@ -789,13 +754,6 @@ impl PhaseSpaceRepr for TensorTrain {
         // For each velocity cell (i3,i4,i5), shift the spatial block
         let nv_total = n3 * n4 * n5;
         let ns_total = n0 * n1 * n2;
-
-        let counter = AtomicU64::new(0);
-        let report_interval = (nv_total as u64 / 100).max(1);
-
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, nv_total as u64);
-        }
 
         for vi in 0..nv_total {
             let i5 = vi % n5;
@@ -879,12 +837,6 @@ impl PhaseSpaceRepr for TensorTrain {
                 }
             }
 
-            if let Some(ref p) = self.progress {
-                let c = counter.fetch_add(1, Ordering::Relaxed);
-                if c.is_multiple_of(report_interval) {
-                    p.set_intra_progress(c, nv_total as u64);
-                }
-            }
         }
 
         // Apply positivity limiter before TT rebuild
@@ -910,7 +862,8 @@ impl PhaseSpaceRepr for TensorTrain {
         self.ranks = new_tt.ranks;
     }
 
-    fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
+    fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext) {
+        let dt = ctx.dt;
         // Semi-Lagrangian approach: expand to full, apply velocity shifts, rebuild TT.
         let [n0, n1, n2, n3, n4, n5] = self.shape;
         let dv = self.domain.dv();
@@ -920,13 +873,6 @@ impl PhaseSpaceRepr for TensorTrain {
         let mut data = self.to_full();
         let ns_total = n0 * n1 * n2;
         let nv_total = n3 * n4 * n5;
-
-        let counter = AtomicU64::new(0);
-        let report_interval = (ns_total as u64 / 100).max(1);
-
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, ns_total as u64);
-        }
 
         for si in 0..ns_total {
             let ix2 = si % n2;
@@ -1011,12 +957,6 @@ impl PhaseSpaceRepr for TensorTrain {
                 }
             }
 
-            if let Some(ref p) = self.progress {
-                let c = counter.fetch_add(1, Ordering::Relaxed);
-                if c.is_multiple_of(report_interval) {
-                    p.set_intra_progress(c, ns_total as u64);
-                }
-            }
         }
 
         // Apply positivity limiter before TT rebuild
@@ -1269,11 +1209,6 @@ impl PhaseSpaceRepr for TensorTrain {
         // For simplicity with correct results, expand and compute directly for small grids.
         let data = self.to_full();
         let mut t = 0.0f64;
-        let counter = AtomicU64::new(0);
-        let report_interval = (n0 as u64 / 100).max(1);
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, n0 as u64);
-        }
         for i0 in 0..n0 {
             for i1 in 0..n1 {
                 for i2 in 0..n2 {
@@ -1294,12 +1229,6 @@ impl PhaseSpaceRepr for TensorTrain {
                             }
                         }
                     }
-                }
-            }
-            if let Some(ref p) = self.progress {
-                let c = counter.fetch_add(1, Ordering::Relaxed);
-                if c.is_multiple_of(report_interval) {
-                    p.set_intra_progress(c, n0 as u64);
                 }
             }
         }
@@ -1403,6 +1332,11 @@ mod tests {
     use super::*;
     use crate::tooling::core::algos::uniform::UniformGrid6D;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
+    use crate::tooling::core::progress::StepProgress;
+    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::poisson::fft::FftPoisson;
 
     fn test_domain(n: i128) -> Domain {
         Domain::builder()
@@ -1665,7 +1599,39 @@ mod tests {
             dz: vec![0.0; 64],
             shape: [4, 4, 4],
         };
-        tt.advect_x(&dummy, 0.01);
+        let __advector = SemiLagrangian::new();
+
+        let __emitter = EventEmitter::sink();
+
+        let __progress = StepProgress::new();
+
+        // Dummy solver for advect context
+
+        let __domain_tmp = tt.domain.clone();
+
+        let __solver = FftPoisson::new(&__domain_tmp);
+
+        let __ctx = SimContext {
+
+            solver: &__solver,
+
+            advector: &__advector,
+
+            emitter: &__emitter,
+
+            progress: &__progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.01,
+
+            g: 0.0,
+
+        };
+
+        tt.advect_x(&dummy, &__ctx);
         let m1 = tt.total_mass();
         assert!(m1.is_finite(), "Mass after advect must be finite");
     }
@@ -1973,7 +1939,39 @@ mod tests {
             dz: vec![0.0; 8 * 8 * 8],
             shape: [8, 8, 8],
         };
-        tt_no_lim.advect_x(&dummy_no, 0.01);
+        let __advector = SemiLagrangian::new();
+
+        let __emitter = EventEmitter::sink();
+
+        let __progress = StepProgress::new();
+
+        // Dummy solver for advect context
+
+        let __domain_tmp = tt_no_lim.domain.clone();
+
+        let __solver = FftPoisson::new(&__domain_tmp);
+
+        let __ctx = SimContext {
+
+            solver: &__solver,
+
+            advector: &__advector,
+
+            emitter: &__emitter,
+
+            progress: &__progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.01,
+
+            g: 0.0,
+
+        };
+
+        tt_no_lim.advect_x(&dummy_no, &__ctx);
         let full_no_lim = tt_no_lim.to_full();
         let min_no_lim = full_no_lim.iter().cloned().fold(f64::INFINITY, f64::min);
 
@@ -1991,7 +1989,39 @@ mod tests {
             dz: vec![0.0; 8 * 8 * 8],
             shape: [8, 8, 8],
         };
-        tt.advect_x(&dummy, 0.01);
+        let __advector = SemiLagrangian::new();
+
+        let __emitter = EventEmitter::sink();
+
+        let __progress = StepProgress::new();
+
+        // Dummy solver for advect context
+
+        let __domain_tmp = tt.domain.clone();
+
+        let __solver = FftPoisson::new(&__domain_tmp);
+
+        let __ctx = SimContext {
+
+            solver: &__solver,
+
+            advector: &__advector,
+
+            emitter: &__emitter,
+
+            progress: &__progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.01,
+
+            g: 0.0,
+
+        };
+
+        tt.advect_x(&dummy, &__ctx);
 
         // The violation counter must have recorded the negatives it clipped
         let violations = tt.positivity_violations();
@@ -2065,7 +2095,39 @@ mod tests {
             dz: vec![0.0; 8 * 8 * 8],
             shape: [8, 8, 8],
         };
-        tt.advect_x(&dummy, 0.01);
+        let __advector = SemiLagrangian::new();
+
+        let __emitter = EventEmitter::sink();
+
+        let __progress = StepProgress::new();
+
+        // Dummy solver for advect context
+
+        let __domain_tmp = tt.domain.clone();
+
+        let __solver = FftPoisson::new(&__domain_tmp);
+
+        let __ctx = SimContext {
+
+            solver: &__solver,
+
+            advector: &__advector,
+
+            emitter: &__emitter,
+
+            progress: &__progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.01,
+
+            g: 0.0,
+
+        };
+
+        tt.advect_x(&dummy, &__ctx);
         let mass_after = tt.total_mass();
 
         // Mass should be conserved to within TT-SVD recompression tolerance.

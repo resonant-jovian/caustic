@@ -13,13 +13,12 @@
 use rayon::prelude::*;
 
 use super::super::{
+    context::SimContext,
     init::{cosmological::ZeldovichIC, domain::Domain},
     phasespace::PhaseSpaceRepr,
     types::*,
 };
 use std::any::Any;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// One Lagrangian tracer particle on the dark matter sheet.
 pub struct SheetParticle {
@@ -46,7 +45,6 @@ pub struct SheetTracker {
     cached_dx: [f64; 3],
     cached_lx: [f64; 3],
     cached_is_periodic: bool,
-    progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
 impl SheetTracker {
@@ -97,7 +95,6 @@ impl SheetTracker {
             cached_dx: dx,
             cached_lx: lx,
             cached_is_periodic: is_periodic,
-            progress: None,
         }
     }
 
@@ -152,7 +149,6 @@ impl SheetTracker {
             cached_dx: dx,
             cached_lx: lx,
             cached_is_periodic: is_periodic,
-            progress: None,
         }
     }
 
@@ -167,12 +163,6 @@ impl SheetTracker {
         let dx = self.cached_dx;
         let lx = self.cached_lx;
         let is_periodic = self.cached_is_periodic;
-
-        let n_particles = self.particles.len() as u64;
-
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, n_particles);
-        }
 
         let shape = self.shape;
         let counts = self
@@ -233,12 +223,6 @@ impl SheetTracker {
             domain.spatial_bc,
             super::super::init::domain::SpatialBoundType::Periodic
         );
-
-        let n_particles = self.particles.len() as u64;
-
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, n_particles);
-        }
 
         let particle_mass = self.particle_mass;
         let density_data = self
@@ -415,25 +399,14 @@ impl SheetTracker {
 }
 
 impl PhaseSpaceRepr for SheetTracker {
-    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
-        self.progress = Some(p);
-    }
-
     fn compute_density(&self) -> DensityField {
         self.interpolate_density(&self.domain)
     }
 
-    fn advect_x(&mut self, _displacement: &DisplacementField, dt: f64) {
+    fn advect_x(&mut self, _displacement: &DisplacementField, ctx: &SimContext) {
+        let dt = ctx.dt;
         let is_periodic = self.cached_is_periodic;
         let lx = self.cached_lx;
-        let progress = self.progress.clone();
-        let n_particles = self.particles.len() as u64;
-        let counter = AtomicU64::new(0);
-        let report_interval = (n_particles / 100).max(1);
-
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, n_particles);
-        }
 
         self.particles.par_iter_mut().for_each(|p| {
             for (k, &l) in lx.iter().enumerate() {
@@ -443,27 +416,14 @@ impl PhaseSpaceRepr for SheetTracker {
                     p.x[k] = ((p.x[k] + l).rem_euclid(two_l)) - l;
                 }
             }
-            if let Some(ref prog) = progress {
-                let c = counter.fetch_add(1, Ordering::Relaxed);
-                if c.is_multiple_of(report_interval) {
-                    prog.set_intra_progress(c, n_particles);
-                }
-            }
         });
     }
 
-    fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
+    fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext) {
+        let dt = ctx.dt;
         let dx = self.cached_dx;
         let lx = self.cached_lx;
         let is_periodic = self.cached_is_periodic;
-        let progress = self.progress.clone();
-        let n_particles = self.particles.len() as u64;
-        let counter = AtomicU64::new(0);
-        let report_interval = (n_particles / 100).max(1);
-
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, n_particles);
-        }
 
         self.particles.par_iter_mut().for_each(|p| {
             let a = Self::interpolate_vec_field(
@@ -478,12 +438,6 @@ impl PhaseSpaceRepr for SheetTracker {
             );
             for (v, &acc) in p.v.iter_mut().zip(a.iter()) {
                 *v += acc * dt;
-            }
-            if let Some(ref prog) = progress {
-                let c = counter.fetch_add(1, Ordering::Relaxed);
-                if c.is_multiple_of(report_interval) {
-                    prog.set_intra_progress(c, n_particles);
-                }
             }
         });
     }
@@ -646,20 +600,7 @@ impl PhaseSpaceRepr for SheetTracker {
         let sx2 = nx[2] * sx3;
         let sx1 = nx[1] * sx2;
 
-        let n_particles = self.particles.len() as u64;
-        let report_interval = (n_particles / 100).max(1);
-
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, n_particles);
-        }
-
-        for (pi, p) in self.particles.iter().enumerate() {
-            if let Some(ref prog) = self.progress
-                && (pi as u64).is_multiple_of(report_interval)
-            {
-                prog.set_intra_progress(pi as u64, n_particles);
-            }
-
+        for (_pi, p) in self.particles.iter().enumerate() {
             // Spatial CIC indices
             let mut x_ci = [0isize; 3];
             let mut x_frac = [0.0f64; 3];
@@ -776,6 +717,11 @@ impl PhaseSpaceRepr for SheetTracker {
 mod tests {
     use super::*;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
+    use crate::tooling::core::progress::StepProgress;
+    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::poisson::fft::FftPoisson;
 
     fn test_domain() -> Domain {
         Domain::builder()
@@ -806,7 +752,39 @@ mod tests {
             shape: [8, 8, 8],
         };
         let x0: Vec<[f64; 3]> = sheet.particles.iter().map(|p| p.x).collect();
-        sheet.advect_x(&dummy_disp, dt);
+        let __advector = SemiLagrangian::new();
+
+        let __emitter = EventEmitter::sink();
+
+        let __progress = StepProgress::new();
+
+        // Dummy solver for advect context
+
+        let __domain_tmp = sheet.domain.clone();
+
+        let __solver = FftPoisson::new(&__domain_tmp);
+
+        let __ctx = SimContext {
+
+            solver: &__solver,
+
+            advector: &__advector,
+
+            emitter: &__emitter,
+
+            progress: &__progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: dt,
+
+            g: 0.0,
+
+        };
+
+        sheet.advect_x(&dummy_disp, &__ctx);
         let lx = 1.0;
         for (i, p) in sheet.particles.iter().enumerate() {
             let expected = x0[i][0] + 0.1 * dt;
@@ -853,7 +831,39 @@ mod tests {
             shape: [8, 8, 8],
         };
         for _ in 0..10 {
-            sheet.advect_x(&dummy, 0.01);
+            let __advector = SemiLagrangian::new();
+
+            let __emitter = EventEmitter::sink();
+
+            let __progress = StepProgress::new();
+
+            // Dummy solver for advect context
+
+            let __domain_tmp = sheet.domain.clone();
+
+            let __solver = FftPoisson::new(&__domain_tmp);
+
+            let __ctx = SimContext {
+
+                solver: &__solver,
+
+                advector: &__advector,
+
+                emitter: &__emitter,
+
+                progress: &__progress,
+
+                step: 0,
+
+                time: 0.0,
+
+                dt: 0.01,
+
+                g: 0.0,
+
+            };
+
+            sheet.advect_x(&dummy, &__ctx);
         }
         let m1 = sheet.total_mass();
         assert!((m0 - m1).abs() < 1e-14, "Mass not conserved: {m0} vs {m1}");
@@ -952,7 +962,39 @@ mod tests {
             shape: [8, 8, 8],
         };
         let dt = 0.1;
-        sheet.advect_v(&accel, dt);
+        let __advector = SemiLagrangian::new();
+
+        let __emitter = EventEmitter::sink();
+
+        let __progress = StepProgress::new();
+
+        // Dummy solver for advect context
+
+        let __domain_tmp = sheet.domain.clone();
+
+        let __solver = FftPoisson::new(&__domain_tmp);
+
+        let __ctx = SimContext {
+
+            solver: &__solver,
+
+            advector: &__advector,
+
+            emitter: &__emitter,
+
+            progress: &__progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: dt,
+
+            g: 0.0,
+
+        };
+
+        sheet.advect_v(&accel, &__ctx);
         // All particles should have v[0] ≈ 0.5 * 0.1 = 0.05
         for (i, p) in sheet.particles.iter().enumerate() {
             assert!(

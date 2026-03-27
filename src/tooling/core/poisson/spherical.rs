@@ -10,10 +10,8 @@
 //! Complexity: O(N³ l_max²) for decomposition and reconstruction.
 
 use rayon::prelude::*;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::super::{solver::PoissonSolver, types::*};
+use super::super::{context::SimContext, solver::PoissonSolver, types::*};
 use super::utils::finite_difference_acceleration;
 use std::f64::consts::PI;
 
@@ -33,8 +31,6 @@ pub struct SphericalHarmonicsPoisson {
     pub shape: [usize; 3],
     /// Cartesian cell spacings `[dx, dy, dz]`.
     pub dx: [f64; 3],
-    /// Shared progress state for intra-phase reporting.
-    progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
 impl SphericalHarmonicsPoisson {
@@ -60,7 +56,6 @@ impl SphericalHarmonicsPoisson {
             r_max,
             shape,
             dx,
-            progress: None,
         }
     }
 
@@ -385,16 +380,12 @@ fn reconstruct_potential(
     dx: &[f64; 3],
     n_radial: usize,
     r_max: f64,
-    progress: &Option<Arc<super::super::progress::StepProgress>>,
 ) -> PotentialField {
     let [nx, ny, nz] = *shape;
     let n_total = nx * ny * nz;
     let dr = r_max / n_radial as f64;
     let mut pot_data = vec![0.0f64; n_total];
 
-    let total = n_total as u64;
-    let counter = AtomicU64::new(0);
-    let report_interval = (total / 100).max(1);
     pot_data.par_iter_mut().enumerate().for_each(|(flat, val)| {
         let ix = flat / (ny * nz);
         let iy = (flat / nz) % ny;
@@ -422,12 +413,6 @@ fn reconstruct_potential(
             }
         }
         *val = sum;
-        if let Some(p) = progress {
-            let c = counter.fetch_add(1, Ordering::Relaxed);
-            if c.is_multiple_of(report_interval) {
-                p.set_intra_progress(c, total);
-            }
-        }
     });
 
     PotentialField {
@@ -441,18 +426,14 @@ fn reconstruct_potential(
 // ---------------------------------------------------------------------------
 
 impl PoissonSolver for SphericalHarmonicsPoisson {
-    /// Register a shared progress handle for intra-step reporting to the TUI.
-    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
-        self.progress = Some(p);
-    }
-
     /// Solve ∇²Φ = 4πGρ via spherical harmonic decomposition.
     ///
     /// Steps:
     /// 1. Decompose density into radial profiles rho_lm(r) for each (l,m).
     /// 2. Solve the radial Poisson equation for each mode.
     /// 3. Reconstruct the Cartesian potential by summing Phi_lm(r) Y_lm(theta,phi).
-    fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
+    fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
+        let g = ctx.g;
         let _span = tracing::info_span!("spherical_harmonics_solve").entered();
 
         // Step 1: decompose density
@@ -489,7 +470,6 @@ impl PoissonSolver for SphericalHarmonicsPoisson {
             &self.dx,
             self.n_radial,
             self.r_max,
-            &self.progress,
         )
     }
 
@@ -506,6 +486,12 @@ impl PoissonSolver for SphericalHarmonicsPoisson {
 
 #[cfg(test)]
 mod tests {
+use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
+    use crate::tooling::core::progress::StepProgress;
+    use crate::tooling::core::solver::PoissonSolver as _;
+
     use super::*;
 
     #[test]
@@ -523,7 +509,33 @@ mod tests {
 
         let solver = SphericalHarmonicsPoisson::new(4, 32, shape, dx);
         let density = DensityField { data: rho, shape };
-        let pot = solver.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+        let _emitter = EventEmitter::sink();
+
+        let _progress = StepProgress::new();
+
+        let _ctx = SimContext {
+
+            solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
+
+            advector: &_advector,
+
+            emitter: &_emitter,
+
+            progress: &_progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.0,
+
+            g: 1.0,
+
+        };
+
+        let pot = solver.solve(&density, &_ctx);
 
         // Check potential at a point away from center
         let test_ix = mid + 3;
@@ -565,7 +577,33 @@ mod tests {
 
         let solver = SphericalHarmonicsPoisson::new(0, 32, shape, dx);
         let density = DensityField { data: rho, shape };
-        let pot = solver.solve(&density, g_val);
+        let _advector = SemiLagrangian::new();
+
+        let _emitter = EventEmitter::sink();
+
+        let _progress = StepProgress::new();
+
+        let _ctx = SimContext {
+
+            solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
+
+            advector: &_advector,
+
+            emitter: &_emitter,
+
+            progress: &_progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.0,
+
+            g: g_val,
+
+        };
+
+        let pot = solver.solve(&density, &_ctx);
 
         // Check at a few radii
         let mid = n / 2;
@@ -600,7 +638,33 @@ mod tests {
 
         let solver = SphericalHarmonicsPoisson::new(2, 16, shape, dx);
         let density = DensityField { data: rho, shape };
-        let pot = solver.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+        let _emitter = EventEmitter::sink();
+
+        let _progress = StepProgress::new();
+
+        let _ctx = SimContext {
+
+            solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
+
+            advector: &_advector,
+
+            emitter: &_emitter,
+
+            progress: &_progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.0,
+
+            g: 1.0,
+
+        };
+
+        let pot = solver.solve(&density, &_ctx);
 
         assert!(
             pot.data.iter().all(|x| x.is_finite()),
@@ -672,7 +736,33 @@ mod tests {
 
         let solver = SphericalHarmonicsPoisson::new(0, 16, shape, dx);
         let density = DensityField { data: rho, shape };
-        let pot = solver.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+        let _emitter = EventEmitter::sink();
+
+        let _progress = StepProgress::new();
+
+        let _ctx = SimContext {
+
+            solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
+
+            advector: &_advector,
+
+            emitter: &_emitter,
+
+            progress: &_progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.0,
+
+            g: 1.0,
+
+        };
+
+        let pot = solver.solve(&density, &_ctx);
         let acc = solver.compute_acceleration(&pot);
 
         assert!(acc.gx.iter().all(|x| x.is_finite()));
@@ -706,7 +796,33 @@ mod tests {
 
         let solver = SphericalHarmonicsPoisson::new(0, 24, shape, dx);
         let density = DensityField { data: rho, shape };
-        let pot = solver.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+        let _emitter = EventEmitter::sink();
+
+        let _progress = StepProgress::new();
+
+        let _ctx = SimContext {
+
+            solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
+
+            advector: &_advector,
+
+            emitter: &_emitter,
+
+            progress: &_progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.0,
+
+            g: 1.0,
+
+        };
+
+        let pot = solver.solve(&density, &_ctx);
 
         // Potential should be the same at two points equidistant from center
         // along x-axis and along y-axis

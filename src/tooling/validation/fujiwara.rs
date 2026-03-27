@@ -126,7 +126,7 @@ fn fujiwara_uniform_sphere_collapse() {
         .domain(domain)
         .poisson_solver(poisson)
         .advector(SemiLagrangian::new())
-        .integrator(StrangSplitting::new(g))
+        .integrator(StrangSplitting::new())
         .initial_conditions(snap)
         .time_final(t_final)
         .gravitational_constant(g)

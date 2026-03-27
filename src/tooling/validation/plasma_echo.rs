@@ -10,10 +10,13 @@
 mod tests {
     use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::algos::uniform::UniformGrid6D;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::integrator::TimeIntegrator as _;
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
     use crate::tooling::core::poisson::fft::FftPoisson;
+    use crate::tooling::core::progress::StepProgress;
     use crate::tooling::core::time::strang::StrangSplitting;
 
     /// Plasma echo test: applies two sequential perturbation pulses at wavenumbers
@@ -106,13 +109,25 @@ mod tests {
         let g = 0.0; // no self-gravity
         let poisson = FftPoisson::new(&domain);
         let advector = SemiLagrangian::new();
-        let mut integrator = StrangSplitting::new(g);
+        let mut integrator = StrangSplitting::new();
+        let emitter = EventEmitter::sink();
+        let progress = StepProgress::new();
         let dt = 0.1_f64;
 
         let steps_phase1 = (t1 / dt).round() as usize;
         for _ in 0..steps_phase1 {
+            let ctx = SimContext {
+                solver: &poisson,
+                advector: &advector,
+                emitter: &emitter,
+                progress: &progress,
+                step: 0,
+                time: 0.0,
+                dt,
+                g,
+            };
             integrator
-                .advance(&mut grid, &poisson, &advector, dt)
+                .advance(&mut grid, &ctx)
                 .unwrap();
         }
 
@@ -137,8 +152,18 @@ mod tests {
         let remaining = t_final - t1;
         let steps_phase2 = (remaining / dt).round() as usize;
         for _ in 0..steps_phase2 {
+            let ctx = SimContext {
+                solver: &poisson,
+                advector: &advector,
+                emitter: &emitter,
+                progress: &progress,
+                step: 0,
+                time: 0.0,
+                dt,
+                g,
+            };
             integrator
-                .advance(&mut grid, &poisson, &advector, dt)
+                .advance(&mut grid, &ctx)
                 .unwrap();
         }
 

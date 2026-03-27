@@ -10,14 +10,11 @@
 //! `max_retries` attempts). The accepted result is always the higher-order
 //! Strang solution.
 
-use std::sync::Arc;
-
 use super::super::{
-    advecator::Advector,
+    context::SimContext,
     integrator::{StepProducts, StepTimings, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
-    progress::{StepPhase, StepProgress},
-    solver::PoissonSolver,
+    progress::StepPhase,
     types::*,
 };
 use super::helpers;
@@ -100,28 +97,23 @@ impl PIController {
 /// Compares Strang (2nd-order) and Lie (1st-order) results each step to
 /// estimate local error, then adapts dt via an internal PI controller.
 pub struct AdaptiveStrangSplitting {
-    /// Gravitational constant G used in Poisson solves.
-    pub g: f64,
     /// PI controller that converts error estimates into timestep adjustments.
     pub controller: PIController,
     suggested_dt: Option<f64>,
     last_timings: StepTimings,
-    progress: Option<Arc<StepProgress>>,
     /// Maximum number of retry attempts per step before accepting.
     pub max_retries: usize,
 }
 
 impl AdaptiveStrangSplitting {
-    /// Create an adaptive integrator with the given gravitational constant and error tolerance.
+    /// Create an adaptive integrator with the given error tolerance.
     ///
     /// The PI controller is initialised for a 2nd-order method. `max_retries` defaults to 5.
-    pub fn new(g: f64, tolerance: f64) -> Self {
+    pub fn new(tolerance: f64) -> Self {
         Self {
-            g,
             controller: PIController::new(tolerance, 2.0),
             suggested_dt: None,
             last_timings: StepTimings::default(),
-            progress: None,
             max_retries: 5,
         }
     }
@@ -147,16 +139,13 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
     fn advance(
         &mut self,
         repr: &mut dyn PhaseSpaceRepr,
-        solver: &dyn PoissonSolver,
-        advector: &dyn Advector,
-        dt: f64,
+        ctx: &SimContext,
     ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("adaptive_strang_advance").entered();
         let mut timings = StepTimings::default();
+        let dt = ctx.dt;
 
-        if let Some(ref p) = self.progress {
-            p.start_step();
-        }
+        ctx.progress.start_step();
 
         // Use suggested dt from controller if available, but don't exceed input dt
         let mut dt_try = self.suggested_dt.unwrap_or(dt).min(dt);
@@ -173,33 +162,33 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
             })?;
 
             // --- Strang step: drift(dt/2) -> kick(dt) -> drift(dt/2) ---
-            helpers::report_phase!(self.progress, StepPhase::DriftHalf1, 0, 7);
+            helpers::report_phase!(ctx, StepPhase::DriftHalf1, 0, 7);
             {
                 let _s = tracing::info_span!("strang_drift_half").entered();
-                helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt_try / 2.0));
+                helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt_try / 2.0)));
             }
 
-            helpers::report_phase!(self.progress, StepPhase::PoissonSolve, 1, 7);
+            helpers::report_phase!(ctx, StepPhase::PoissonSolve, 1, 7);
             let accel = {
                 let _s = tracing::info_span!("strang_poisson").entered();
                 let (_density, _potential, accel) = helpers::time_ms!(
                     timings,
                     poisson_ms,
-                    helpers::solve_poisson(repr, solver, self.g)
+                    helpers::solve_poisson(repr, ctx)
                 );
                 accel
             };
 
-            helpers::report_phase!(self.progress, StepPhase::Kick, 2, 7);
+            helpers::report_phase!(ctx, StepPhase::Kick, 2, 7);
             {
                 let _s = tracing::info_span!("strang_kick").entered();
-                helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, dt_try));
+                helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(dt_try)));
             }
 
-            helpers::report_phase!(self.progress, StepPhase::DriftHalf2, 3, 7);
+            helpers::report_phase!(ctx, StepPhase::DriftHalf2, 3, 7);
             {
                 let _s = tracing::info_span!("strang_drift_half").entered();
-                helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt_try / 2.0));
+                helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt_try / 2.0)));
             }
 
             // Capture Strang result before overwriting with Lie step
@@ -210,21 +199,21 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
             // --- Lie step: drift(dt) -> kick(dt), from the saved initial state ---
             repr.load_snapshot(snap_for_lie)?;
 
-            helpers::report_phase!(self.progress, StepPhase::DriftHalf1, 4, 7);
+            helpers::report_phase!(ctx, StepPhase::DriftHalf1, 4, 7);
             {
                 let _s = tracing::info_span!("lie_drift").entered();
-                helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt_try));
+                helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt_try)));
             }
 
-            helpers::report_phase!(self.progress, StepPhase::Kick, 5, 7);
+            helpers::report_phase!(ctx, StepPhase::Kick, 5, 7);
             {
                 let _s = tracing::info_span!("lie_kick").entered();
                 let (_density, _potential, accel) = helpers::time_ms!(
                     timings,
                     poisson_ms,
-                    helpers::solve_poisson(repr, solver, self.g)
+                    helpers::solve_poisson(repr, ctx)
                 );
-                helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, dt_try));
+                helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(dt_try)));
             }
 
             // --- Error estimation ---
@@ -233,7 +222,7 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
             })?;
             let err = Self::relative_error(&strang_snap.data, &lie_snap.data);
 
-            helpers::report_phase!(self.progress, StepPhase::Diagnostics, 6, 7);
+            helpers::report_phase!(ctx, StepPhase::Diagnostics, 6, 7);
 
             let (dt_new, accepted) = self.controller.step(dt_try, err);
             self.suggested_dt = Some(dt_new);
@@ -249,12 +238,12 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
             }
         }
 
-        helpers::report_phase!(self.progress, StepPhase::StepComplete, 0, 0);
+        helpers::report_phase!(ctx, StepPhase::StepComplete, 0, 0);
 
         let (density, potential, acceleration) = helpers::time_ms!(
             timings,
             density_ms,
-            helpers::solve_poisson(repr, solver, self.g)
+            helpers::solve_poisson(repr, ctx)
         );
 
         self.last_timings = timings;
@@ -267,14 +256,10 @@ impl TimeIntegrator for AdaptiveStrangSplitting {
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
-        helpers::dynamical_timestep(repr, self.g, cfl_factor)
+        helpers::dynamical_timestep(repr, 1.0, cfl_factor)
     }
 
     fn last_step_timings(&self) -> Option<&StepTimings> {
         Some(&self.last_timings)
-    }
-
-    fn set_progress(&mut self, progress: Arc<StepProgress>) {
-        self.progress = Some(progress);
     }
 }

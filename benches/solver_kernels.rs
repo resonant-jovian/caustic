@@ -98,20 +98,38 @@ fn bench_compute_density(c: &mut Criterion) {
 // ─── Advection kernels ──────────────────────────────────────────────────────
 
 fn bench_advect_x(c: &mut Criterion) {
+    use caustic::tooling::core::context::SimContext;
+    use caustic::tooling::core::events::EventEmitter;
+    use caustic::tooling::core::progress::StepProgress;
+
     let mut group = c.benchmark_group("advect_x");
     for &(nx, nv) in &[(8i128, 8i128), (16, 8), (16, 16)] {
-        let (mut grid, _) = make_plummer_grid(nx, nv);
+        let (mut grid, domain) = make_plummer_grid(nx, nv);
         let dummy = DisplacementField {
             dx: vec![],
             dy: vec![],
             dz: vec![],
             shape: [0, 0, 0],
         };
+        let poisson = FftPoisson::new(&domain);
+        let advector = SemiLagrangian::new();
+        let emitter = EventEmitter::sink();
+        let progress = StepProgress::new();
+        let ctx = SimContext {
+            solver: &poisson,
+            advector: &advector,
+            emitter: &emitter,
+            progress: &progress,
+            step: 0,
+            time: 0.0,
+            dt: 0.01,
+            g: 1.0,
+        };
         group.bench_with_input(
             BenchmarkId::new("grid", format!("{}x{}", nx, nv)),
             &(),
             |b, _| {
-                b.iter(|| grid.advect_x(&dummy, 0.01));
+                b.iter(|| grid.advect_x(&dummy, &ctx));
             },
         );
     }
@@ -119,18 +137,35 @@ fn bench_advect_x(c: &mut Criterion) {
 }
 
 fn bench_advect_v(c: &mut Criterion) {
+    use caustic::tooling::core::context::SimContext;
+    use caustic::tooling::core::events::EventEmitter;
+    use caustic::tooling::core::progress::StepProgress;
+
     let mut group = c.benchmark_group("advect_v");
     for &(nx, nv) in &[(8i128, 8i128), (16, 8), (16, 16)] {
         let (mut grid, domain) = make_plummer_grid(nx, nv);
         let poisson = FftPoisson::new(&domain);
+        let advector = SemiLagrangian::new();
+        let emitter = EventEmitter::sink();
+        let progress = StepProgress::new();
+        let ctx = SimContext {
+            solver: &poisson,
+            advector: &advector,
+            emitter: &emitter,
+            progress: &progress,
+            step: 0,
+            time: 0.0,
+            dt: 0.01,
+            g: 1.0,
+        };
         let density = grid.compute_density();
-        let potential = poisson.solve(&density, 1.0);
+        let potential = poisson.solve(&density, &ctx);
         let accel = poisson.compute_acceleration(&potential);
         group.bench_with_input(
             BenchmarkId::new("grid", format!("{}x{}", nx, nv)),
             &accel,
             |b, accel| {
-                b.iter(|| grid.advect_v(accel, 0.01));
+                b.iter(|| grid.advect_v(accel, &ctx));
             },
         );
     }
@@ -140,16 +175,33 @@ fn bench_advect_v(c: &mut Criterion) {
 // ─── Poisson solvers ────────────────────────────────────────────────────────
 
 fn bench_fft_poisson(c: &mut Criterion) {
+    use caustic::tooling::core::context::SimContext;
+    use caustic::tooling::core::events::EventEmitter;
+    use caustic::tooling::core::progress::StepProgress;
+
     let mut group = c.benchmark_group("fft_poisson_periodic");
     for &n in &[8i128, 16, 32] {
         let (grid, domain) = make_plummer_grid(n, 4);
         let density = grid.compute_density();
         let poisson = FftPoisson::new(&domain);
+        let advector = SemiLagrangian::new();
+        let emitter = EventEmitter::sink();
+        let progress = StepProgress::new();
+        let ctx = SimContext {
+            solver: &poisson,
+            advector: &advector,
+            emitter: &emitter,
+            progress: &progress,
+            step: 0,
+            time: 0.0,
+            dt: 0.0,
+            g: 1.0,
+        };
         group.bench_with_input(
             BenchmarkId::new("N", n),
-            &(density, poisson),
-            |b, (d, p)| {
-                b.iter(|| p.solve(d, 1.0));
+            &(),
+            |b, _| {
+                b.iter(|| poisson.solve(&density, &ctx));
             },
         );
     }
@@ -157,6 +209,10 @@ fn bench_fft_poisson(c: &mut Criterion) {
 }
 
 fn bench_fft_isolated(c: &mut Criterion) {
+    use caustic::tooling::core::context::SimContext;
+    use caustic::tooling::core::events::EventEmitter;
+    use caustic::tooling::core::progress::StepProgress;
+
     let mut group = c.benchmark_group("fft_poisson_isolated");
     for &n in &[8i128, 16, 32] {
         let domain = make_isolated_domain(n, 4);
@@ -165,11 +221,24 @@ fn bench_fft_isolated(c: &mut Criterion) {
         let grid = UniformGrid6D::from_snapshot(snap, domain.clone());
         let density = grid.compute_density();
         let poisson = FftIsolated::new(&domain);
+        let advector = SemiLagrangian::new();
+        let emitter = EventEmitter::sink();
+        let progress = StepProgress::new();
+        let ctx = SimContext {
+            solver: &poisson,
+            advector: &advector,
+            emitter: &emitter,
+            progress: &progress,
+            step: 0,
+            time: 0.0,
+            dt: 0.0,
+            g: 1.0,
+        };
         group.bench_with_input(
             BenchmarkId::new("N", n),
-            &(density, poisson),
-            |b, (d, p)| {
-                b.iter(|| p.solve(d, 1.0));
+            &(),
+            |b, _| {
+                b.iter(|| poisson.solve(&density, &ctx));
             },
         );
     }
@@ -177,6 +246,10 @@ fn bench_fft_isolated(c: &mut Criterion) {
 }
 
 fn bench_tensor_poisson(c: &mut Criterion) {
+    use caustic::tooling::core::context::SimContext;
+    use caustic::tooling::core::events::EventEmitter;
+    use caustic::tooling::core::progress::StepProgress;
+
     let mut group = c.benchmark_group("tensor_poisson");
     for &n in &[8i128, 16] {
         let domain = make_isolated_domain(n, 4);
@@ -187,28 +260,62 @@ fn bench_tensor_poisson(c: &mut Criterion) {
         let dx = domain.dx();
         let shape = [n as usize, n as usize, n as usize];
         let solver = TensorPoisson::new(shape, dx, 1e-4, 1e-4, 15);
-        group.bench_with_input(BenchmarkId::new("N", n), &(density, solver), |b, (d, s)| {
-            b.iter(|| s.solve(d, 1.0));
+        let advector = SemiLagrangian::new();
+        let emitter = EventEmitter::sink();
+        let progress = StepProgress::new();
+        let ctx = SimContext {
+            solver: &solver,
+            advector: &advector,
+            emitter: &emitter,
+            progress: &progress,
+            step: 0,
+            time: 0.0,
+            dt: 0.0,
+            g: 1.0,
+        };
+        group.bench_with_input(BenchmarkId::new("N", n), &(), |b, _| {
+            b.iter(|| solver.solve(&density, &ctx));
         });
     }
     group.finish();
 }
 
 fn bench_multigrid(c: &mut Criterion) {
+    use caustic::tooling::core::context::SimContext;
+    use caustic::tooling::core::events::EventEmitter;
+    use caustic::tooling::core::progress::StepProgress;
+
     let mut group = c.benchmark_group("multigrid");
     group.sample_size(10);
     for &n in &[8i128, 16, 32] {
         let (grid, domain) = make_plummer_grid(n, 4);
         let density = grid.compute_density();
         let mg = Multigrid::new(&domain, 4, 3);
-        group.bench_with_input(BenchmarkId::new("N", n), &(density, mg), |b, (d, mg)| {
-            b.iter(|| mg.solve(d, 1.0));
+        let advector = SemiLagrangian::new();
+        let emitter = EventEmitter::sink();
+        let progress = StepProgress::new();
+        let ctx = SimContext {
+            solver: &mg,
+            advector: &advector,
+            emitter: &emitter,
+            progress: &progress,
+            step: 0,
+            time: 0.0,
+            dt: 0.0,
+            g: 1.0,
+        };
+        group.bench_with_input(BenchmarkId::new("N", n), &(), |b, _| {
+            b.iter(|| mg.solve(&density, &ctx));
         });
     }
     group.finish();
 }
 
 fn bench_tree_poisson(c: &mut Criterion) {
+    use caustic::tooling::core::context::SimContext;
+    use caustic::tooling::core::events::EventEmitter;
+    use caustic::tooling::core::progress::StepProgress;
+
     let mut group = c.benchmark_group("tree_poisson");
     group.sample_size(10);
     for &n in &[8i128, 16] {
@@ -218,14 +325,31 @@ fn bench_tree_poisson(c: &mut Criterion) {
         let grid = UniformGrid6D::from_snapshot(snap, domain.clone());
         let density = grid.compute_density();
         let tree = TreePoisson::new(domain, 0.7);
-        group.bench_with_input(BenchmarkId::new("N", n), &(density, tree), |b, (d, t)| {
-            b.iter(|| t.solve(d, 1.0));
+        let advector = SemiLagrangian::new();
+        let emitter = EventEmitter::sink();
+        let progress = StepProgress::new();
+        let ctx = SimContext {
+            solver: &tree,
+            advector: &advector,
+            emitter: &emitter,
+            progress: &progress,
+            step: 0,
+            time: 0.0,
+            dt: 0.0,
+            g: 1.0,
+        };
+        group.bench_with_input(BenchmarkId::new("N", n), &(), |b, _| {
+            b.iter(|| tree.solve(&density, &ctx));
         });
     }
     group.finish();
 }
 
 fn bench_spherical_poisson(c: &mut Criterion) {
+    use caustic::tooling::core::context::SimContext;
+    use caustic::tooling::core::events::EventEmitter;
+    use caustic::tooling::core::progress::StepProgress;
+
     let mut group = c.benchmark_group("spherical_poisson");
     group.sample_size(10);
     for &n in &[8i128, 16] {
@@ -234,8 +358,22 @@ fn bench_spherical_poisson(c: &mut Criterion) {
         let dx = domain.dx();
         let shape = [n as usize; 3];
         let solver = SphericalHarmonicsPoisson::new(4, 32, shape, dx);
-        group.bench_with_input(BenchmarkId::new("N", n), &(density, solver), |b, (d, s)| {
-            b.iter(|| s.solve(d, 1.0));
+        let advector = SemiLagrangian::new();
+        let emitter = EventEmitter::sink();
+        let progress = StepProgress::new();
+        let poisson_for_ctx = FftPoisson::new(&domain);
+        let ctx = SimContext {
+            solver: &poisson_for_ctx,
+            advector: &advector,
+            emitter: &emitter,
+            progress: &progress,
+            step: 0,
+            time: 0.0,
+            dt: 0.0,
+            g: 1.0,
+        };
+        group.bench_with_input(BenchmarkId::new("N", n), &(), |b, _| {
+            b.iter(|| solver.solve(&density, &ctx));
         });
     }
     group.finish();
@@ -244,12 +382,29 @@ fn bench_spherical_poisson(c: &mut Criterion) {
 // ─── Spectral acceleration (compute_acceleration) ───────────────────────────
 
 fn bench_compute_acceleration(c: &mut Criterion) {
+    use caustic::tooling::core::context::SimContext;
+    use caustic::tooling::core::events::EventEmitter;
+    use caustic::tooling::core::progress::StepProgress;
+
     let mut group = c.benchmark_group("compute_acceleration");
     for &n in &[8i128, 16, 32] {
         let (grid, domain) = make_plummer_grid(n, 4);
         let poisson = FftPoisson::new(&domain);
+        let advector = SemiLagrangian::new();
+        let emitter = EventEmitter::sink();
+        let progress = StepProgress::new();
+        let ctx = SimContext {
+            solver: &poisson,
+            advector: &advector,
+            emitter: &emitter,
+            progress: &progress,
+            step: 0,
+            time: 0.0,
+            dt: 0.0,
+            g: 1.0,
+        };
         let density = grid.compute_density();
-        let potential = poisson.solve(&density, 1.0);
+        let potential = poisson.solve(&density, &ctx);
         group.bench_with_input(
             BenchmarkId::new("N", n),
             &(potential, poisson),
@@ -264,19 +419,35 @@ fn bench_compute_acceleration(c: &mut Criterion) {
 // ─── Full timestep ──────────────────────────────────────────────────────────
 
 fn bench_full_timestep(c: &mut Criterion) {
+    use caustic::tooling::core::context::SimContext;
+    use caustic::tooling::core::events::EventEmitter;
+    use caustic::tooling::core::progress::StepProgress;
+
     let mut group = c.benchmark_group("full_timestep");
     for &(nx, nv) in &[(8i128, 8i128), (16, 8), (16, 16)] {
         let (grid, domain) = make_plummer_grid(nx, nv);
         let poisson = FftPoisson::new(&domain);
         let advector = SemiLagrangian::new();
-        let mut integrator = StrangSplitting::new(1.0);
+        let emitter = EventEmitter::sink();
+        let progress = StepProgress::new();
+        let mut integrator = StrangSplitting::new();
         let mut grid = grid;
         group.bench_with_input(
             BenchmarkId::new("grid", format!("{}x{}", nx, nv)),
             &(),
             |b, _| {
                 b.iter(|| {
-                    integrator.advance(&mut grid, &poisson, &advector, 0.01);
+                    let ctx = SimContext {
+                        solver: &poisson,
+                        advector: &advector,
+                        emitter: &emitter,
+                        progress: &progress,
+                        step: 0,
+                        time: 0.0,
+                        dt: 0.01,
+                        g: 1.0,
+                    };
+                    integrator.advance(&mut grid, &ctx).unwrap();
                 });
             },
         );
@@ -285,19 +456,35 @@ fn bench_full_timestep(c: &mut Criterion) {
 }
 
 fn bench_yoshida_timestep(c: &mut Criterion) {
+    use caustic::tooling::core::context::SimContext;
+    use caustic::tooling::core::events::EventEmitter;
+    use caustic::tooling::core::progress::StepProgress;
+
     let mut group = c.benchmark_group("yoshida_timestep");
     group.sample_size(10);
     for &(nx, nv) in &[(8i128, 8i128)] {
         let (mut grid, domain) = make_plummer_grid(nx, nv);
         let poisson = FftPoisson::new(&domain);
         let advector = SemiLagrangian::new();
-        let mut integrator = YoshidaSplitting::new(1.0);
+        let emitter = EventEmitter::sink();
+        let progress = StepProgress::new();
+        let mut integrator = YoshidaSplitting::new();
         group.bench_with_input(
             BenchmarkId::new("grid", format!("{}x{}", nx, nv)),
             &(),
             |b, _| {
                 b.iter(|| {
-                    integrator.advance(&mut grid, &poisson, &advector, 0.01);
+                    let ctx = SimContext {
+                        solver: &poisson,
+                        advector: &advector,
+                        emitter: &emitter,
+                        progress: &progress,
+                        step: 0,
+                        time: 0.0,
+                        dt: 0.01,
+                        g: 1.0,
+                    };
+                    integrator.advance(&mut grid, &ctx).unwrap();
                 });
             },
         );
@@ -306,19 +493,35 @@ fn bench_yoshida_timestep(c: &mut Criterion) {
 }
 
 fn bench_rkei_timestep(c: &mut Criterion) {
+    use caustic::tooling::core::context::SimContext;
+    use caustic::tooling::core::events::EventEmitter;
+    use caustic::tooling::core::progress::StepProgress;
+
     let mut group = c.benchmark_group("rkei_timestep");
     group.sample_size(10);
     for &(nx, nv) in &[(8i128, 8i128)] {
         let (mut grid, domain) = make_plummer_grid(nx, nv);
         let poisson = FftPoisson::new(&domain);
         let advector = SemiLagrangian::new();
-        let mut integrator = RkeiIntegrator::new(1.0);
+        let emitter = EventEmitter::sink();
+        let progress = StepProgress::new();
+        let mut integrator = RkeiIntegrator::new();
         group.bench_with_input(
             BenchmarkId::new("grid", format!("{}x{}", nx, nv)),
             &(),
             |b, _| {
                 b.iter(|| {
-                    integrator.advance(&mut grid, &poisson, &advector, 0.01);
+                    let ctx = SimContext {
+                        solver: &poisson,
+                        advector: &advector,
+                        emitter: &emitter,
+                        progress: &progress,
+                        step: 0,
+                        time: 0.0,
+                        dt: 0.01,
+                        g: 1.0,
+                    };
+                    integrator.advance(&mut grid, &ctx).unwrap();
                 });
             },
         );

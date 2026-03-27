@@ -11,6 +11,9 @@ fn cold_collapse_1d() {
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
     use crate::tooling::core::poisson::fft::FftPoisson;
     use crate::tooling::core::time::strang::StrangSplitting;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
+    use crate::tooling::core::progress::StepProgress;
 
     // Cold 1D slab: f(x,v) = ρ(x) * δ(v) approximated as narrow Gaussian.
     // ρ(x₁) = ρ₀ (1 + ε cos(k x₁)) with k < k_J → collapse forms
@@ -80,15 +83,39 @@ fn cold_collapse_1d() {
 
     let poisson = FftPoisson::new(&domain);
     let advector = SemiLagrangian::new();
-    let mut integrator = StrangSplitting::new(g);
+    let mut integrator = StrangSplitting::new();
+    let emitter = EventEmitter::sink();
+    let progress = StepProgress::new();
     let dt = 0.05f64;
     let n_steps = 40; // t = 2.0
 
     // Track density peak growth (collapse should increase peak density)
     let mut density_peaks = vec![rho_max_init];
     for step in 0..n_steps {
+        let ctx = SimContext {
+
+            solver: &poisson,
+
+            advector: &advector,
+
+            emitter: &emitter,
+
+            progress: &progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: dt,
+
+            g: 1.0,
+
+        };
+
         integrator
-            .advance(&mut grid, &poisson, &advector, dt)
+
+            .advance(&mut grid, &ctx)
+
             .unwrap();
 
         if (step + 1) % 10 == 0 {

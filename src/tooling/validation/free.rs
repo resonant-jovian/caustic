@@ -3,9 +3,14 @@
 
 #[test]
 fn free_streaming() {
+    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::algos::uniform::UniformGrid6D;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
+    use crate::tooling::core::poisson::fft::FftPoisson;
+    use crate::tooling::core::progress::StepProgress;
     use crate::tooling::core::types::DisplacementField;
 
     // 16×16×16 spatial, 4×4×4 velocity = 262144 cells total
@@ -61,7 +66,21 @@ fn free_streaming() {
         dz: vec![],
         shape: [0, 0, 0],
     };
-    grid.advect_x(&dummy, dt);
+    let poisson = FftPoisson::new(&grid.domain);
+    let advector = SemiLagrangian::new();
+    let emitter = EventEmitter::sink();
+    let progress = StepProgress::new();
+    let ctx = SimContext {
+        solver: &poisson,
+        advector: &advector,
+        emitter: &emitter,
+        progress: &progress,
+        step: 0,
+        time: 0.0,
+        dt,
+        g: 0.0,
+    };
+    grid.advect_x(&dummy, &ctx);
 
     // Check: the Gaussian peak should now be centred at x1 = shift (periodic wrapping)
     // Compare at ix2=0, ix3=0 for all ix1

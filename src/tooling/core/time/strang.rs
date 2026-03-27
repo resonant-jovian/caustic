@@ -168,7 +168,7 @@ mod tests {
 
         let poisson = FftPoisson::new(&domain);
         let advector = SemiLagrangian::new();
-        let emitter = EventEmitter::new();
+        let emitter = EventEmitter::sink();
         let progress = StepProgress::new();
         let mut integrator = StrangSplitting::new();
 

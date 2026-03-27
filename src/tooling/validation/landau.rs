@@ -10,6 +10,9 @@ fn landau_damping() {
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
     use crate::tooling::core::poisson::fft::FftPoisson;
     use crate::tooling::core::time::strang::StrangSplitting;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
+    use crate::tooling::core::progress::StepProgress;
 
     // Warm Maxwellian (σ=2): k_J = sqrt(4π*G*ρ0)/σ ≈ sqrt(4π)/2 ≈ 1.77 (with ρ0≈1, G=1)
     // lx=1 → k_fund = π ≈ 3.14 > k_J → stable; gravitational Landau damping regime.
@@ -82,12 +85,36 @@ fn landau_damping() {
 
     let poisson = FftPoisson::new(&domain);
     let advector = SemiLagrangian::new();
-    let mut integrator = StrangSplitting::new(g);
+    let mut integrator = StrangSplitting::new();
+    let emitter = EventEmitter::sink();
+    let progress = StepProgress::new();
     let dt = 0.1f64;
 
     for _ in 0..8 {
+        let ctx = SimContext {
+
+            solver: &poisson,
+
+            advector: &advector,
+
+            emitter: &emitter,
+
+            progress: &progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: dt,
+
+            g: 1.0,
+
+        };
+
         integrator
-            .advance(&mut grid, &poisson, &advector, dt)
+
+            .advance(&mut grid, &ctx)
+
             .unwrap();
     }
 

@@ -180,7 +180,7 @@ fn bm4_temporal_convergence_order_4() {
         .domain(domain)
         .poisson_solver(poisson)
         .advector(SemiLagrangian::new())
-        .integrator(BlanesMoanSplitting::new(1.0))
+        .integrator(BlanesMoanSplitting::new())
         .initial_conditions(snap)
         .time_final(0.5)
         .build()
@@ -231,7 +231,7 @@ fn rkn6_temporal_convergence_order_6() {
         .domain(domain)
         .poisson_solver(poisson)
         .advector(SemiLagrangian::new())
-        .integrator(Rkn6Splitting::new(1.0))
+        .integrator(Rkn6Splitting::new())
         .initial_conditions(snap)
         .time_final(0.5)
         .build()
@@ -257,11 +257,14 @@ fn rkn6_temporal_convergence_order_6() {
 fn jeans_growth_rate_convergence() {
     use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::algos::uniform::UniformGrid6D;
+    use crate::tooling::core::context::SimContext;
     use crate::tooling::core::diagnostics::estimate_convergence_order;
+    use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::integrator::TimeIntegrator as _;
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
     use crate::tooling::core::poisson::fft::FftPoisson;
+    use crate::tooling::core::progress::StepProgress;
     use crate::tooling::core::time::strang::StrangSplitting;
 
     let lx = std::f64::consts::PI;
@@ -345,11 +348,23 @@ fn jeans_growth_rate_convergence() {
         // Evolve
         let poisson = FftPoisson::new(&domain);
         let advector = SemiLagrangian::new();
-        let mut integrator = StrangSplitting::new(g);
+        let mut integrator = StrangSplitting::new();
+        let emitter = EventEmitter::sink();
+        let progress = StepProgress::new();
 
         for _ in 0..n_steps {
+            let ctx = SimContext {
+                solver: &poisson,
+                advector: &advector,
+                emitter: &emitter,
+                progress: &progress,
+                step: 0,
+                time: 0.0,
+                dt,
+                g,
+            };
             integrator
-                .advance(&mut grid, &poisson, &advector, dt)
+                .advance(&mut grid, &ctx)
                 .unwrap();
         }
 
@@ -436,7 +451,7 @@ fn strang_temporal_convergence_order_2() {
             .domain(domain)
             .poisson_solver(poisson)
             .advector(SemiLagrangian::new())
-            .integrator(StrangSplitting::new(1.0))
+            .integrator(StrangSplitting::new())
             .initial_conditions(snap)
             .time_final(t_final)
             .cfl_factor(cfl)
@@ -490,6 +505,9 @@ fn strang_temporal_convergence_order_2() {
 #[test]
 fn spatial_convergence_free_streaming_3_resolutions() {
     use crate::tooling::core::diagnostics::estimate_convergence_order;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
+    use crate::tooling::core::progress::StepProgress;
     use crate::tooling::core::init::{
         domain::{Domain, SpatialBoundType, VelocityBoundType},
         isolated::{PlummerIC, sample_on_grid},

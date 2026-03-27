@@ -18,15 +18,11 @@
 //!   2. RK4 kick (4 Poisson solves)
 //!   3. Exact drift dt/2
 
-use std::sync::Arc;
-use std::time::Instant;
-
 use super::super::{
-    advecator::Advector,
+    context::SimContext,
     integrator::{StepProducts, StepTimings, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
-    progress::{StepPhase, StepProgress},
-    solver::PoissonSolver,
+    progress::StepPhase,
     types::*,
 };
 use super::helpers;
@@ -37,29 +33,23 @@ use crate::CausticError;
 /// Wraps each step in a Strang-style drift/2 -- RK4 kick -- drift/2 sequence,
 /// where the drift is solved exactly and the kick uses four Poisson solves.
 pub struct LawsonRkIntegrator {
-    /// Gravitational constant G used in Poisson solves.
-    pub g: f64,
     last_timings: StepTimings,
-    progress: Option<Arc<StepProgress>>,
 }
 
 impl LawsonRkIntegrator {
-    /// Create a Lawson-RK integrator with the given gravitational constant.
-    pub fn new(g: f64) -> Self {
+    /// Create a Lawson-RK integrator.
+    pub fn new() -> Self {
         Self {
-            g,
             last_timings: StepTimings::default(),
-            progress: None,
         }
     }
 
     /// Compute acceleration field from the current distribution.
     fn compute_accel(
         repr: &dyn PhaseSpaceRepr,
-        solver: &dyn PoissonSolver,
-        g: f64,
+        ctx: &SimContext,
     ) -> AccelerationField {
-        let (_density, _potential, accel) = helpers::solve_poisson(repr, solver, g);
+        let (_density, _potential, accel) = helpers::solve_poisson(repr, ctx);
         accel
     }
 }
@@ -68,20 +58,17 @@ impl TimeIntegrator for LawsonRkIntegrator {
     fn advance(
         &mut self,
         repr: &mut dyn PhaseSpaceRepr,
-        solver: &dyn PoissonSolver,
-        advector: &dyn Advector,
-        dt: f64,
+        ctx: &SimContext,
     ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("lawson_rk_advance").entered();
         let mut timings = StepTimings::default();
+        let dt = ctx.dt;
 
-        if let Some(ref p) = self.progress {
-            p.start_step();
-        }
-        helpers::report_phase!(self.progress, StepPhase::DriftHalf1, 0, 7);
+        ctx.progress.start_step();
+        helpers::report_phase!(ctx, StepPhase::DriftHalf1, 0, 7);
 
         // Step 1: Exact half-drift (free-streaming, no CFL restriction)
-        helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / 2.0));
+        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
 
         // Save state after half-drift for RK4 stage resets
         let snap_after_drift = repr.to_snapshot(0.0).ok_or_else(|| {
@@ -90,22 +77,22 @@ impl TimeIntegrator for LawsonRkIntegrator {
 
         // Step 2: RK4 kick with 4 Poisson solves
         // Stage 1: evaluate acceleration at drifted state
-        helpers::report_phase!(self.progress, StepPhase::PoissonSolve, 1, 7);
+        helpers::report_phase!(ctx, StepPhase::PoissonSolve, 1, 7);
         let a1 = helpers::time_ms!(
             timings,
             poisson_ms,
-            Self::compute_accel(repr, solver, self.g)
+            Self::compute_accel(repr, ctx)
         );
 
         // Stage 2: half-kick with a1, evaluate acceleration
-        helpers::report_phase!(self.progress, StepPhase::PoissonSolve, 2, 7);
+        helpers::report_phase!(ctx, StepPhase::PoissonSolve, 2, 7);
         let a2 = helpers::time_ms!(timings, poisson_ms, {
-            advector.kick(repr, &a1, dt / 2.0);
-            Self::compute_accel(repr, solver, self.g)
+            ctx.advector.kick(repr, &a1, &ctx.with_dt(dt / 2.0));
+            Self::compute_accel(repr, ctx)
         });
 
         // Stage 3: restore, half-kick with a2, evaluate acceleration
-        helpers::report_phase!(self.progress, StepPhase::PoissonSolve, 3, 7);
+        helpers::report_phase!(ctx, StepPhase::PoissonSolve, 3, 7);
         let PhaseSpaceSnapshot { data, shape, time } = snap_after_drift;
         let a3 = helpers::time_ms!(timings, poisson_ms, {
             repr.load_snapshot(PhaseSpaceSnapshot {
@@ -114,12 +101,12 @@ impl TimeIntegrator for LawsonRkIntegrator {
                 time,
             })
             .map_err(|e| CausticError::Solver(format!("Lawson-RK snapshot restore failed: {e}")))?;
-            advector.kick(repr, &a2, dt / 2.0);
-            Self::compute_accel(repr, solver, self.g)
+            ctx.advector.kick(repr, &a2, &ctx.with_dt(dt / 2.0));
+            Self::compute_accel(repr, ctx)
         });
 
         // Stage 4: restore, full-kick with a3, evaluate acceleration
-        helpers::report_phase!(self.progress, StepPhase::PoissonSolve, 4, 7);
+        helpers::report_phase!(ctx, StepPhase::PoissonSolve, 4, 7);
         let a4 = helpers::time_ms!(timings, poisson_ms, {
             repr.load_snapshot(PhaseSpaceSnapshot {
                 data: data.clone(),
@@ -127,30 +114,30 @@ impl TimeIntegrator for LawsonRkIntegrator {
                 time,
             })
             .map_err(|e| CausticError::Solver(format!("Lawson-RK snapshot restore failed: {e}")))?;
-            advector.kick(repr, &a3, dt);
-            Self::compute_accel(repr, solver, self.g)
+            ctx.advector.kick(repr, &a3, &ctx.with_dt(dt));
+            Self::compute_accel(repr, ctx)
         });
 
         // Apply RK4-weighted kick: (a1 + 2*a2 + 2*a3 + a4) / 6 * dt
-        helpers::report_phase!(self.progress, StepPhase::Kick, 5, 7);
+        helpers::report_phase!(ctx, StepPhase::Kick, 5, 7);
         repr.load_snapshot(PhaseSpaceSnapshot { data, shape, time })?;
         helpers::time_ms!(timings, kick_ms, {
-            advector.kick(repr, &a1, dt / 6.0);
-            advector.kick(repr, &a2, dt / 3.0);
-            advector.kick(repr, &a3, dt / 3.0);
-            advector.kick(repr, &a4, dt / 6.0)
+            ctx.advector.kick(repr, &a1, &ctx.with_dt(dt / 6.0));
+            ctx.advector.kick(repr, &a2, &ctx.with_dt(dt / 3.0));
+            ctx.advector.kick(repr, &a3, &ctx.with_dt(dt / 3.0));
+            ctx.advector.kick(repr, &a4, &ctx.with_dt(dt / 6.0))
         });
 
         // Step 3: Exact half-drift
-        helpers::report_phase!(self.progress, StepPhase::DriftHalf2, 6, 7);
-        helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / 2.0));
+        helpers::report_phase!(ctx, StepPhase::DriftHalf2, 6, 7);
+        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
 
-        helpers::report_phase!(self.progress, StepPhase::StepComplete, 7, 7);
+        helpers::report_phase!(ctx, StepPhase::StepComplete, 7, 7);
 
         let (density, potential, acceleration) = helpers::time_ms!(
             timings,
             density_ms,
-            helpers::solve_poisson(repr, solver, self.g)
+            helpers::solve_poisson(repr, ctx)
         );
 
         self.last_timings = timings;
@@ -164,15 +151,11 @@ impl TimeIntegrator for LawsonRkIntegrator {
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
         // Lawson-RK: only velocity-space CFL matters (dynamical time).
-        helpers::dynamical_timestep(repr, self.g, cfl_factor)
+        helpers::dynamical_timestep(repr, 1.0, cfl_factor)
     }
 
     fn last_step_timings(&self) -> Option<&StepTimings> {
         Some(&self.last_timings)
-    }
-
-    fn set_progress(&mut self, progress: Arc<StepProgress>) {
-        self.progress = Some(progress);
     }
 }
 
@@ -182,7 +165,6 @@ mod tests {
 
     #[test]
     fn lawson_rk_construction() {
-        let integrator = LawsonRkIntegrator::new(1.0);
-        assert_eq!(integrator.g, 1.0);
+        let _integrator = LawsonRkIntegrator::new();
     }
 }

@@ -13,6 +13,7 @@
 //! `FftPoisson`). The short-range correction is applied via direct summation
 //! within a stencil of radius `r_s`.
 
+use super::super::context::SimContext;
 use super::super::solver::PoissonSolver;
 use super::super::types::{AccelerationField, DensityField, PotentialField};
 use super::utils::finite_difference_acceleration;
@@ -65,11 +66,12 @@ impl RangeSeparatedPoisson {
 impl PoissonSolver for RangeSeparatedPoisson {
     /// Solve for the gravitational potential by combining long-range (inner solver)
     /// and short-range (direct summation within `r_s`) contributions.
-    fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
+    fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
+        let g = ctx.g;
         let [nx, ny, nz] = self.shape;
 
         // 1. Long-range: solve with inner solver (gets the smooth far-field part).
-        let long_range = self.inner.solve(density, g);
+        let long_range = self.inner.solve(density, ctx);
 
         // 2. Short-range: direct summation within split_radius.
         //
@@ -144,6 +146,12 @@ impl PoissonSolver for RangeSeparatedPoisson {
 
 #[cfg(test)]
 mod tests {
+use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
+    use crate::tooling::core::progress::StepProgress;
+    use crate::tooling::core::solver::PoissonSolver as _;
+
     use super::*;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::poisson::fft::FftPoisson;
@@ -184,7 +192,46 @@ mod tests {
             shape: [n, n, n],
         };
 
-        let pot = solver.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+
+        let _emitter = EventEmitter::sink();
+
+
+        let _progress = StepProgress::new();
+
+
+        let _ctx = SimContext {
+
+
+            solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
+
+
+            advector: &_advector,
+
+
+            emitter: &_emitter,
+
+
+            progress: &_progress,
+
+
+            step: 0,
+
+
+            time: 0.0,
+
+
+            dt: 0.0,
+
+
+            g: 1.0,
+
+
+        };
+
+
+        let pot = solver.solve(&density, &_ctx);
         let acc = solver.compute_acceleration(&pot);
 
         // All acceleration components should be near zero for uniform density.
@@ -237,8 +284,73 @@ mod tests {
             shape: [n, n, n],
         };
 
-        let pot_fft = fft_only.solve(&density, 1.0);
-        let pot_rs = range_sep.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+
+        let _emitter = EventEmitter::sink();
+
+
+        let _progress = StepProgress::new();
+
+
+        let _ctx = SimContext {
+
+
+            solver: &fft_only as &dyn crate::tooling::core::solver::PoissonSolver,
+
+
+            advector: &_advector,
+
+
+            emitter: &_emitter,
+
+
+            progress: &_progress,
+
+
+            step: 0,
+
+
+            time: 0.0,
+
+
+            dt: 0.0,
+
+
+            g: 1.0,
+
+
+        };
+
+
+        let pot_fft = fft_only.solve(&density, &_ctx);
+        let _advector = SemiLagrangian::new();
+
+        let _emitter = EventEmitter::sink();
+
+        let _progress = StepProgress::new();
+
+        let _ctx = SimContext {
+
+            solver: &range_sep as &dyn crate::tooling::core::solver::PoissonSolver,
+
+            advector: &_advector,
+
+            emitter: &_emitter,
+
+            progress: &_progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.0,
+
+            g: 1.0,
+
+        };
+
+        let pot_rs = range_sep.solve(&density, &_ctx);
 
         // The potentials should be correlated.  Compute relative L2 difference.
         let diff_sq: f64 = pot_fft
@@ -274,7 +386,46 @@ mod tests {
             shape: [n, n, n],
         };
 
-        let pot = solver.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+
+        let _emitter = EventEmitter::sink();
+
+
+        let _progress = StepProgress::new();
+
+
+        let _ctx = SimContext {
+
+
+            solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
+
+
+            advector: &_advector,
+
+
+            emitter: &_emitter,
+
+
+            progress: &_progress,
+
+
+            step: 0,
+
+
+            time: 0.0,
+
+
+            dt: 0.0,
+
+
+            g: 1.0,
+
+
+        };
+
+
+        let pot = solver.solve(&density, &_ctx);
 
         // Potential at the source cell should be finite and negative.
         let phi_centre = pot.data[centre * n * n + centre * n + centre];

@@ -10,10 +10,8 @@
 //! with rayon. Accuracy improves as θ → 0 (recovering direct O(N²) summation).
 
 use rayon::prelude::*;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::super::{init::domain::Domain, solver::PoissonSolver, types::*};
+use super::super::{context::SimContext, init::domain::Domain, solver::PoissonSolver, types::*};
 
 // ---------------------------------------------------------------------------
 // Octree data structure
@@ -268,8 +266,6 @@ pub struct TreePoisson {
     pub domain: Domain,
     /// Plummer softening length (prevents 1/r singularity).
     pub softening: f64,
-    /// Shared progress state for intra-phase reporting.
-    progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
 impl TreePoisson {
@@ -284,20 +280,15 @@ impl TreePoisson {
             opening_angle,
             domain,
             softening,
-            progress: None,
         }
     }
 }
 
 impl PoissonSolver for TreePoisson {
-    /// Register a shared progress handle for intra-step reporting to the TUI.
-    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
-        self.progress = Some(p);
-    }
-
     /// Solve for the gravitational potential Φ by building an octree and performing
     /// an O(N log N) tree walk at each grid point.
-    fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
+    fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
+        let g = ctx.g;
         let _span = tracing::info_span!("tree_poisson_solve").entered();
         let [nx, ny, nz] = density.shape;
         let dx = self.domain.dx();
@@ -321,9 +312,6 @@ impl PoissonSolver for TreePoisson {
                 // Empty density field — zero potential
             }
             Some(ref root) => {
-                let total = n_total as u64;
-                let counter = AtomicU64::new(0);
-                let report_interval = (total / 100).max(1);
                 phi.par_iter_mut().enumerate().for_each(|(flat, val)| {
                     let ix = flat / (ny * nz);
                     let iy = (flat / nz) % ny;
@@ -334,12 +322,6 @@ impl PoissonSolver for TreePoisson {
                         origin[2] + (iz as f64 + 0.5) * dx[2],
                     ];
                     *val = tree_potential(root, &point, self.opening_angle, g, self.softening);
-                    if let Some(ref p) = self.progress {
-                        let c = counter.fetch_add(1, Ordering::Relaxed);
-                        if c.is_multiple_of(report_interval) {
-                            p.set_intra_progress(c, total);
-                        }
-                    }
                 });
             }
         }
@@ -362,6 +344,12 @@ impl PoissonSolver for TreePoisson {
 
 #[cfg(test)]
 mod tests {
+use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
+    use crate::tooling::core::progress::StepProgress;
+    use crate::tooling::core::solver::PoissonSolver as _;
+
     use super::*;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
 
@@ -393,7 +381,33 @@ mod tests {
             data: rho,
             shape: [nx, ny, nz],
         };
-        let pot = tree.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+        let _emitter = EventEmitter::sink();
+
+        let _progress = StepProgress::new();
+
+        let _ctx = SimContext {
+
+            solver: &tree as &dyn crate::tooling::core::solver::PoissonSolver,
+
+            advector: &_advector,
+
+            emitter: &_emitter,
+
+            progress: &_progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.0,
+
+            g: 1.0,
+
+        };
+
+        let pot = tree.solve(&density, &_ctx);
 
         // At a point 2 cells away, potential should be roughly -M/r
         let test = (mid + 2) * ny * nz + mid * nz + mid;
@@ -437,8 +451,73 @@ mod tests {
         let tree_wide = TreePoisson::new(domain.clone(), 1.0);
         let tree_narrow = TreePoisson::new(domain.clone(), 0.3);
 
-        let pot_wide = tree_wide.solve(&density, 1.0);
-        let pot_narrow = tree_narrow.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+
+        let _emitter = EventEmitter::sink();
+
+
+        let _progress = StepProgress::new();
+
+
+        let _ctx = SimContext {
+
+
+            solver: &tree_wide as &dyn crate::tooling::core::solver::PoissonSolver,
+
+
+            advector: &_advector,
+
+
+            emitter: &_emitter,
+
+
+            progress: &_progress,
+
+
+            step: 0,
+
+
+            time: 0.0,
+
+
+            dt: 0.0,
+
+
+            g: 1.0,
+
+
+        };
+
+
+        let pot_wide = tree_wide.solve(&density, &_ctx);
+        let _advector = SemiLagrangian::new();
+
+        let _emitter = EventEmitter::sink();
+
+        let _progress = StepProgress::new();
+
+        let _ctx = SimContext {
+
+            solver: &tree_narrow as &dyn crate::tooling::core::solver::PoissonSolver,
+
+            advector: &_advector,
+
+            emitter: &_emitter,
+
+            progress: &_progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.0,
+
+            g: 1.0,
+
+        };
+
+        let pot_narrow = tree_narrow.solve(&density, &_ctx);
 
         // Both should be finite and generally similar
         assert!(pot_wide.data.iter().all(|x| x.is_finite()));
@@ -493,8 +572,73 @@ mod tests {
             shape: [nx, ny, nz],
         };
 
-        let pot_tree = tree.solve(&density, 1.0);
-        let pot_fft = fft.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+
+        let _emitter = EventEmitter::sink();
+
+
+        let _progress = StepProgress::new();
+
+
+        let _ctx = SimContext {
+
+
+            solver: &tree as &dyn crate::tooling::core::solver::PoissonSolver,
+
+
+            advector: &_advector,
+
+
+            emitter: &_emitter,
+
+
+            progress: &_progress,
+
+
+            step: 0,
+
+
+            time: 0.0,
+
+
+            dt: 0.0,
+
+
+            g: 1.0,
+
+
+        };
+
+
+        let pot_tree = tree.solve(&density, &_ctx);
+        let _advector = SemiLagrangian::new();
+
+        let _emitter = EventEmitter::sink();
+
+        let _progress = StepProgress::new();
+
+        let _ctx = SimContext {
+
+            solver: &fft as &dyn crate::tooling::core::solver::PoissonSolver,
+
+            advector: &_advector,
+
+            emitter: &_emitter,
+
+            progress: &_progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.0,
+
+            g: 1.0,
+
+        };
+
+        let pot_fft = fft.solve(&density, &_ctx);
 
         // Tree and FFT-isolated should give similar potentials (within tree approximation)
         let max_fft = pot_fft.data.iter().map(|x| x.abs()).fold(0.0f64, f64::max);
@@ -523,7 +667,33 @@ mod tests {
             data: rho,
             shape: [8, 8, 8],
         };
-        let pot = tree.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+        let _emitter = EventEmitter::sink();
+
+        let _progress = StepProgress::new();
+
+        let _ctx = SimContext {
+
+            solver: &tree as &dyn crate::tooling::core::solver::PoissonSolver,
+
+            advector: &_advector,
+
+            emitter: &_emitter,
+
+            progress: &_progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.0,
+
+            g: 1.0,
+
+        };
+
+        let pot = tree.solve(&density, &_ctx);
         // All-zero density should give all-zero potential
         assert!(pot.data.iter().all(|&x| x == 0.0));
     }
@@ -547,7 +717,33 @@ mod tests {
             data: rho,
             shape: [nx, ny, nz],
         };
-        let pot = tree.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+        let _emitter = EventEmitter::sink();
+
+        let _progress = StepProgress::new();
+
+        let _ctx = SimContext {
+
+            solver: &tree as &dyn crate::tooling::core::solver::PoissonSolver,
+
+            advector: &_advector,
+
+            emitter: &_emitter,
+
+            progress: &_progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.0,
+
+            g: 1.0,
+
+        };
+
+        let pot = tree.solve(&density, &_ctx);
 
         // Potential at the midpoint (between the two masses) should be well-defined
         let mid_pot = pot.data[mid * ny * nz + mid * nz + mid];
@@ -573,7 +769,33 @@ mod tests {
             data: rho,
             shape: [nx, ny, nz],
         };
-        let pot = tree.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+        let _emitter = EventEmitter::sink();
+
+        let _progress = StepProgress::new();
+
+        let _ctx = SimContext {
+
+            solver: &tree as &dyn crate::tooling::core::solver::PoissonSolver,
+
+            advector: &_advector,
+
+            emitter: &_emitter,
+
+            progress: &_progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.0,
+
+            g: 1.0,
+
+        };
+
+        let pot = tree.solve(&density, &_ctx);
         let acc = tree.compute_acceleration(&pot);
 
         // Acceleration field should have the correct shape

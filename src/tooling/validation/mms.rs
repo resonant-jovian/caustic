@@ -87,7 +87,7 @@ mod tests {
             .domain(domain)
             .poisson_solver(poisson)
             .advector(SemiLagrangian::new())
-            .integrator(StrangSplitting::new(0.0)) // G=0: free streaming
+            .integrator(StrangSplitting::new()) // G=0: free streaming
             .initial_conditions(snap)
             .time_final(0.1)
             .gravitational_constant(0.0)

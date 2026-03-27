@@ -3,9 +3,14 @@
 
 #[test]
 fn uniform_acceleration() {
+    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::algos::uniform::UniformGrid6D;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
+    use crate::tooling::core::poisson::fft::FftPoisson;
+    use crate::tooling::core::progress::StepProgress;
     use crate::tooling::core::types::AccelerationField;
 
     // 4×4×4 spatial, 16×16×16 velocity = 262144 cells
@@ -64,7 +69,21 @@ fn uniform_acceleration() {
         shape: [nx1, nx2, nx3],
     };
 
-    grid.advect_v(&accel, dt);
+    let poisson = FftPoisson::new(&grid.domain);
+    let advector_sl = SemiLagrangian::new();
+    let emitter = EventEmitter::sink();
+    let progress = StepProgress::new();
+    let ctx = SimContext {
+        solver: &poisson,
+        advector: &advector_sl,
+        emitter: &emitter,
+        progress: &progress,
+        step: 0,
+        time: 0.0,
+        dt,
+        g: 0.0,
+    };
+    grid.advect_v(&accel, &ctx);
 
     let shift = ax * dt; // = 1.0 physical velocity unit
     let domain_width = 2.0 * lv;

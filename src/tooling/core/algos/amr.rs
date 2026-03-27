@@ -830,6 +830,11 @@ impl PhaseSpaceRepr for AmrGrid {
 mod tests {
     use super::*;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
+    use crate::tooling::core::progress::StepProgress;
+    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::poisson::fft::FftPoisson;
 
     fn test_domain() -> Domain {
         Domain::builder()
@@ -938,7 +943,39 @@ mod tests {
             dz: vec![0.0; n],
             shape: [4, 4, 4],
         };
-        amr.advect_x(&dummy, 0.01);
+        let __advector = SemiLagrangian::new();
+
+        let __emitter = EventEmitter::sink();
+
+        let __progress = StepProgress::new();
+
+        // Dummy solver for advect context
+
+        let __domain_tmp = amr.domain.clone();
+
+        let __solver = FftPoisson::new(&__domain_tmp);
+
+        let __ctx = SimContext {
+
+            solver: &__solver,
+
+            advector: &__advector,
+
+            emitter: &__emitter,
+
+            progress: &__progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.01,
+
+            g: 0.0,
+
+        };
+
+        amr.advect_x(&dummy, &__ctx);
         let m1 = amr.total_mass();
 
         assert!(
@@ -1062,7 +1099,39 @@ mod tests {
             gz: vec![0.0; n],
             shape: [4, 4, 4],
         };
-        amr.advect_v(&acc, 0.5);
+        let __advector = SemiLagrangian::new();
+
+        let __emitter = EventEmitter::sink();
+
+        let __progress = StepProgress::new();
+
+        // Dummy solver for advect context
+
+        let __domain_tmp = amr.domain.clone();
+
+        let __solver = FftPoisson::new(&__domain_tmp);
+
+        let __ctx = SimContext {
+
+            solver: &__solver,
+
+            advector: &__advector,
+
+            emitter: &__emitter,
+
+            progress: &__progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.5,
+
+            g: 0.0,
+
+        };
+
+        amr.advect_v(&acc, &__ctx);
 
         // v1 should have increased by a*dt = 1.0 * 0.5 = 0.5.
         let v_after = amr.root.center[3];
@@ -1090,7 +1159,39 @@ mod tests {
         };
 
         // Advance by dt = 5.0: x_new = 0 + 1.0 * 5.0 = 5.0, should wrap to 5 mod 4 - 2 = 1.0.
-        amr.advect_x(&dummy, 5.0);
+        let __advector = SemiLagrangian::new();
+
+        let __emitter = EventEmitter::sink();
+
+        let __progress = StepProgress::new();
+
+        // Dummy solver for advect context
+
+        let __domain_tmp = amr.domain.clone();
+
+        let __solver = FftPoisson::new(&__domain_tmp);
+
+        let __ctx = SimContext {
+
+            solver: &__solver,
+
+            advector: &__advector,
+
+            emitter: &__emitter,
+
+            progress: &__progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 5.0,
+
+            g: 0.0,
+
+        };
+
+        amr.advect_x(&dummy, &__ctx);
         let x = amr.root.center[0];
         // Domain is [-2, 2), period = 4. 5.0 mod 4 = 1.0. 1.0 - 2.0 = -1.0? No.
         // ((5.0 + 2.0) % 4.0 + 4.0) % 4.0 - 2.0 = (7.0 % 4.0) - 2.0 = 3.0 - 2.0 = 1.0.

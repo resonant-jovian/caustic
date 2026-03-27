@@ -10,6 +10,7 @@
 
 use super::super::super::{
     conditions::{ExitCondition, ExitReason},
+    context::SimContext,
     diagnostics::GlobalDiagnostics,
 };
 
@@ -41,9 +42,9 @@ impl ExitEvaluator {
     /// Check all registered conditions against the current diagnostics.
     ///
     /// Returns the first triggered [`ExitReason`], or `None` if the simulation should continue.
-    pub fn check(&self, current: &GlobalDiagnostics) -> Option<ExitReason> {
+    pub fn check(&self, current: &GlobalDiagnostics, ctx: &SimContext) -> Option<ExitReason> {
         self.conditions
             .iter()
-            .find_map(|c| c.check(current, &self.initial))
+            .find_map(|c| c.check(current, &self.initial, ctx))
     }
 }

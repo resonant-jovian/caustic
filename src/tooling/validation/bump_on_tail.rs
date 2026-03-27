@@ -79,7 +79,7 @@ mod tests {
             .domain(domain)
             .poisson_solver(poisson)
             .advector(SemiLagrangian::new())
-            .integrator(StrangSplitting::new(1.0))
+            .integrator(StrangSplitting::new())
             .initial_conditions(snap)
             .time_final(1.0)
             .build()

@@ -168,7 +168,7 @@ fn sheet_1d_density_comparison() {
         .domain(domain.clone())
         .poisson_solver(poisson)
         .advector(SemiLagrangian::new())
-        .integrator(StrangSplitting::new(g))
+        .integrator(StrangSplitting::new())
         .initial_conditions(snap)
         .time_final(t_final)
         .build()

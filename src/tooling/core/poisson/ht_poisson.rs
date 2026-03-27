@@ -550,6 +550,12 @@ fn min_image_dist(i: usize, n: usize) -> f64 {
 
 #[cfg(test)]
 mod tests {
+use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
+    use crate::tooling::core::progress::StepProgress;
+    use crate::tooling::core::solver::PoissonSolver as _;
+
     use super::*;
 
     #[test]
@@ -574,7 +580,46 @@ mod tests {
             shape,
         };
 
-        let potential = solver.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+
+        let _emitter = EventEmitter::sink();
+
+
+        let _progress = StepProgress::new();
+
+
+        let _ctx = SimContext {
+
+
+            solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
+
+
+            advector: &_advector,
+
+
+            emitter: &_emitter,
+
+
+            progress: &_progress,
+
+
+            step: 0,
+
+
+            time: 0.0,
+
+
+            dt: 0.0,
+
+
+            g: 1.0,
+
+
+        };
+
+
+        let potential = solver.solve(&density, &_ctx);
         assert_eq!(potential.data.len(), 512);
         assert!(
             potential.data.iter().all(|v| v.is_finite()),
@@ -617,8 +662,73 @@ mod tests {
         let tensor_solver = TensorPoisson::new(shape, dx, 1e-4, 1e-4, 15);
         let ht_solver = HtPoisson::new(shape, dx, 1e-4, 1e-3, 20);
 
-        let phi_tensor = tensor_solver.solve(&density, 1.0);
-        let phi_ht = ht_solver.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+
+        let _emitter = EventEmitter::sink();
+
+
+        let _progress = StepProgress::new();
+
+
+        let _ctx = SimContext {
+
+
+            solver: &tensor_solver as &dyn crate::tooling::core::solver::PoissonSolver,
+
+
+            advector: &_advector,
+
+
+            emitter: &_emitter,
+
+
+            progress: &_progress,
+
+
+            step: 0,
+
+
+            time: 0.0,
+
+
+            dt: 0.0,
+
+
+            g: 1.0,
+
+
+        };
+
+
+        let phi_tensor = tensor_solver.solve(&density, &_ctx);
+        let _advector = SemiLagrangian::new();
+
+        let _emitter = EventEmitter::sink();
+
+        let _progress = StepProgress::new();
+
+        let _ctx = SimContext {
+
+            solver: &ht_solver as &dyn crate::tooling::core::solver::PoissonSolver,
+
+            advector: &_advector,
+
+            emitter: &_emitter,
+
+            progress: &_progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.0,
+
+            g: 1.0,
+
+        };
+
+        let phi_ht = ht_solver.solve(&density, &_ctx);
 
         // Compare after mean subtraction
         let n = phi_tensor.data.len() as f64;
@@ -664,7 +774,33 @@ mod tests {
         rho[center] = 100.0;
 
         let density = DensityField { data: rho, shape };
-        let _potential = solver.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+        let _emitter = EventEmitter::sink();
+
+        let _progress = StepProgress::new();
+
+        let _ctx = SimContext {
+
+            solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
+
+            advector: &_advector,
+
+            emitter: &_emitter,
+
+            progress: &_progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.0,
+
+            g: 1.0,
+
+        };
+
+        let _potential = solver.solve(&density, &_ctx);
 
         let mag = solver.last_near_field_magnitude();
         assert!(
@@ -687,7 +823,46 @@ mod tests {
             shape,
         };
 
-        let potential = solver.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+
+        let _emitter = EventEmitter::sink();
+
+
+        let _progress = StepProgress::new();
+
+
+        let _ctx = SimContext {
+
+
+            solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
+
+
+            advector: &_advector,
+
+
+            emitter: &_emitter,
+
+
+            progress: &_progress,
+
+
+            step: 0,
+
+
+            time: 0.0,
+
+
+            dt: 0.0,
+
+
+            g: 1.0,
+
+
+        };
+
+
+        let potential = solver.solve(&density, &_ctx);
         let mag = solver.last_near_field_magnitude();
 
         // Compute the L2 norm of the potential for comparison
@@ -711,7 +886,33 @@ mod tests {
         rho[4 * 64 + 4 * 8 + 4] = 100.0;
 
         let density = DensityField { data: rho, shape };
-        let _potential = solver.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+        let _emitter = EventEmitter::sink();
+
+        let _progress = StepProgress::new();
+
+        let _ctx = SimContext {
+
+            solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
+
+            advector: &_advector,
+
+            emitter: &_emitter,
+
+            progress: &_progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.0,
+
+            g: 1.0,
+
+        };
+
+        let _potential = solver.solve(&density, &_ctx);
 
         let mag = solver.last_near_field_magnitude();
         assert!(

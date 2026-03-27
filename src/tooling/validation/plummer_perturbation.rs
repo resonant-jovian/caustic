@@ -66,7 +66,7 @@ fn plummer_perturbation_response() {
         .domain(domain)
         .poisson_solver(poisson)
         .advector(SemiLagrangian::new())
-        .integrator(StrangSplitting::new(1.0))
+        .integrator(StrangSplitting::new())
         .initial_conditions(snap)
         .time_final(8.0)
         .build()

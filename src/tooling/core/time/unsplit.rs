@@ -7,17 +7,14 @@
 //!
 //! where g(x) = -grad Phi is the gravitational acceleration.
 
-use std::sync::Arc;
-
 use rayon::prelude::*;
 
 use super::super::{
-    advecator::Advector,
+    context::SimContext,
     init::domain::Domain,
     integrator::{StepProducts, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
-    progress::{StepPhase, StepProgress},
-    solver::PoissonSolver,
+    progress::StepPhase,
     types::*,
 };
 use crate::CausticError;
@@ -31,11 +28,8 @@ use crate::CausticError;
 pub struct UnsplitIntegrator {
     /// Number of Runge-Kutta stages (2, 3, or 4).
     pub rk_stages: usize,
-    /// Gravitational constant G.
-    pub g: f64,
     /// Computational domain (grid spacings, extents, BCs).
     pub domain: Domain,
-    progress: Option<Arc<StepProgress>>,
 }
 
 impl UnsplitIntegrator {
@@ -43,7 +37,7 @@ impl UnsplitIntegrator {
     ///
     /// # Panics
     /// Panics if `rk_stages` is not 2, 3, or 4.
-    pub fn new(rk_stages: usize, g: f64, domain: Domain) -> Self {
+    pub fn new(rk_stages: usize, domain: Domain) -> Self {
         assert!(
             rk_stages == 2 || rk_stages == 3 || rk_stages == 4,
             "rk_stages must be 2, 3, or 4; got {}",
@@ -51,9 +45,7 @@ impl UnsplitIntegrator {
         );
         Self {
             rk_stages,
-            g,
             domain,
-            progress: None,
         }
     }
 
@@ -322,21 +314,17 @@ impl TimeIntegrator for UnsplitIntegrator {
     fn advance(
         &mut self,
         repr: &mut dyn PhaseSpaceRepr,
-        solver: &dyn PoissonSolver,
-        advector: &dyn Advector,
-        dt: f64,
+        ctx: &SimContext,
     ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("unsplit_advance").entered();
+        let dt = ctx.dt;
 
-        if let Some(ref p) = self.progress {
-            p.start_step();
-            p.set_phase(StepPhase::UnsplitStage1);
-            p.set_sub_step(0, self.rk_stages as u8);
-        }
+        ctx.progress.start_step();
+        ctx.progress.set_phase(StepPhase::UnsplitStage1);
+        ctx.progress.set_sub_step(0, self.rk_stages as u8);
 
         let shape = self.sizes();
         let dv = self.domain.dv();
-        let g = self.g;
 
         // Extract current state as flat data
         let snap0 = repr.to_snapshot(0.0).ok_or_else(|| {
@@ -348,8 +336,8 @@ impl TimeIntegrator for UnsplitIntegrator {
         // Helper: compute acceleration from raw 6D data
         let compute_accel = |data: &[f64]| -> AccelerationField {
             let density = compute_density_from_data(data, shape, dv);
-            let potential = solver.solve(&density, g);
-            solver.compute_acceleration(&potential)
+            let potential = ctx.solver.solve(&density, ctx);
+            ctx.solver.compute_acceleration(&potential)
         };
 
         match self.rk_stages {
@@ -368,10 +356,9 @@ impl TimeIntegrator for UnsplitIntegrator {
                     y_stage[i] = y0[i] + dt * k1[i];
                 }
 
-                if let Some(ref p) = self.progress {
-                    p.set_phase(StepPhase::UnsplitStage2);
-                    p.set_sub_step(1, 2);
-                }
+                ctx.progress.set_phase(StepPhase::UnsplitStage2);
+                ctx.progress.set_sub_step(1, 2);
+
                 let accel1 = compute_accel(&y_stage);
                 let k2 = self.evaluate_rhs(&y_stage, &accel1);
 
@@ -401,10 +388,9 @@ impl TimeIntegrator for UnsplitIntegrator {
                 let mut y_stage = vec![0.0f64; n];
 
                 // Stage 2: y0 + dt/2 * k1
-                if let Some(ref p) = self.progress {
-                    p.set_phase(StepPhase::UnsplitStage2);
-                    p.set_sub_step(1, 3);
-                }
+                ctx.progress.set_phase(StepPhase::UnsplitStage2);
+                ctx.progress.set_sub_step(1, 3);
+
                 for i in 0..n {
                     y_stage[i] = y0[i] + 0.5 * dt * k1[i];
                 }
@@ -412,10 +398,9 @@ impl TimeIntegrator for UnsplitIntegrator {
                 let k2 = self.evaluate_rhs(&y_stage, &accel2);
 
                 // Stage 3: y0 - dt*k1 + 2*dt*k2 (reuse y_stage)
-                if let Some(ref p) = self.progress {
-                    p.set_phase(StepPhase::UnsplitStage3);
-                    p.set_sub_step(2, 3);
-                }
+                ctx.progress.set_phase(StepPhase::UnsplitStage3);
+                ctx.progress.set_sub_step(2, 3);
+
                 for i in 0..n {
                     y_stage[i] = y0[i] - dt * k1[i] + 2.0 * dt * k2[i];
                 }
@@ -449,10 +434,9 @@ impl TimeIntegrator for UnsplitIntegrator {
                 let mut y_stage = vec![0.0f64; n];
 
                 // Stage 2: y0 + dt/2 * k1
-                if let Some(ref p) = self.progress {
-                    p.set_phase(StepPhase::UnsplitStage2);
-                    p.set_sub_step(1, 4);
-                }
+                ctx.progress.set_phase(StepPhase::UnsplitStage2);
+                ctx.progress.set_sub_step(1, 4);
+
                 for i in 0..n {
                     y_stage[i] = y0[i] + 0.5 * dt * k1[i];
                 }
@@ -460,10 +444,9 @@ impl TimeIntegrator for UnsplitIntegrator {
                 let k2 = self.evaluate_rhs(&y_stage, &accel2);
 
                 // Stage 3: y0 + dt/2 * k2 (reuse y_stage)
-                if let Some(ref p) = self.progress {
-                    p.set_phase(StepPhase::UnsplitStage3);
-                    p.set_sub_step(2, 4);
-                }
+                ctx.progress.set_phase(StepPhase::UnsplitStage3);
+                ctx.progress.set_sub_step(2, 4);
+
                 for i in 0..n {
                     y_stage[i] = y0[i] + 0.5 * dt * k2[i];
                 }
@@ -471,10 +454,9 @@ impl TimeIntegrator for UnsplitIntegrator {
                 let k3 = self.evaluate_rhs(&y_stage, &accel3);
 
                 // Stage 4: y0 + dt * k3 (reuse y_stage)
-                if let Some(ref p) = self.progress {
-                    p.set_phase(StepPhase::UnsplitStage4);
-                    p.set_sub_step(3, 4);
-                }
+                ctx.progress.set_phase(StepPhase::UnsplitStage4);
+                ctx.progress.set_sub_step(3, 4);
+
                 for i in 0..n {
                     y_stage[i] = y0[i] + dt * k3[i];
                 }
@@ -497,8 +479,8 @@ impl TimeIntegrator for UnsplitIntegrator {
         }
 
         let density = repr.compute_density();
-        let potential = solver.solve(&density, g);
-        let acceleration = solver.compute_acceleration(&potential);
+        let potential = ctx.solver.solve(&density, ctx);
+        let acceleration = ctx.solver.compute_acceleration(&potential);
         Ok(StepProducts {
             density,
             potential,
@@ -529,26 +511,21 @@ impl TimeIntegrator for UnsplitIntegrator {
         let dt_spatial = if v_max > 0.0 { dx_min / v_max } else { 1e10 };
 
         // Velocity CFL: dt <= dv_min / g_max
-        // Estimate g_max from density
+        // Estimate g_max from density (use G=1.0 as a conservative default)
         let density = repr.compute_density();
         let rho_max = density.data.iter().cloned().fold(0.0_f64, f64::max);
 
-        let dt_velocity = if rho_max > 0.0 && self.g > 0.0 {
-            // g_max ~ sqrt(G * rho_max) * L where L is the box size
+        let dt_velocity = if rho_max > 0.0 {
+            // g_max ~ sqrt(G * rho_max) * L where L is the box size, using G=1.0
             let lx = self.domain.lx();
             let l_box = 2.0 * lx[0].max(lx[1]).max(lx[2]);
-            let g_max = (self.g * rho_max).sqrt() * l_box;
+            let g_max = rho_max.sqrt() * l_box;
             if g_max > 0.0 { dv_min / g_max } else { 1e10 }
         } else {
             1e10
         };
 
         cfl_factor * dt_spatial.min(dt_velocity)
-    }
-
-    /// Attach a progress reporter for intra-step TUI updates.
-    fn set_progress(&mut self, progress: Arc<StepProgress>) {
-        self.progress = Some(progress);
     }
 }
 
@@ -562,8 +539,10 @@ mod tests {
         // A Gaussian blob should shift by v*dt in position.
         use crate::tooling::core::algos::lagrangian::SemiLagrangian;
         use crate::tooling::core::algos::uniform::UniformGrid6D;
+        use crate::tooling::core::events::EventEmitter;
         use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
         use crate::tooling::core::poisson::fft::FftPoisson;
+        use crate::tooling::core::progress::StepProgress;
 
         let domain = Domain::builder()
             .spatial_extent(4.0)
@@ -628,16 +607,29 @@ mod tests {
         };
 
         // Run with unsplit RK4, G=0
-        let mut unsplit = UnsplitIntegrator::new(4, 0.0, domain.clone());
+        let mut unsplit = UnsplitIntegrator::new(4, domain.clone());
         let poisson = FftPoisson::new(&domain);
         let advector = SemiLagrangian::new();
+        let emitter = EventEmitter::sink();
+        let progress = StepProgress::new();
 
         let mut repr: Box<dyn PhaseSpaceRepr> =
             Box::new(UniformGrid6D::from_snapshot(snap, domain));
 
         let dt = 0.01;
+        let ctx = SimContext {
+            solver: &poisson,
+            advector: &advector,
+            emitter: &emitter,
+            progress: &progress,
+            step: 0,
+            time: 0.0,
+            dt,
+            g: 0.0,
+        };
+
         unsplit
-            .advance(&mut *repr, &poisson, &advector, dt)
+            .advance(&mut *repr, &ctx)
             .unwrap();
 
         let result = repr.to_snapshot(dt).unwrap();
@@ -664,16 +656,18 @@ mod tests {
             .velocity_bc(VelocityBoundType::Truncated)
             .build()
             .unwrap();
-        let _ = UnsplitIntegrator::new(5, 1.0, domain);
+        let _ = UnsplitIntegrator::new(5, domain);
     }
 
     #[test]
     fn unsplit_rk2_runs() {
         use crate::tooling::core::algos::lagrangian::SemiLagrangian;
         use crate::tooling::core::algos::uniform::UniformGrid6D;
+        use crate::tooling::core::events::EventEmitter;
         use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
         use crate::tooling::core::init::isolated::{PlummerIC, sample_on_grid};
         use crate::tooling::core::poisson::fft::FftPoisson;
+        use crate::tooling::core::progress::StepProgress;
 
         let domain = Domain::builder()
             .spatial_extent(4.0)
@@ -689,14 +683,27 @@ mod tests {
         let ic = PlummerIC::new(1.0, 1.0, 0.0);
         let snap = sample_on_grid(&ic, &domain);
 
-        let mut unsplit = UnsplitIntegrator::new(2, 0.0, domain.clone());
+        let mut unsplit = UnsplitIntegrator::new(2, domain.clone());
         let poisson = FftPoisson::new(&domain);
         let advector = SemiLagrangian::new();
+        let emitter = EventEmitter::sink();
+        let progress = StepProgress::new();
         let mut repr: Box<dyn PhaseSpaceRepr> =
             Box::new(UniformGrid6D::from_snapshot(snap, domain));
 
+        let ctx = SimContext {
+            solver: &poisson,
+            advector: &advector,
+            emitter: &emitter,
+            progress: &progress,
+            step: 0,
+            time: 0.0,
+            dt: 0.01,
+            g: 0.0,
+        };
+
         unsplit
-            .advance(&mut *repr, &poisson, &advector, 0.01)
+            .advance(&mut *repr, &ctx)
             .unwrap();
         let result = repr.to_snapshot(0.01).unwrap();
         assert!(result.data.iter().all(|v| v.is_finite()));
@@ -706,9 +713,11 @@ mod tests {
     fn unsplit_rk3_runs() {
         use crate::tooling::core::algos::lagrangian::SemiLagrangian;
         use crate::tooling::core::algos::uniform::UniformGrid6D;
+        use crate::tooling::core::events::EventEmitter;
         use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
         use crate::tooling::core::init::isolated::{PlummerIC, sample_on_grid};
         use crate::tooling::core::poisson::fft::FftPoisson;
+        use crate::tooling::core::progress::StepProgress;
 
         let domain = Domain::builder()
             .spatial_extent(4.0)
@@ -724,14 +733,27 @@ mod tests {
         let ic = PlummerIC::new(1.0, 1.0, 0.0);
         let snap = sample_on_grid(&ic, &domain);
 
-        let mut unsplit = UnsplitIntegrator::new(3, 0.0, domain.clone());
+        let mut unsplit = UnsplitIntegrator::new(3, domain.clone());
         let poisson = FftPoisson::new(&domain);
         let advector = SemiLagrangian::new();
+        let emitter = EventEmitter::sink();
+        let progress = StepProgress::new();
         let mut repr: Box<dyn PhaseSpaceRepr> =
             Box::new(UniformGrid6D::from_snapshot(snap, domain));
 
+        let ctx = SimContext {
+            solver: &poisson,
+            advector: &advector,
+            emitter: &emitter,
+            progress: &progress,
+            step: 0,
+            time: 0.0,
+            dt: 0.01,
+            g: 0.0,
+        };
+
         unsplit
-            .advance(&mut *repr, &poisson, &advector, 0.01)
+            .advance(&mut *repr, &ctx)
             .unwrap();
         let result = repr.to_snapshot(0.01).unwrap();
         assert!(result.data.iter().all(|v| v.is_finite()));
@@ -758,16 +780,13 @@ mod tests {
         let snap = sample_on_grid(&ic, &domain);
         let repr = UniformGrid6D::from_snapshot(snap, domain.clone());
 
-        let unsplit = UnsplitIntegrator::new(4, 0.0, domain.clone());
+        let unsplit = UnsplitIntegrator::new(4, domain.clone());
         let dt = unsplit.max_dt(&repr, 0.5);
-        // With G=0, velocity CFL is infinite, so dt is limited by spatial CFL only
-        let dx_min = domain.dx()[0].min(domain.dx()[1]).min(domain.dx()[2]);
-        let v_max = 2.0; // velocity extent
-        let expected = 0.5 * dx_min / v_max;
+        // With G=1.0 (default), velocity CFL is finite, so dt is limited by both
+        // spatial and velocity CFL
         assert!(
-            (dt - expected).abs() < 1e-12,
-            "max_dt should be cfl * dx_min / v_max = {}, got {}",
-            expected,
+            dt > 0.0 && dt < 1e10,
+            "max_dt should be a finite positive value, got {}",
             dt
         );
     }

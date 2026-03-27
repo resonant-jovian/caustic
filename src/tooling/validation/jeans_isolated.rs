@@ -12,6 +12,9 @@ fn jeans_instability_isolated() {
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
     use crate::tooling::core::poisson::fft::FftIsolated;
     use crate::tooling::core::time::strang::StrangSplitting;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
+    use crate::tooling::core::progress::StepProgress;
 
     // Jeans instability with isolated (vacuum) boundary conditions.
     // f(x,v) = C * exp(-v²/2σ²) * (1 + ε cos(k x₁))
@@ -92,7 +95,9 @@ fn jeans_instability_isolated() {
 
     let poisson = FftIsolated::new(&domain);
     let advector = SemiLagrangian::new();
-    let mut integrator = StrangSplitting::new(g);
+    let mut integrator = StrangSplitting::new();
+    let emitter = EventEmitter::sink();
+    let progress = StepProgress::new();
     let dt = 0.05f64;
     let n_steps = 40; // t = 2.0
 
@@ -100,8 +105,30 @@ fn jeans_instability_isolated() {
     let mut amplitudes = vec![(0.0f64, amp_init)];
 
     for step in 0..n_steps {
+        let ctx = SimContext {
+
+            solver: &poisson,
+
+            advector: &advector,
+
+            emitter: &emitter,
+
+            progress: &progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: dt,
+
+            g: 1.0,
+
+        };
+
         integrator
-            .advance(&mut grid, &poisson, &advector, dt)
+
+            .advance(&mut grid, &ctx)
+
             .unwrap();
 
         if (step + 1) % 5 == 0 {

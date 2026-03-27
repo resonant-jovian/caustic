@@ -29,10 +29,13 @@ impl SineWaveResult {
 fn run_sine_wave(n_spatial: usize, n_velocity: usize, t_final: f64) -> SineWaveResult {
     use crate::tooling::core::algos::lagrangian::SemiLagrangian;
     use crate::tooling::core::algos::uniform::UniformGrid6D;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
     use crate::tooling::core::integrator::TimeIntegrator as _;
     use crate::tooling::core::phasespace::PhaseSpaceRepr as _;
     use crate::tooling::core::poisson::fft::FftPoisson;
+    use crate::tooling::core::progress::StepProgress;
     use crate::tooling::core::solver::PoissonSolver as _;
     use crate::tooling::core::time::strang::StrangSplitting;
 
@@ -106,7 +109,20 @@ fn run_sine_wave(n_spatial: usize, n_velocity: usize, t_final: f64) -> SineWaveR
     assert!(rho_max_init > 0.0, "Initial density must be positive");
 
     let poisson = FftPoisson::new(&domain);
-    let pot_init = poisson.solve(&rho_init, g);
+    let advector = SemiLagrangian::new();
+    let emitter = EventEmitter::sink();
+    let progress = StepProgress::new();
+    let make_ctx = |dt: f64| SimContext {
+        solver: &poisson,
+        advector: &advector,
+        emitter: &emitter,
+        progress: &progress,
+        step: 0,
+        time: 0.0,
+        dt,
+        g,
+    };
+    let pot_init = poisson.solve(&rho_init, &make_ctx(0.0));
     let w_init: f64 = rho_init
         .data
         .iter()
@@ -118,14 +134,13 @@ fn run_sine_wave(n_spatial: usize, n_velocity: usize, t_final: f64) -> SineWaveR
     let e_total_init = t_ke_init + w_init;
 
     // Evolve
-    let advector = SemiLagrangian::new();
-    let mut integrator = StrangSplitting::new(g);
+    let mut integrator = StrangSplitting::new();
     let dt = 0.05_f64;
     let n_steps = (t_final / dt).ceil() as usize;
 
     for step in 0..n_steps {
         integrator
-            .advance(&mut grid, &poisson, &advector, dt)
+            .advance(&mut grid, &make_ctx(dt))
             .unwrap();
 
         // Mid-run NaN check
@@ -148,7 +163,7 @@ fn run_sine_wave(n_spatial: usize, n_velocity: usize, t_final: f64) -> SineWaveR
     let rho_max_final = rho_final.data.iter().cloned().fold(0.0_f64, f64::max);
     let rho_mean_final = rho_final.data.iter().sum::<f64>() / rho_final.data.len() as f64;
 
-    let pot_final = poisson.solve(&rho_final, g);
+    let pot_final = poisson.solve(&rho_final, &make_ctx(0.0));
     let w_final: f64 = rho_final
         .data
         .iter()

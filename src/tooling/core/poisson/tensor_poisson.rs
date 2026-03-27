@@ -19,6 +19,7 @@ use rayon::prelude::*;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use super::super::context::SimContext;
 use super::super::solver::PoissonSolver;
 use super::super::types::*;
 use super::exponential_sum::ExponentialSumCoefficients;
@@ -56,8 +57,6 @@ pub struct TensorPoisson {
     near_field_enabled: bool,
     /// L2 norm of last near-field correction (stored as f64 bits for atomic access).
     last_near_field_l2: AtomicU64,
-    /// Shared progress state for intra-phase reporting.
-    progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
 impl TensorPoisson {
@@ -158,7 +157,6 @@ impl TensorPoisson {
             last_near_field_l2: AtomicU64::new(0u64),
             fft_fwd,
             fft_inv,
-            progress: None,
         }
     }
 
@@ -193,15 +191,12 @@ impl TensorPoisson {
 }
 
 impl PoissonSolver for TensorPoisson {
-    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
-        self.progress = Some(p);
-    }
-
     /// Solve the Poisson equation using dense FFT convolution with the precomputed Green's function.
     ///
     /// Pipeline: zero-pad rho to (2N)^3 -> 3D FFT -> pointwise multiply by Green's FFT ->
     /// 3D IFFT -> extract N^3 subgrid -> apply near-field corrections.
-    fn solve(&self, density: &DensityField, g: f64) -> PotentialField {
+    fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
+        let g = ctx.g;
         let [nx, ny, nz] = self.shape;
         let [px, py, pz] = self.padded_shape;
 
@@ -226,22 +221,10 @@ impl PoissonSolver for TensorPoisson {
         let rho_fft = fft_3d_forward(&rho_padded, self.padded_shape, &self.fft_fwd);
 
         // Step 3: element-wise multiply (convolution in Fourier space) — parallel
-        let total = rho_fft.len() as u64;
-        let counter = AtomicU64::new(0);
-        let report_interval = (total / 100).max(1);
         let phi_fft: Vec<Complex64> = rho_fft
             .par_iter()
             .zip(self.green_fft.par_iter())
-            .map(|(r, g)| {
-                let result = r * g;
-                if let Some(ref p) = self.progress {
-                    let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c.is_multiple_of(report_interval) {
-                        p.set_intra_progress(c, total);
-                    }
-                }
-                result
-            })
+            .map(|(r, g)| r * g)
             .collect();
 
         // Step 4: 3D IFFT
@@ -345,6 +328,12 @@ fn fft_3d_inverse(
 
 #[cfg(test)]
 mod tests {
+use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
+    use crate::tooling::core::progress::StepProgress;
+    use crate::tooling::core::solver::PoissonSolver as _;
+
     use super::*;
 
     #[test]
@@ -370,7 +359,46 @@ mod tests {
             shape,
         };
 
-        let potential = solver.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+
+        let _emitter = EventEmitter::sink();
+
+
+        let _progress = StepProgress::new();
+
+
+        let _ctx = SimContext {
+
+
+            solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
+
+
+            advector: &_advector,
+
+
+            emitter: &_emitter,
+
+
+            progress: &_progress,
+
+
+            step: 0,
+
+
+            time: 0.0,
+
+
+            dt: 0.0,
+
+
+            g: 1.0,
+
+
+        };
+
+
+        let potential = solver.solve(&density, &_ctx);
         assert_eq!(potential.data.len(), n);
 
         // Potential should be finite everywhere
@@ -404,7 +432,46 @@ mod tests {
 
         let density = DensityField { data: rho, shape };
 
-        let potential = solver.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+
+        let _emitter = EventEmitter::sink();
+
+
+        let _progress = StepProgress::new();
+
+
+        let _ctx = SimContext {
+
+
+            solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
+
+
+            advector: &_advector,
+
+
+            emitter: &_emitter,
+
+
+            progress: &_progress,
+
+
+            step: 0,
+
+
+            time: 0.0,
+
+
+            dt: 0.0,
+
+
+            g: 1.0,
+
+
+        };
+
+
+        let potential = solver.solve(&density, &_ctx);
         assert!(potential.data[center].is_finite());
 
         // Potential should be most negative at the source
@@ -493,8 +560,73 @@ mod tests {
         let fft_solver = FftIsolated::new(&domain);
         let tensor_solver = TensorPoisson::new(shape, dx, 1e-6, 1e-6, 20);
 
-        let phi_fft = fft_solver.solve(&density, 1.0);
-        let phi_tensor = tensor_solver.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+
+        let _emitter = EventEmitter::sink();
+
+
+        let _progress = StepProgress::new();
+
+
+        let _ctx = SimContext {
+
+
+            solver: &fft_solver as &dyn crate::tooling::core::solver::PoissonSolver,
+
+
+            advector: &_advector,
+
+
+            emitter: &_emitter,
+
+
+            progress: &_progress,
+
+
+            step: 0,
+
+
+            time: 0.0,
+
+
+            dt: 0.0,
+
+
+            g: 1.0,
+
+
+        };
+
+
+        let phi_fft = fft_solver.solve(&density, &_ctx);
+        let _advector = SemiLagrangian::new();
+
+        let _emitter = EventEmitter::sink();
+
+        let _progress = StepProgress::new();
+
+        let _ctx = SimContext {
+
+            solver: &tensor_solver as &dyn crate::tooling::core::solver::PoissonSolver,
+
+            advector: &_advector,
+
+            emitter: &_emitter,
+
+            progress: &_progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.0,
+
+            g: 1.0,
+
+        };
+
+        let phi_tensor = tensor_solver.solve(&density, &_ctx);
 
         // Compare after removing constant offset (potential is defined up
         // to a constant; the exp-sum Green's function has a different
@@ -537,7 +669,33 @@ mod tests {
         rho[center] = 100.0;
 
         let density = DensityField { data: rho, shape };
-        let _potential = solver.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+        let _emitter = EventEmitter::sink();
+
+        let _progress = StepProgress::new();
+
+        let _ctx = SimContext {
+
+            solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
+
+            advector: &_advector,
+
+            emitter: &_emitter,
+
+            progress: &_progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.0,
+
+            g: 1.0,
+
+        };
+
+        let _potential = solver.solve(&density, &_ctx);
 
         let mag = solver.last_near_field_magnitude();
         assert!(
@@ -560,7 +718,46 @@ mod tests {
             shape,
         };
 
-        let potential = solver.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+
+        let _emitter = EventEmitter::sink();
+
+
+        let _progress = StepProgress::new();
+
+
+        let _ctx = SimContext {
+
+
+            solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
+
+
+            advector: &_advector,
+
+
+            emitter: &_emitter,
+
+
+            progress: &_progress,
+
+
+            step: 0,
+
+
+            time: 0.0,
+
+
+            dt: 0.0,
+
+
+            g: 1.0,
+
+
+        };
+
+
+        let potential = solver.solve(&density, &_ctx);
         let mag = solver.last_near_field_magnitude();
 
         // Compute the L2 norm of the potential for comparison
@@ -584,7 +781,33 @@ mod tests {
         rho[4 * 64 + 4 * 8 + 4] = 100.0;
 
         let density = DensityField { data: rho, shape };
-        let _potential = solver.solve(&density, 1.0);
+        let _advector = SemiLagrangian::new();
+
+        let _emitter = EventEmitter::sink();
+
+        let _progress = StepProgress::new();
+
+        let _ctx = SimContext {
+
+            solver: &solver as &dyn crate::tooling::core::solver::PoissonSolver,
+
+            advector: &_advector,
+
+            emitter: &_emitter,
+
+            progress: &_progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.0,
+
+            g: 1.0,
+
+        };
+
+        let _potential = solver.solve(&density, &_ctx);
 
         let mag = solver.last_near_field_magnitude();
         assert!(

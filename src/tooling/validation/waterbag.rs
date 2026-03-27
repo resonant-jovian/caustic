@@ -91,7 +91,7 @@ fn waterbag_equilibrium() {
         .domain(domain)
         .poisson_solver(poisson)
         .advector(SemiLagrangian::new())
-        .integrator(StrangSplitting::new(g))
+        .integrator(StrangSplitting::new())
         .initial_conditions(snap)
         .time_final(t_final)
         .gravitational_constant(g)

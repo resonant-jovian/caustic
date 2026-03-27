@@ -115,7 +115,7 @@ fn ht_plummer_one_step() {
         .representation_boxed(Box::new(ht))
         .poisson_solver(poisson)
         .advector(SemiLagrangian::new())
-        .integrator(StrangSplitting::new(1.0))
+        .integrator(StrangSplitting::new())
         .time_final(10.0)
         .gravitational_constant(1.0)
         .cfl_factor(0.3)

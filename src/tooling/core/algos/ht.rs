@@ -112,7 +112,6 @@ impl Clone for HtTensor {
             tolerance: self.tolerance,
             max_rank: self.max_rank,
             interpolation_mode: self.interpolation_mode,
-            progress: self.progress.clone(),
             positivity_limiter: self.positivity_limiter,
             velocity_filter: self.velocity_filter,
             positivity_violations: AtomicU64::new(0),
@@ -208,7 +207,6 @@ impl HtTensor {
             tolerance: 1e-6,
             max_rank,
             interpolation_mode: InterpolationMode::SparsePolynomial,
-            progress: None,
             positivity_limiter: false,
             velocity_filter: None,
             positivity_violations: AtomicU64::new(0),
@@ -327,7 +325,6 @@ impl HtTensor {
             tolerance,
             max_rank: max_leaf_rank,
             interpolation_mode: InterpolationMode::SparsePolynomial,
-            progress: None,
             positivity_limiter: false,
             velocity_filter: None,
             positivity_violations: AtomicU64::new(0),
@@ -1104,7 +1101,6 @@ impl HtTensor {
             tolerance,
             max_rank,
             interpolation_mode: InterpolationMode::SparsePolynomial,
-            progress: None,
             positivity_limiter: false,
             velocity_filter: None,
             positivity_violations: AtomicU64::new(0),
@@ -1754,7 +1750,6 @@ impl HtTensor {
             tolerance: self.tolerance.min(other.tolerance),
             max_rank: actual_max_rank,
             interpolation_mode: self.interpolation_mode,
-            progress: self.progress.clone(),
             positivity_limiter: self.positivity_limiter,
             velocity_filter: self.velocity_filter,
             positivity_violations: AtomicU64::new(0),
@@ -1914,12 +1909,6 @@ impl HtTensor {
         let total: usize = self.shape.iter().product();
         let mut data = vec![0.0f64; total];
         let [n0, n1, n2, n3, n4, n5] = self.shape;
-        let total_u64 = total as u64;
-        let report_interval = (total_u64 / 100).max(1);
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, total_u64);
-        }
-        let mut count = 0u64;
         for i0 in 0..n0 {
             for i1 in 0..n1 {
                 for i2 in 0..n2 {
@@ -1928,12 +1917,6 @@ impl HtTensor {
                             for i5 in 0..n5 {
                                 let idx = flat_index(&self.shape, [i0, i1, i2, i3, i4, i5]);
                                 data[idx] = self.evaluate([i0, i1, i2, i3, i4, i5]);
-                                if let Some(ref p) = self.progress
-                                    && count.is_multiple_of(report_interval)
-                                {
-                                    p.set_intra_progress(count, total_u64);
-                                }
-                                count += 1;
                             }
                         }
                     }
@@ -2171,10 +2154,6 @@ fn build_exp_filter_kernel_ht(n: usize, cutoff_fraction: f64, order: usize) -> V
 // ─── PhaseSpaceRepr ─────────────────────────────────────────────────────────
 
 impl PhaseSpaceRepr for HtTensor {
-    fn set_progress(&mut self, p: std::sync::Arc<super::super::progress::StepProgress>) {
-        self.progress = Some(p);
-    }
-
     fn compute_density(&self) -> DensityField {
         let _span = tracing::info_span!("ht_compute_density").entered();
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.shape;
@@ -2223,14 +2202,6 @@ impl PhaseSpaceRepr for HtTensor {
         let (f2, _) = leaf_data(&self.nodes[2]);
         let (kt6, kl6, kr6, t6) = get_interior(&self.nodes[6]);
 
-        let counter = AtomicU64::new(0);
-        let total = nx1 as u64;
-        let report_interval = (total / 100).max(1);
-
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, total);
-        }
-
         let density: Vec<f64> = (0..nx1)
             .into_par_iter()
             .flat_map(|i0| {
@@ -2261,13 +2232,6 @@ impl PhaseSpaceRepr for HtTensor {
                     }
                 }
 
-                if let Some(ref p) = self.progress {
-                    let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c.is_multiple_of(report_interval) {
-                        p.set_intra_progress(c, total);
-                    }
-                }
-
                 row
             })
             .collect();
@@ -2289,7 +2253,8 @@ impl PhaseSpaceRepr for HtTensor {
         }
     }
 
-    fn advect_x(&mut self, _displacement: &DisplacementField, dt: f64) {
+    fn advect_x(&mut self, _displacement: &DisplacementField, ctx: &SimContext) {
+        let dt = ctx.dt;
         let _span = tracing::info_span!("ht_advect_x").entered();
         if dt.abs() < 1e-30 {
             return;
@@ -2309,7 +2274,6 @@ impl PhaseSpaceRepr for HtTensor {
         let max_rank = self.max_rank;
         let interp_mode = self.interpolation_mode;
 
-        let saved_progress = self.progress.clone();
         let ws_len = old_ht.eval_workspace_len();
 
         let new_ht = HtTensor::from_function_aca(
@@ -2378,7 +2342,6 @@ impl PhaseSpaceRepr for HtTensor {
         );
 
         *self = new_ht;
-        self.progress = saved_progress;
 
         if self.positivity_limiter {
             self.enforce_positivity();
@@ -2395,7 +2358,8 @@ impl PhaseSpaceRepr for HtTensor {
         }
     }
 
-    fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
+    fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext) {
+        let dt = ctx.dt;
         let _span = tracing::info_span!("ht_advect_v").entered();
         if dt.abs() < 1e-30 {
             return;
@@ -2421,7 +2385,6 @@ impl PhaseSpaceRepr for HtTensor {
         let gy: Arc<[f64]> = Arc::from(acceleration.gy.as_slice());
         let gz: Arc<[f64]> = Arc::from(acceleration.gz.as_slice());
 
-        let saved_progress = self.progress.clone();
         let ws_len = old_ht.eval_workspace_len();
 
         let new_ht = HtTensor::from_function_aca(
@@ -2507,7 +2470,6 @@ impl PhaseSpaceRepr for HtTensor {
         let saved_filter = self.velocity_filter;
         let saved_positivity = self.positivity_limiter;
         *self = new_ht;
-        self.progress = saved_progress;
         self.velocity_filter = saved_filter;
         self.positivity_limiter = saved_positivity;
 
@@ -2658,20 +2620,10 @@ impl PhaseSpaceRepr for HtTensor {
         }
         let vol = self.domain.cell_volume_6d();
         let data = self.to_full();
-        let total = data.len() as u64;
-        let report_interval = (total / 100).max(1);
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, total);
-        }
         let mut sum = 0.0f64;
-        for (idx, &f) in data.iter().enumerate() {
+        for &f in data.iter() {
             if f > 0.0 {
                 sum += -f * f.ln();
-            }
-            if let Some(ref p) = self.progress
-                && (idx as u64).is_multiple_of(report_interval)
-            {
-                p.set_intra_progress(idx as u64, total);
             }
         }
         sum * vol
@@ -2681,14 +2633,6 @@ impl PhaseSpaceRepr for HtTensor {
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.shape;
         let dv = self.domain.dv();
         let dv23 = dv[1] * dv[2];
-
-        let counter = AtomicU64::new(0);
-        let total = (nx1 * nx2 * nx3) as u64;
-        let report_interval = (total / 100).max(1);
-
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, total);
-        }
 
         let out: Vec<u32> = (0..nx1 * nx2 * nx3)
             .into_par_iter()
@@ -2712,13 +2656,6 @@ impl PhaseSpaceRepr for HtTensor {
                 for i in 1..nv1.saturating_sub(1) {
                     if marginal[i] > marginal[i - 1] && marginal[i] > marginal[i + 1] {
                         peaks += 1;
-                    }
-                }
-
-                if let Some(ref p) = self.progress {
-                    let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c.is_multiple_of(report_interval) {
-                        p.set_intra_progress(c, total);
                     }
                 }
 
@@ -3368,7 +3305,12 @@ fn compute_transfer_tensor(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
+    use crate::tooling::core::poisson::fft::FftPoisson;
+    use crate::tooling::core::progress::StepProgress;
 
     fn test_domain(n: i128) -> Domain {
         Domain::builder()
@@ -3868,6 +3810,11 @@ mod tests {
         // will bring this down. For now, verify the algorithm runs at all grid sizes
         // and produces correct results.
         use std::sync::atomic::{AtomicUsize, Ordering};
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
+    use crate::tooling::core::progress::StepProgress;
+    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::poisson::fft::FftPoisson;
 
         let counts: Vec<(usize, f64)> = [4, 6, 8]
             .iter()
@@ -4028,7 +3975,39 @@ mod tests {
             dz: vec![0.0; n * n * n],
             shape: [n, n, n],
         };
-        ht.advect_x(&dummy_disp, dt);
+        let __advector = SemiLagrangian::new();
+
+        let __emitter = EventEmitter::sink();
+
+        let __progress = StepProgress::new();
+
+        // Dummy solver for advect context
+
+        let __domain_tmp = ht.domain.clone();
+
+        let __solver = FftPoisson::new(&__domain_tmp);
+
+        let __ctx = SimContext {
+
+            solver: &__solver,
+
+            advector: &__advector,
+
+            emitter: &__emitter,
+
+            progress: &__progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: dt,
+
+            g: 0.0,
+
+        };
+
+        ht.advect_x(&dummy_disp, &__ctx);
 
         // Compare against analytic: f(x - v*dt, v)
         let dx = domain.dx();
@@ -4109,7 +4088,55 @@ mod tests {
             shape: [n, n, n],
         };
 
-        ht.advect_v(&accel, dt);
+        let __advector = SemiLagrangian::new();
+
+
+        let __emitter = EventEmitter::sink();
+
+
+        let __progress = StepProgress::new();
+
+
+        // Dummy solver for advect context
+
+
+        let __domain_tmp = ht.domain.clone();
+
+
+        let __solver = FftPoisson::new(&__domain_tmp);
+
+
+        let __ctx = SimContext {
+
+
+            solver: &__solver,
+
+
+            advector: &__advector,
+
+
+            emitter: &__emitter,
+
+
+            progress: &__progress,
+
+
+            step: 0,
+
+
+            time: 0.0,
+
+
+            dt: dt,
+
+
+            g: 0.0,
+
+
+        };
+
+
+        ht.advect_v(&accel, &__ctx);
 
         // Compare: analytic is f_ic(x, v - a*dt)
         let dx = domain.dx();
@@ -4186,7 +4213,39 @@ mod tests {
             dz: vec![0.0; n * n * n],
             shape: [n, n, n],
         };
-        ht.advect_x(&dummy_disp, dt);
+        let __advector = SemiLagrangian::new();
+
+        let __emitter = EventEmitter::sink();
+
+        let __progress = StepProgress::new();
+
+        // Dummy solver for advect context
+
+        let __domain_tmp = ht.domain.clone();
+
+        let __solver = FftPoisson::new(&__domain_tmp);
+
+        let __ctx = SimContext {
+
+            solver: &__solver,
+
+            advector: &__advector,
+
+            emitter: &__emitter,
+
+            progress: &__progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: dt,
+
+            g: 0.0,
+
+        };
+
+        ht.advect_x(&dummy_disp, &__ctx);
         let mass_after = ht.total_mass();
 
         let rel_change = ((mass_after - mass_before) / mass_before).abs();
@@ -4223,7 +4282,39 @@ mod tests {
             dz: vec![0.0; n * n * n],
             shape: [n, n, n],
         };
-        ht.advect_x(&dummy_disp, dt);
+        let __advector = SemiLagrangian::new();
+
+        let __emitter = EventEmitter::sink();
+
+        let __progress = StepProgress::new();
+
+        // Dummy solver for advect context
+
+        let __domain_tmp = ht.domain.clone();
+
+        let __solver = FftPoisson::new(&__domain_tmp);
+
+        let __ctx = SimContext {
+
+            solver: &__solver,
+
+            advector: &__advector,
+
+            emitter: &__emitter,
+
+            progress: &__progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: dt,
+
+            g: 0.0,
+
+        };
+
+        ht.advect_x(&dummy_disp, &__ctx);
         let rank_after = ht.total_rank();
 
         println!("slar_separable_rank_ht: rank_before={rank_before}, rank_after={rank_after}");
@@ -4270,9 +4361,105 @@ mod tests {
         };
 
         // Strang: drift(dt/2) → kick(dt) → drift(dt/2)
-        ht.advect_x(&dummy_disp, dt / 2.0);
-        ht.advect_v(&accel, dt);
-        ht.advect_x(&dummy_disp, dt / 2.0);
+        let __advector = SemiLagrangian::new();
+
+        let __emitter = EventEmitter::sink();
+
+        let __progress = StepProgress::new();
+
+        // Dummy solver for advect context
+
+        let __domain_tmp = ht.domain.clone();
+
+        let __solver = FftPoisson::new(&__domain_tmp);
+
+        let __ctx = SimContext {
+
+            solver: &__solver,
+
+            advector: &__advector,
+
+            emitter: &__emitter,
+
+            progress: &__progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: dt / 2.0,
+
+            g: 0.0,
+
+        };
+
+        ht.advect_x(&dummy_disp, &__ctx);
+        let __advector = SemiLagrangian::new();
+
+        let __emitter = EventEmitter::sink();
+
+        let __progress = StepProgress::new();
+
+        // Dummy solver for advect context
+
+        let __domain_tmp = ht.domain.clone();
+
+        let __solver = FftPoisson::new(&__domain_tmp);
+
+        let __ctx = SimContext {
+
+            solver: &__solver,
+
+            advector: &__advector,
+
+            emitter: &__emitter,
+
+            progress: &__progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: dt,
+
+            g: 0.0,
+
+        };
+
+        ht.advect_v(&accel, &__ctx);
+        let __advector = SemiLagrangian::new();
+
+        let __emitter = EventEmitter::sink();
+
+        let __progress = StepProgress::new();
+
+        // Dummy solver for advect context
+
+        let __domain_tmp = ht.domain.clone();
+
+        let __solver = FftPoisson::new(&__domain_tmp);
+
+        let __ctx = SimContext {
+
+            solver: &__solver,
+
+            advector: &__advector,
+
+            emitter: &__emitter,
+
+            progress: &__progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: dt / 2.0,
+
+            g: 0.0,
+
+        };
+
+        ht.advect_x(&dummy_disp, &__ctx);
 
         let rho_ht = ht.compute_density();
 

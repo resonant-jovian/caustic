@@ -10,13 +10,12 @@
 use rayon::prelude::*;
 
 use super::super::{
+    context::SimContext,
     init::domain::{Domain, SpatialBoundType},
     phasespace::PhaseSpaceRepr,
     types::*,
 };
 use std::any::Any;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Flow-map Lagrangian representation of the 6D distribution function.
 ///
@@ -53,8 +52,6 @@ pub struct FlowMapRepr {
     cached_lx: [f64; 3],
     cached_lv: [f64; 3],
     cached_is_periodic: bool,
-    /// Optional progress reporter
-    progress: Option<Arc<super::super::progress::StepProgress>>,
 }
 
 impl FlowMapRepr {
@@ -130,7 +127,6 @@ impl FlowMapRepr {
             cached_lx: lx,
             cached_lv: lv,
             cached_is_periodic: is_periodic,
-            progress: None,
         }
     }
 
@@ -435,11 +431,6 @@ impl FlowMapRepr {
 }
 
 impl PhaseSpaceRepr for FlowMapRepr {
-    /// Register a progress reporter for intra-step progress updates.
-    fn set_progress(&mut self, p: Arc<super::super::progress::StepProgress>) {
-        self.progress = Some(p);
-    }
-
     /// CIC deposition of tracer masses onto the spatial grid.
     ///
     /// For each Lagrangian tracer, finds the 8 nearest spatial cells and distributes
@@ -453,11 +444,6 @@ impl PhaseSpaceRepr for FlowMapRepr {
         let cell_vol = self.domain.cell_volume_3d();
         let is_periodic = self.cached_is_periodic;
         let n_tracers = self.num_tracers();
-
-        let n_tracers_u64 = n_tracers as u64;
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, n_tracers_u64);
-        }
 
         // Build a slice of (position_slice, mass) pairs for parallel iteration
         let density_data: Vec<f64> = (0..n_tracers)
@@ -538,18 +524,10 @@ impl PhaseSpaceRepr for FlowMapRepr {
     /// Drift sub-step: `X[i] += V[i] * dt` for each tracer. Exact -- no interpolation.
     ///
     /// For periodic domains, positions are wrapped into [-L, L].
-    fn advect_x(&mut self, _displacement: &DisplacementField, dt: f64) {
+    fn advect_x(&mut self, _displacement: &DisplacementField, ctx: &SimContext) {
+        let dt = ctx.dt;
         let is_periodic = self.cached_is_periodic;
         let lx = self.cached_lx;
-        let n_tracers = self.num_tracers();
-        let progress = self.progress.clone();
-        let n_tracers_u64 = n_tracers as u64;
-        let counter = AtomicU64::new(0);
-        let report_interval = (n_tracers_u64 / 100).max(1);
-
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, n_tracers_u64);
-        }
 
         // Process positions and velocities as chunks of 3 (x,y,z)
         let positions = &mut self.positions;
@@ -568,12 +546,6 @@ impl PhaseSpaceRepr for FlowMapRepr {
                         pos_chunk[k] = ((pos_chunk[k] + lx[k]).rem_euclid(two_l)) - lx[k];
                     }
                 }
-                if let Some(ref prog) = progress {
-                    let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c.is_multiple_of(report_interval) {
-                        prog.set_intra_progress(c, n_tracers_u64);
-                    }
-                }
             });
     }
 
@@ -581,19 +553,11 @@ impl PhaseSpaceRepr for FlowMapRepr {
     ///
     /// The acceleration at each tracer's current position is obtained by trilinear
     /// interpolation of the acceleration field.
-    fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
+    fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext) {
+        let dt = ctx.dt;
         let dx = self.cached_dx;
         let lx = self.cached_lx;
         let is_periodic = self.cached_is_periodic;
-        let n_tracers = self.num_tracers();
-        let progress = self.progress.clone();
-        let n_tracers_u64 = n_tracers as u64;
-        let counter = AtomicU64::new(0);
-        let report_interval = (n_tracers_u64 / 100).max(1);
-
-        if let Some(ref p) = self.progress {
-            p.set_intra_progress(0, n_tracers_u64);
-        }
 
         let positions = &self.positions;
         let velocities = &mut self.velocities;
@@ -615,12 +579,6 @@ impl PhaseSpaceRepr for FlowMapRepr {
                 );
                 for k in 0..3 {
                     vel_chunk[k] += a[k] * dt;
-                }
-                if let Some(ref prog) = progress {
-                    let c = counter.fetch_add(1, Ordering::Relaxed);
-                    if c.is_multiple_of(report_interval) {
-                        prog.set_intra_progress(c, n_tracers_u64);
-                    }
                 }
             });
     }
@@ -1018,6 +976,11 @@ impl PhaseSpaceRepr for FlowMapRepr {
 mod tests {
     use super::*;
     use crate::tooling::core::init::domain::{Domain, SpatialBoundType, VelocityBoundType};
+    use crate::tooling::core::context::SimContext;
+    use crate::tooling::core::events::EventEmitter;
+    use crate::tooling::core::progress::StepProgress;
+    use crate::tooling::core::algos::lagrangian::SemiLagrangian;
+    use crate::tooling::core::poisson::fft::FftPoisson;
 
     fn test_domain() -> Domain {
         Domain::builder()
@@ -1103,7 +1066,55 @@ mod tests {
             shape: [8, 8, 8],
         };
 
-        repr.advect_x(&dummy_disp, dt);
+        let __advector = SemiLagrangian::new();
+
+
+        let __emitter = EventEmitter::sink();
+
+
+        let __progress = StepProgress::new();
+
+
+        // Dummy solver for advect context
+
+
+        let __domain_tmp = repr.domain.clone();
+
+
+        let __solver = FftPoisson::new(&__domain_tmp);
+
+
+        let __ctx = SimContext {
+
+
+            solver: &__solver,
+
+
+            advector: &__advector,
+
+
+            emitter: &__emitter,
+
+
+            progress: &__progress,
+
+
+            step: 0,
+
+
+            time: 0.0,
+
+
+            dt: dt,
+
+
+            g: 0.0,
+
+
+        };
+
+
+        repr.advect_x(&dummy_disp, &__ctx);
 
         let lx = domain.lx();
         for i in 0..n {
@@ -1136,7 +1147,39 @@ mod tests {
             dz: vec![0.0; 8 * 8 * 8],
             shape: [8, 8, 8],
         };
-        repr.advect_x(&dummy_disp, 0.1);
+        let __advector = SemiLagrangian::new();
+
+        let __emitter = EventEmitter::sink();
+
+        let __progress = StepProgress::new();
+
+        // Dummy solver for advect context
+
+        let __domain_tmp = repr.domain.clone();
+
+        let __solver = FftPoisson::new(&__domain_tmp);
+
+        let __ctx = SimContext {
+
+            solver: &__solver,
+
+            advector: &__advector,
+
+            emitter: &__emitter,
+
+            progress: &__progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.1,
+
+            g: 0.0,
+
+        };
+
+        repr.advect_x(&dummy_disp, &__ctx);
 
         let mass_after = repr.total_mass();
         assert!(
@@ -1152,7 +1195,39 @@ mod tests {
             gz: vec![0.0; n_cells],
             shape: [8, 8, 8],
         };
-        repr.advect_v(&acc, 0.05);
+        let __advector = SemiLagrangian::new();
+
+        let __emitter = EventEmitter::sink();
+
+        let __progress = StepProgress::new();
+
+        // Dummy solver for advect context
+
+        let __domain_tmp = repr.domain.clone();
+
+        let __solver = FftPoisson::new(&__domain_tmp);
+
+        let __ctx = SimContext {
+
+            solver: &__solver,
+
+            advector: &__advector,
+
+            emitter: &__emitter,
+
+            progress: &__progress,
+
+            step: 0,
+
+            time: 0.0,
+
+            dt: 0.05,
+
+            g: 0.0,
+
+        };
+
+        repr.advect_v(&acc, &__ctx);
 
         let mass_after_kick = repr.total_mass();
         assert!(

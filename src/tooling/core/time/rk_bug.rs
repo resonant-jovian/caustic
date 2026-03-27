@@ -7,15 +7,12 @@
 //! Reference: Ceruti, Einkemmer, Kusch & Lubich (arXiv 2502.07040, Feb 2025),
 //! "Runge-Kutta methods for dynamical low-rank approximation".
 
-use std::sync::Arc;
-
 use super::super::{
-    advecator::Advector,
     algos::ht::HtTensor,
+    context::SimContext,
     integrator::{StepProducts, StepTimings, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
-    progress::{StepPhase, StepProgress},
-    solver::PoissonSolver,
+    progress::StepPhase,
     types::*,
 };
 use super::helpers;
@@ -56,20 +53,15 @@ impl Default for RkBugConfig {
 pub struct RkBugIntegrator {
     /// BUG truncation, rank, and conservation settings.
     pub config: RkBugConfig,
-    /// Gravitational constant G.
-    pub g: f64,
     last_timings: StepTimings,
-    progress: Option<Arc<StepProgress>>,
 }
 
 impl RkBugIntegrator {
-    /// Create a new RK-BUG integrator with the given gravitational constant and config.
-    pub fn new(g: f64, config: RkBugConfig) -> Self {
+    /// Create a new RK-BUG integrator with the given config.
+    pub fn new(config: RkBugConfig) -> Self {
         Self {
             config,
-            g,
             last_timings: StepTimings::default(),
-            progress: None,
         }
     }
 
@@ -88,8 +80,7 @@ impl RkBugIntegrator {
     /// The input HT is modified in-place.
     fn bug_strang_step(
         ht: &mut HtTensor,
-        solver: &dyn PoissonSolver,
-        g: f64,
+        ctx: &SimContext,
         dt: f64,
         config: &BugConfig,
         timings: &mut StepTimings,
@@ -97,7 +88,7 @@ impl RkBugIntegrator {
         helpers::time_ms!(timings, drift_ms, bug_drift_substep(ht, dt / 2.0, config));
 
         let (_, _, accel) =
-            helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(ht, solver, g));
+            helpers::time_ms!(timings, poisson_ms, helpers::solve_poisson(ht, ctx));
 
         helpers::time_ms!(timings, kick_ms, bug_kick_substep(ht, &accel, dt, config));
 
@@ -114,7 +105,7 @@ impl RkBugIntegrator {
     fn ssp_rk3_step(
         &self,
         repr: &mut dyn PhaseSpaceRepr,
-        solver: &dyn PoissonSolver,
+        ctx: &SimContext,
         dt: f64,
         timings: &mut StepTimings,
     ) {
@@ -136,27 +127,27 @@ impl RkBugIntegrator {
         let y0 = ht.clone();
 
         // Stage 1: Y^(1) = BUG(Y^(0), dt)
-        helpers::report_phase!(self.progress, StepPhase::BugKStep, 0, 4);
-        Self::bug_strang_step(ht, solver, self.g, dt, &config, timings);
+        helpers::report_phase!(ctx, StepPhase::BugKStep, 0, 4);
+        Self::bug_strang_step(ht, ctx, dt, &config, timings);
         // ht is now Y^(1)
 
         // Stage 2: Z^(2) = BUG(Y^(1), dt)
-        helpers::report_phase!(self.progress, StepPhase::BugKStep, 1, 4);
+        helpers::report_phase!(ctx, StepPhase::BugKStep, 1, 4);
         let mut z2 = ht.clone();
-        Self::bug_strang_step(&mut z2, solver, self.g, dt, &config, timings);
+        Self::bug_strang_step(&mut z2, ctx, dt, &config, timings);
         // Y^(2) = 3/4 · Y^(0) + 1/4 · Z^(2)
         let y2 = y0.scaled_add(3.0 / 4.0, &z2, 1.0 / 4.0, tol);
         *ht = y2;
 
         // Stage 3: Z^(3) = BUG(Y^(2), dt)
-        helpers::report_phase!(self.progress, StepPhase::BugLStep, 2, 4);
+        helpers::report_phase!(ctx, StepPhase::BugLStep, 2, 4);
         let mut z3 = ht.clone();
-        Self::bug_strang_step(&mut z3, solver, self.g, dt, &config, timings);
+        Self::bug_strang_step(&mut z3, ctx, dt, &config, timings);
         // Y^(n+1) = 1/3 · Y^(0) + 2/3 · Z^(3)
         let result = y0.scaled_add(1.0 / 3.0, &z3, 2.0 / 3.0, tol);
         *ht = result;
 
-        helpers::report_phase!(self.progress, StepPhase::BugSStep, 3, 4);
+        helpers::report_phase!(ctx, StepPhase::BugSStep, 3, 4);
 
         if let Some(ref dens) = density_before {
             conservative_correction(ht, dens);
@@ -167,22 +158,21 @@ impl RkBugIntegrator {
     fn strang_fallback(
         &self,
         repr: &mut dyn PhaseSpaceRepr,
-        solver: &dyn PoissonSolver,
-        advector: &dyn Advector,
+        ctx: &SimContext,
         dt: f64,
         timings: &mut StepTimings,
     ) {
-        helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / 2.0));
+        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
 
         let (_, _, accel) = helpers::time_ms!(
             timings,
             poisson_ms,
-            helpers::solve_poisson(repr, solver, self.g)
+            helpers::solve_poisson(repr, ctx)
         );
 
-        helpers::time_ms!(timings, kick_ms, advector.kick(repr, &accel, dt));
+        helpers::time_ms!(timings, kick_ms, ctx.advector.kick(repr, &accel, &ctx.with_dt(dt)));
 
-        helpers::time_ms!(timings, drift_ms, advector.drift(repr, dt / 2.0));
+        helpers::time_ms!(timings, drift_ms, ctx.advector.drift(repr, &ctx.with_dt(dt / 2.0)));
     }
 }
 
@@ -190,32 +180,29 @@ impl TimeIntegrator for RkBugIntegrator {
     fn advance(
         &mut self,
         repr: &mut dyn PhaseSpaceRepr,
-        solver: &dyn PoissonSolver,
-        advector: &dyn Advector,
-        dt: f64,
+        ctx: &SimContext,
     ) -> Result<StepProducts, CausticError> {
         let _span = tracing::info_span!("rk_bug_advance").entered();
         let mut timings = StepTimings::default();
+        let dt = ctx.dt;
 
-        if let Some(ref p) = self.progress {
-            p.start_step();
-        }
+        ctx.progress.start_step();
 
         let is_ht = repr.as_any().downcast_ref::<HtTensor>().is_some();
 
         if is_ht {
-            self.ssp_rk3_step(repr, solver, dt, &mut timings);
+            self.ssp_rk3_step(repr, ctx, dt, &mut timings);
         } else {
-            self.strang_fallback(repr, solver, advector, dt, &mut timings);
+            self.strang_fallback(repr, ctx, dt, &mut timings);
         }
 
-        helpers::report_phase!(self.progress, StepPhase::StepComplete, 4, 4);
+        helpers::report_phase!(ctx, StepPhase::StepComplete, 4, 4);
 
         // Compute end-of-step products for caller reuse
         let (density, potential, acceleration) = helpers::time_ms!(
             timings,
             density_ms,
-            helpers::solve_poisson(repr, solver, self.g)
+            helpers::solve_poisson(repr, ctx)
         );
 
         self.last_timings = timings;
@@ -228,15 +215,11 @@ impl TimeIntegrator for RkBugIntegrator {
     }
 
     fn max_dt(&self, repr: &dyn PhaseSpaceRepr, cfl_factor: f64) -> f64 {
-        helpers::dynamical_timestep(repr, self.g, cfl_factor)
+        helpers::dynamical_timestep(repr, 1.0, cfl_factor)
     }
 
     fn last_step_timings(&self) -> Option<&StepTimings> {
         Some(&self.last_timings)
-    }
-
-    fn set_progress(&mut self, progress: Arc<StepProgress>) {
-        self.progress = Some(progress);
     }
 }
 

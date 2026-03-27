@@ -38,7 +38,7 @@ pub fn build_standard_sim(domain: Domain, snap: PhaseSpaceSnapshot, t_final: f64
         .domain(domain)
         .poisson_solver(poisson)
         .advector(SemiLagrangian::new())
-        .integrator(StrangSplitting::new(1.0))
+        .integrator(StrangSplitting::new())
         .initial_conditions(snap)
         .time_final(t_final)
         .build()

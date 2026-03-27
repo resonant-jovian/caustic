@@ -9,7 +9,9 @@ use crate::tooling::core::{
     advecator::Advector,
     conditions::{ExitReason, TimeLimitCondition},
     conservation::lomac::LoMaC,
+    context::SimContext,
     diagnostics::{Diagnostics, GlobalDiagnostics},
+    events::EventEmitter,
     init::{domain::Domain, input::optional::OptionalParams},
     integrator::{StepTimings, TimeIntegrator},
     io::{IOManager, OutputFormat},
@@ -73,8 +75,10 @@ pub struct Simulation {
     pub cached_potential: Option<PotentialField>,
     /// Cached acceleration from the most recent step, for TUI reuse.
     pub cached_acceleration: Option<AccelerationField>,
-    /// Optional shared progress state for intra-step TUI visibility.
-    progress: Option<Arc<StepProgress>>,
+    /// Event emitter for structured observability.
+    pub emitter: EventEmitter,
+    /// Shared progress state for intra-step TUI visibility.
+    pub progress: Arc<StepProgress>,
 }
 
 impl Simulation {
@@ -143,9 +147,18 @@ impl Simulation {
 
         tracing::debug!(dt, step = self.step, time = self.time, "Simulation::step dt");
 
-        let products =
-            self.integrator
-                .advance(&mut *self.repr, &*self.poisson, &*self.advector, dt)?;
+        let ctx = SimContext {
+            solver: &*self.poisson,
+            advector: &*self.advector,
+            emitter: &self.emitter,
+            progress: &self.progress,
+            step: self.step,
+            time: self.time,
+            dt,
+            g: self.g,
+        };
+
+        let products = self.integrator.advance(&mut *self.repr, &ctx)?;
 
         // Capture integrator sub-step timings (drift, poisson, kick)
         let mut timings = self
@@ -155,20 +168,20 @@ impl Simulation {
             .unwrap_or_default();
 
         // Extend sub_step tracking to include post-advance phases
-        if let Some(ref p) = self.progress {
-            let snap = p.read();
+        {
+            let snap = self.progress.read();
             let post_count: u8 = 2 + u8::from(self.lomac.is_some());
-            p.set_sub_step(snap.sub_step, snap.sub_step_total + post_count);
+            self.progress
+                .set_sub_step(snap.sub_step, snap.sub_step_total + post_count);
         }
 
         // LoMaC conservation projection: advance macroscopic state in sync
         // with kinetic, then project f to restore exact moments.
-        if self.lomac.is_some()
-            && let Some(ref p) = self.progress
-        {
-            let sub = p.read().sub_step;
-            p.set_phase(StepPhase::LoMaC);
-            p.set_sub_step(sub + 1, p.read().sub_step_total);
+        if self.lomac.is_some() {
+            let sub = self.progress.read().sub_step;
+            self.progress.set_phase(StepPhase::LoMaC);
+            self.progress
+                .set_sub_step(sub + 1, self.progress.read().sub_step_total);
         }
         if let Some(ref mut lomac) = self.lomac {
             let t0 = std::time::Instant::now();
@@ -200,9 +213,6 @@ impl Simulation {
                             self.domain.clone(),
                         ),
                     );
-                    if let Some(ref p) = self.progress {
-                        self.repr.set_progress(p.clone());
-                    }
                 } else {
                     // Skip dense LoMaC projection for large HT tensors that cannot
                     // be materialized. Advance macroscopic state for diagnostics only.
@@ -229,9 +239,6 @@ impl Simulation {
                         self.domain.clone(),
                     ),
                 );
-                if let Some(ref p) = self.progress {
-                    self.repr.set_progress(p.clone());
-                }
             }
             timings.other_ms += t0.elapsed().as_secs_f64() * 1000.0;
         }
@@ -240,10 +247,11 @@ impl Simulation {
         self.step += 1;
 
         // Post-advance density computation (for diagnostics + caching)
-        if let Some(ref p) = self.progress {
-            let sub = p.read().sub_step;
-            p.set_phase(StepPhase::PostDensity);
-            p.set_sub_step(sub + 1, p.read().sub_step_total);
+        {
+            let sub = self.progress.read().sub_step;
+            self.progress.set_phase(StepPhase::PostDensity);
+            self.progress
+                .set_sub_step(sub + 1, self.progress.read().sub_step_total);
         }
         let t0 = std::time::Instant::now();
         // When LoMaC is active, the post-projection density equals the KFVS
@@ -255,7 +263,7 @@ impl Simulation {
                 data: lomac.kfvs.state.iter().map(|m| m.density).collect(),
                 shape: lomac.spatial_shape,
             };
-            let potential = self.poisson.solve(&density, self.g);
+            let potential = self.poisson.solve(&density, &ctx);
             (density, potential)
         } else {
             (products.density, products.potential)
@@ -278,10 +286,11 @@ impl Simulation {
             tracing::debug!(rho_max, step = self.step, "Simulation::step cached_rho_max");
         }
 
-        if let Some(ref p) = self.progress {
-            let sub = p.read().sub_step;
-            p.set_phase(StepPhase::Diagnostics);
-            p.set_sub_step(sub + 1, p.read().sub_step_total);
+        {
+            let sub = self.progress.read().sub_step;
+            self.progress.set_phase(StepPhase::Diagnostics);
+            self.progress
+                .set_sub_step(sub + 1, self.progress.read().sub_step_total);
         }
         let t0 = std::time::Instant::now();
         let diag = self.diagnostics.compute_with_density(
@@ -302,23 +311,14 @@ impl Simulation {
         self.cached_potential = Some(potential);
         self.cached_acceleration = Some(accel);
 
-        if let Some(ref p) = self.progress {
-            p.set_phase(StepPhase::StepComplete);
-        }
+        self.progress.set_phase(StepPhase::StepComplete);
 
-        Ok(self.exit_evaluator.check(&diag))
+        Ok(self.exit_evaluator.check(&diag, &ctx))
     }
 
     /// Attach shared progress state for intra-step TUI visibility.
-    /// Propagates to the integrator so sub-step phases are reported.
     pub fn set_progress(&mut self, p: Arc<StepProgress>) {
-        self.integrator.set_progress(p.clone());
-        self.repr.set_progress(p.clone());
-        self.poisson.set_progress(p.clone());
-        if let Some(ref mut lomac) = self.lomac {
-            lomac.set_progress(p.clone());
-        }
-        self.progress = Some(p);
+        self.progress = p;
     }
 
     /// Current simulation time.
@@ -361,7 +361,7 @@ impl Simulation {
 ///     .domain(domain.clone())
 ///     .poisson_solver(FftPoisson::new(&domain))
 ///     .advector(SemiLagrangian::new())
-///     .integrator(StrangSplitting::new(1.0))
+///     .integrator(StrangSplitting::new())
 ///     .initial_conditions(snap)
 ///     .time_final(10.0)
 ///     .gravitational_constant(1.0)
@@ -566,7 +566,21 @@ impl SimulationBuilder {
         let dx = domain.dx();
         let dx3 = dx[0] * dx[1] * dx[2];
         let density = repr.compute_density();
-        let potential = poisson.solve(&density, g);
+        // Build a temporary context for the initial Poisson solve
+        let emitter = EventEmitter::sink();
+        let progress = StepProgress::new();
+        let advector_ref = &*advector;
+        let init_ctx = SimContext {
+            solver: &*poisson,
+            advector: advector_ref,
+            emitter: &emitter,
+            progress: &progress,
+            step: 0,
+            time: 0.0,
+            dt: 0.0,
+            g,
+        };
+        let potential = poisson.solve(&density, &init_ctx);
 
         let mut diagnostics = Diagnostics {
             history: Vec::new(),
@@ -637,7 +651,8 @@ impl SimulationBuilder {
             cached_density: None,
             cached_potential: None,
             cached_acceleration: None,
-            progress: None,
+            emitter,
+            progress,
         })
     }
 }

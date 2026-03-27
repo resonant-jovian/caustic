@@ -13,11 +13,10 @@
 //! momentum, and energy is exact by construction since f_M encodes the exact moments.
 
 use super::super::{
-    init::domain::Domain, phasespace::PhaseSpaceRepr, progress::StepProgress, types::*,
+    context::SimContext, init::domain::Domain, phasespace::PhaseSpaceRepr, types::*,
 };
 use rayon::prelude::*;
 use std::any::Any;
-use std::sync::Arc;
 
 /// Macro-micro representation: f = f_M + g.
 ///
@@ -43,8 +42,6 @@ pub struct MacroMicroRepr {
     pub domain: Domain,
     /// Cached total mass.
     total_mass_cached: f64,
-    /// Progress reporter.
-    progress: Option<Arc<StepProgress>>,
 }
 
 impl MacroMicroRepr {
@@ -83,7 +80,6 @@ impl MacroMicroRepr {
             velocity_shape: [nv1, nv2, nv3],
             domain: domain.clone(),
             total_mass_cached: total_mass,
-            progress: None,
         }
     }
 
@@ -157,14 +153,14 @@ impl PhaseSpaceRepr for MacroMicroRepr {
 
     /// Delegates spatial advection to the inner representation.
     /// Macro fields are re-synced via `reproject_moments()` after a full step.
-    fn advect_x(&mut self, displacement: &DisplacementField, dt: f64) {
-        self.inner.advect_x(displacement, dt);
+    fn advect_x(&mut self, displacement: &DisplacementField, ctx: &SimContext) {
+        self.inner.advect_x(displacement, ctx);
     }
 
     /// Delegates velocity advection to the inner representation.
     /// Macro momentum update is applied via `reproject_moments()` after a full step.
-    fn advect_v(&mut self, acceleration: &AccelerationField, dt: f64) {
-        self.inner.advect_v(acceleration, dt);
+    fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext) {
+        self.inner.advect_v(acceleration, ctx);
     }
 
     /// Computes velocity moments by delegating to the inner kinetic representation.
@@ -278,11 +274,6 @@ impl PhaseSpaceRepr for MacroMicroRepr {
         macro_bytes + self.inner.memory_bytes()
     }
 
-    /// Attaches a shared progress reporter to both this wrapper and the inner representation.
-    fn set_progress(&mut self, progress: Arc<StepProgress>) {
-        self.inner.set_progress(progress.clone());
-        self.progress = Some(progress);
-    }
 }
 
 #[cfg(test)]

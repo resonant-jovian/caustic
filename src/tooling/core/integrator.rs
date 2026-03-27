@@ -70,10 +70,10 @@ impl StepTimings {
 /// use caustic::{StrangSplitting, YoshidaSplitting, TimeIntegrator};
 ///
 /// // 2nd-order symplectic (drift-kick-drift)
-/// let strang = StrangSplitting::new(1.0); // G = 1.0
+/// let strang = StrangSplitting::new();
 ///
 /// // 4th-order symplectic (7 sub-steps)
-/// let yoshida = YoshidaSplitting::new(1.0);
+/// let yoshida = YoshidaSplitting::new();
 /// ```
 pub trait TimeIntegrator {
     /// Advance the simulation by one timestep Δt.
