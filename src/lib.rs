@@ -147,9 +147,10 @@ pub use tooling::core::progress::{ProgressSnapshot, StepPhase, StepProgress};
 // SimEvent observability system
 pub use tooling::core::context::SimContext;
 pub use tooling::core::events::{
-    AdvectDirection, BuildPhase, ComponentKind, ConservedQuantity, EventEmitter, EventReceiver,
-    ExitConditionKind, FftDirection, IntegratorKind, ReprKind, SimEvent, SimWarning, SlarMethod,
-    SolverKind, TimestepConstraint,
+    AdvectDirection, AdvectionSchemeKind, BuildPhase, ComponentKind, ConservedQuantity,
+    EventEmitter, EventReceiver, ExitConditionKind, FftDirection, FlowMapRemapReason,
+    IntegratorKind, ReprKind, SheetAdvectKind, SimEvent, SimWarning, SlarMethod, SolverKind,
+    TimestepConstraint,
 };
 
 // Phase-space representations

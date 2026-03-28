@@ -14,6 +14,7 @@
 //! within a stencil of radius `r_s`.
 
 use super::super::context::SimContext;
+use super::super::events::{SimEvent, SolverKind};
 use super::super::solver::PoissonSolver;
 use super::super::types::{AccelerationField, DensityField, PotentialField};
 use super::utils::finite_difference_acceleration;
@@ -67,6 +68,7 @@ impl PoissonSolver for RangeSeparatedPoisson {
     /// Solve for the gravitational potential by combining long-range (inner solver)
     /// and short-range (direct summation within `r_s`) contributions.
     fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
+        let t0 = std::time::Instant::now();
         let g = ctx.g;
         let [nx, ny, nz] = self.shape;
 
@@ -132,10 +134,15 @@ impl PoissonSolver for RangeSeparatedPoisson {
             }
         });
 
-        PotentialField {
+        let result = PotentialField {
             data: phi,
             shape: self.shape,
-        }
+        };
+        ctx.emitter.emit(SimEvent::PoissonSolveComplete {
+            solver: SolverKind::RangeSeparated,
+            wall_us: t0.elapsed().as_micros() as u64,
+        });
+        result
     }
 
     /// Compute the gravitational acceleration via second-order finite differences on the potential.

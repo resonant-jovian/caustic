@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 
 use super::super::{
     context::SimContext,
+    events::{SimEvent, SimWarning},
     integrator::{StepProducts, StepTimings, TimeIntegrator},
     phasespace::PhaseSpaceRepr,
     progress::StepPhase,
@@ -275,20 +276,22 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
             // Singular value spectrum
             diag.singular_value_spectrum = extract_singular_values(&*repr);
 
-            // Emit tracing warnings for rank explosion
+            // Emit warnings for rank explosion
             if let Some(gr) = growth_rate.filter(|&r| r > 0.5) {
-                tracing::warn!(
-                    "Rank explosion warning: growth rate {:.2} (doubling every {:.1} steps)",
-                    gr,
-                    0.693 / gr.max(0.01)
-                );
+                ctx.emitter.emit(SimEvent::Warning(SimWarning::RankExplosion {
+                    growth_rate: gr,
+                    doubling_steps: 0.693 / gr.max(0.01),
+                }));
             }
 
             if diag.rank_budget_fraction > 0.9 {
-                tracing::warn!(
-                    "Rank budget nearly saturated: {:.0}% of max_rank used",
-                    diag.rank_budget_fraction * 100.0
-                );
+                let max_rank = extract_max_rank_budget(&*repr).unwrap_or(0) as u32;
+                ctx.emitter.emit(SimEvent::Warning(
+                    SimWarning::RankBudgetSaturated {
+                        fraction: diag.rank_budget_fraction,
+                        max_rank,
+                    },
+                ));
             }
         }
 

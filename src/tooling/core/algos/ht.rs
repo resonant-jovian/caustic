@@ -19,6 +19,7 @@
 
 use super::super::{
     context::SimContext,
+    events::{AdvectDirection, ReprKind, SimEvent, SimWarning, SlarMethod},
     init::domain::{Domain, SpatialBoundType, VelocityBoundType},
     phasespace::PhaseSpaceRepr,
     types::*,
@@ -1399,6 +1400,18 @@ impl HtTensor {
             })
             .sum()
     }
+
+    /// Return the rank of each node in the dimension tree.
+    pub fn node_ranks(&self) -> Vec<u32> {
+        self.nodes.iter().map(|n| n.rank() as u32).collect()
+    }
+
+    /// Ratio of full dense storage to compressed HT storage.
+    pub fn compression_ratio(&self) -> f64 {
+        let full_bytes: usize = self.shape.iter().product::<usize>() * 8;
+        let ht_bytes = self.memory_bytes().max(1);
+        full_bytes as f64 / ht_bytes as f64
+    }
 }
 
 // ─── Orthogonalization ──────────────────────────────────────────────────────
@@ -1761,7 +1774,10 @@ impl HtTensor {
     /// array, applies the Zhang-Shu limiter, counts negatives, and re-compresses into HT
     /// format. For larger tensors, fiber-based sampling is used to count violations and
     /// a warning is logged.
-    pub fn enforce_positivity(&mut self) {
+    /// Enforce positivity on the distribution function.
+    ///
+    /// Returns `(negative_count, total_sampled)` for event emission by the caller.
+    pub fn enforce_positivity(&mut self) -> (u64, u64) {
         let total_elements: usize = self.shape.iter().product();
         let bytes = total_elements * 8;
 
@@ -1783,6 +1799,7 @@ impl HtTensor {
                 self.nodes = rebuilt.nodes;
                 // shape, domain, tolerance unchanged
             }
+            (negatives, total_elements as u64)
         } else {
             // Fiber-based sampling path: evaluate along the main diagonal
             let n_samples = self.shape[0]
@@ -1801,13 +1818,8 @@ impl HtTensor {
             if neg_count > 0 {
                 self.positivity_violations
                     .fetch_add(neg_count, Ordering::Relaxed);
-                tracing::warn!(
-                    "HtTensor too large to materialize ({} bytes); fiber sampling found {} negative values out of {} samples",
-                    bytes,
-                    neg_count,
-                    n_samples,
-                );
             }
+            (neg_count, n_samples as u64)
         }
     }
 
@@ -2234,7 +2246,9 @@ impl PhaseSpaceRepr for HtTensor {
             return;
         }
 
+        let t0 = std::time::Instant::now();
         let pre_mass = self.total_mass();
+        let old_ranks = self.node_ranks();
         let old_ht = self.clone();
         let dx = self.domain.dx();
         let dv = self.domain.dv();
@@ -2248,6 +2262,7 @@ impl PhaseSpaceRepr for HtTensor {
 
         let ws_len = old_ht.eval_workspace_len();
 
+        let slar_t0 = std::time::Instant::now();
         let new_ht = HtTensor::from_function_aca(
             move |x_phys: &[f64; 3], v_phys: &[f64; 3]| -> f64 {
                 thread_local! {
@@ -2312,22 +2327,84 @@ impl PhaseSpaceRepr for HtTensor {
             None,
             None,
         );
+        let slar_us = slar_t0.elapsed().as_micros() as u64;
+
+        let slar_method = match interp_mode {
+            InterpolationMode::SparsePolynomial => SlarMethod::SparsePolynomial,
+            InterpolationMode::TricubicCatmullRom => SlarMethod::TricubicCatmullRom,
+        };
+        ctx.emitter.emit(SimEvent::HtSlarPath {
+            interpolation: slar_method,
+            nodes_visited: new_ht.nodes.len() as u32,
+            wall_us: slar_us,
+        });
 
         *self = new_ht;
 
         if self.positivity_limiter {
-            self.enforce_positivity();
+            let (negatives, total) = self.enforce_positivity();
+            if negatives > 0 {
+                ctx.emitter.emit(SimEvent::HtFiberSampling {
+                    negative_values: negatives,
+                    total_sampled: total,
+                });
+            }
         }
 
         let post_mass = self.total_mass();
+        let new_ranks = self.node_ranks();
+        let wall_us = t0.elapsed().as_micros() as u64;
+
+        ctx.emitter.emit(SimEvent::AdvectionComplete {
+            direction: AdvectDirection::Spatial,
+            mass_before: pre_mass,
+            mass_after: post_mass,
+            wall_us,
+        });
+        ctx.emitter.emit(SimEvent::HtRankSnapshot {
+            ranks: new_ranks.clone(),
+            total_rank: new_ranks.iter().sum(),
+            memory_bytes: self.memory_bytes(),
+            compression_ratio: self.compression_ratio(),
+        });
+        ctx.emitter.emit(SimEvent::HtPerAxisAdvection {
+            axis: 0,
+            direction: AdvectDirection::Spatial,
+            pre_rank: old_ranks.iter().sum(),
+            post_rank: new_ranks.iter().sum(),
+            wall_us,
+        });
+
+        // Truncation summary: emit if any node's rank decreased
+        let rank_changes: Vec<(u32, u32)> = old_ranks
+            .iter()
+            .zip(&new_ranks)
+            .map(|(&o, &n)| (o, n))
+            .collect();
+        if let Some((idx, &(old, new))) = rank_changes
+            .iter()
+            .enumerate()
+            .filter(|(_, (o, n))| n < o)
+            .max_by_key(|(_, (o, n))| o.saturating_sub(*n))
+        {
+            ctx.emitter.emit(SimEvent::HtTruncation {
+                node: idx as u32,
+                old_rank: old,
+                new_rank: new,
+                max_sv: 0.0,
+                min_kept_sv: 0.0,
+                discarded_count: old.saturating_sub(new),
+            });
+        }
+
+        // Mass warning
         let mass_ratio = post_mass / pre_mass.max(1e-30);
         if mass_ratio < 0.01 || !post_mass.is_finite() {
-            tracing::warn!(
+            ctx.emitter.emit(SimEvent::Warning(SimWarning::MassCollapsed {
+                phase: "advect_x".into(),
                 pre_mass,
                 post_mass,
-                mass_ratio,
-                "SLAR advect_x: mass collapsed after tensor reconstruction"
-            );
+            }));
         }
     }
 
@@ -2337,7 +2414,9 @@ impl PhaseSpaceRepr for HtTensor {
             return;
         }
 
+        let t0 = std::time::Instant::now();
         let pre_mass = self.total_mass();
+        let old_ranks = self.node_ranks();
         let old_ht = self.clone();
         let dx = self.domain.dx();
         let dv = self.domain.dv();
@@ -2357,6 +2436,7 @@ impl PhaseSpaceRepr for HtTensor {
 
         let ws_len = old_ht.eval_workspace_len();
 
+        let slar_t0 = std::time::Instant::now();
         let new_ht = HtTensor::from_function_aca(
             move |x_phys: &[f64; 3], v_phys: &[f64; 3]| -> f64 {
                 thread_local! {
@@ -2436,6 +2516,17 @@ impl PhaseSpaceRepr for HtTensor {
             None,
             None,
         );
+        let slar_us = slar_t0.elapsed().as_micros() as u64;
+
+        let slar_method = match interp_mode {
+            InterpolationMode::SparsePolynomial => SlarMethod::SparsePolynomial,
+            InterpolationMode::TricubicCatmullRom => SlarMethod::TricubicCatmullRom,
+        };
+        ctx.emitter.emit(SimEvent::HtSlarPath {
+            interpolation: slar_method,
+            nodes_visited: new_ht.nodes.len() as u32,
+            wall_us: slar_us,
+        });
 
         let saved_filter = self.velocity_filter;
         let saved_positivity = self.positivity_limiter;
@@ -2444,20 +2535,71 @@ impl PhaseSpaceRepr for HtTensor {
         self.positivity_limiter = saved_positivity;
 
         if self.positivity_limiter {
-            self.enforce_positivity();
+            let (negatives, total) = self.enforce_positivity();
+            if negatives > 0 {
+                ctx.emitter.emit(SimEvent::HtFiberSampling {
+                    negative_values: negatives,
+                    total_sampled: total,
+                });
+            }
         }
 
         self.apply_velocity_filter();
 
         let post_mass = self.total_mass();
+        let new_ranks = self.node_ranks();
+        let wall_us = t0.elapsed().as_micros() as u64;
+
+        ctx.emitter.emit(SimEvent::AdvectionComplete {
+            direction: AdvectDirection::Velocity,
+            mass_before: pre_mass,
+            mass_after: post_mass,
+            wall_us,
+        });
+        ctx.emitter.emit(SimEvent::HtRankSnapshot {
+            ranks: new_ranks.clone(),
+            total_rank: new_ranks.iter().sum(),
+            memory_bytes: self.memory_bytes(),
+            compression_ratio: self.compression_ratio(),
+        });
+        ctx.emitter.emit(SimEvent::HtPerAxisAdvection {
+            axis: 3,
+            direction: AdvectDirection::Velocity,
+            pre_rank: old_ranks.iter().sum(),
+            post_rank: new_ranks.iter().sum(),
+            wall_us,
+        });
+
+        // Truncation summary: emit if any node's rank decreased
+        let rank_changes: Vec<(u32, u32)> = old_ranks
+            .iter()
+            .zip(&new_ranks)
+            .map(|(&o, &n)| (o, n))
+            .collect();
+        if let Some((idx, &(old, new))) = rank_changes
+            .iter()
+            .enumerate()
+            .filter(|(_, (o, n))| n < o)
+            .max_by_key(|(_, (o, n))| o.saturating_sub(*n))
+        {
+            ctx.emitter.emit(SimEvent::HtTruncation {
+                node: idx as u32,
+                old_rank: old,
+                new_rank: new,
+                max_sv: 0.0,
+                min_kept_sv: 0.0,
+                discarded_count: old.saturating_sub(new),
+            });
+        }
+
+        // Mass warning
         let mass_ratio = post_mass / pre_mass.max(1e-30);
         if mass_ratio < 0.01 || !post_mass.is_finite() {
-            tracing::warn!(
+            ctx.emitter.emit(SimEvent::Warning(SimWarning::MassCollapsed {
+                phase: "advect_v".into(),
                 pre_mass,
                 post_mass,
-                mass_ratio,
-                "SLAR advect_v: mass collapsed after tensor reconstruction"
-            );
+            }));
         }
     }
 

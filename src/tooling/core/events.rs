@@ -243,6 +243,28 @@ pub enum SimWarning {
     PositivityLimitActive { cells_limited: u64 },
 }
 
+/// Direction of a sheet advection sub-step.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub enum SheetAdvectKind {
+    Spatial,
+    Velocity,
+}
+
+/// Reason a flow-map remap was triggered.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub enum FlowMapRemapReason {
+    JacobianDegeneracy,
+    ErrorThreshold,
+}
+
+/// Which advection scheme was used.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub enum AdvectionSchemeKind {
+    CatmullRom,
+    Wpfc,
+    Mp7,
+}
+
 // ─── SimEvent ────────────────────────────────────────────────────────────────
 
 /// Unified simulation event — the single source of truth for all observability.
@@ -475,4 +497,145 @@ pub enum SimEvent {
     OperationTiming { operation: String, wall_us: u64 },
     /// Scratch buffer allocated for temporary computation.
     ScratchBufferAllocated { purpose: String, bytes: usize },
+
+    // ═══ Sheet Tracker Observability ═════════════════════════════════════════
+    /// Caustic detected: stream count exceeded 1 in spatial cells.
+    SheetCausticDetected {
+        max_stream_count: u32,
+        cells_with_caustics: u64,
+    },
+    /// CIC density deposition completed with particle statistics.
+    SheetDensityDeposited {
+        num_particles: u64,
+        total_mass: f64,
+        cell_coverage: f64,
+    },
+    /// Sheet advection sub-step completed with particle motion statistics.
+    SheetAdvectionComplete {
+        kind: SheetAdvectKind,
+        max_change: f64,
+        particles_wrapped: u64,
+    },
+
+    // ═══ Spectral (Hermite) Observability ════════════════════════════════════
+    /// Hypercollision damping applied to high-frequency modes.
+    SpectralHypercollisionApplied {
+        damping_coefficient: f64,
+        order: usize,
+        max_mode_dampening: f64,
+    },
+    /// Positivity enforcer activated in spectral representation.
+    SpectralPositivityEnforced {
+        violations: u64,
+        cumulative_violations: u64,
+    },
+    /// Hermite coefficient statistics for monitoring basis quality.
+    SpectralBasisStats {
+        n_modes: usize,
+        max_coefficient: f64,
+        min_coefficient: f64,
+    },
+
+    // ═══ AMR (Adaptive Mesh Refinement) Observability ════════════════════════
+    /// Refinement step: cells subdivided or coarsened.
+    AmrRefinementStep {
+        cells_before: u64,
+        cells_after: u64,
+        cells_refined: u64,
+        max_level: u32,
+    },
+    /// AMR grid hierarchy statistics.
+    AmrGridHierarchy {
+        num_leaves: u64,
+        max_level: u32,
+        memory_bytes: usize,
+    },
+
+    // ═══ Flow Map Observability ══════════════════════════════════════════════
+    /// Jacobian determinant quality (< 1 signals undetected caustics).
+    FlowMapJacobianQuality {
+        min_det: f64,
+        max_det: f64,
+        mean_det: f64,
+    },
+    /// Flow map remap triggered due to quality degradation.
+    FlowMapRemapTriggered {
+        reason: FlowMapRemapReason,
+        old_error: f64,
+        new_error: f64,
+    },
+
+    // ═══ Macro-Micro Decomposition Observability ═════════════════════════════
+    /// Macro vs micro component magnitudes.
+    MacroMicroDecomposition {
+        macro_norm: f64,
+        micro_norm: f64,
+        ratio: f64,
+    },
+    /// Moment reprojection applied with changes.
+    MacroMicroReprojected {
+        density_change: f64,
+        velocity_change: f64,
+        neg_temp_count: u32,
+    },
+
+    // ═══ Hybrid (Sheet/Grid) Observability ═══════════════════════════════════
+    /// Cells transitioned between sheet and grid representations.
+    HybridInterfaceUpdate {
+        cells_entering_grid: u64,
+        cells_entering_sheet: u64,
+        stream_threshold: u32,
+    },
+    /// Region composition statistics.
+    HybridRegionStats {
+        sheet_cells: u64,
+        grid_cells: u64,
+        sheet_volume_fraction: f64,
+    },
+
+    // ═══ LoMaC Extended ═════════════════════════════════════════════════════
+    /// Macroscopic KFVS advance step deltas.
+    LoMaCMacroAdvance {
+        delta_density: f64,
+        delta_momentum: [f64; 3],
+        delta_energy: f64,
+    },
+    /// Conservative projection correction magnitude.
+    LoMaCCorrectionStrength { correction_norm: f64 },
+    /// Rank-adaptive tolerance controller update.
+    RankAdaptiveUpdate {
+        tolerance_before: f64,
+        tolerance_after: f64,
+        budget_saturated: bool,
+    },
+
+    // ═══ Build / Initialization ══════════════════════════════════════════════
+    /// IC generation started.
+    ICGenerationStarted {
+        ic_type: String,
+        grid_shape: [usize; 6],
+    },
+    /// IC generation completed with timing.
+    ICGenerationComplete {
+        ic_type: String,
+        wall_ms: f64,
+        total_mass: f64,
+    },
+    /// Poisson solver initialized with timing.
+    PoissonSolverInitialized { solver: SolverKind, wall_ms: f64 },
+
+    // ═══ Advection Scheme Details ════════════════════════════════════════════
+    /// Advection limiter activated (positivity/monotonicity preservation).
+    AdvectionLimiterActivation {
+        scheme: AdvectionSchemeKind,
+        cells_limited: u64,
+        total_cells: u64,
+    },
+    /// CFL constraint breakdown showing which constraint is tightest.
+    CflConstraintComputed {
+        spatial_cfl: f64,
+        velocity_cfl: f64,
+        dynamical: f64,
+        chosen: f64,
+    },
 }

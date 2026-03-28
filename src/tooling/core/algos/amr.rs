@@ -11,6 +11,7 @@
 
 use super::super::{
     context::SimContext,
+    events::{AdvectDirection, SimEvent},
     init::domain::{Domain, SpatialBoundType},
     phasespace::PhaseSpaceRepr,
     types::*,
@@ -481,6 +482,10 @@ impl PhaseSpaceRepr for AmrGrid {
     /// The velocity coordinates (center[3..6]) of each leaf encode its velocity,
     /// so the spatial drift is center[0..3] += center[3..6] * dt.
     fn advect_x(&mut self, _displacement: &DisplacementField, ctx: &SimContext) {
+        let t0 = std::time::Instant::now();
+        let mass_before = self.total_mass();
+        let leaves_before = self.leaf_count() as u64;
+
         let dt = ctx.dt;
         let periodic = matches!(self.domain.spatial_bc, SpatialBoundType::Periodic);
         let lx = self.lx();
@@ -500,12 +505,44 @@ impl PhaseSpaceRepr for AmrGrid {
                 }
             }
         });
+
+        let mass_after = self.total_mass();
+        let leaves_after = self.leaf_count() as u64;
+        let actual_max_level = self
+            .root
+            .collect_leaves()
+            .iter()
+            .map(|l| l.level as u32)
+            .max()
+            .unwrap_or(0);
+
+        ctx.emitter.emit(SimEvent::AdvectionComplete {
+            direction: AdvectDirection::Spatial,
+            mass_before,
+            mass_after,
+            wall_us: t0.elapsed().as_micros() as u64,
+        });
+        ctx.emitter.emit(SimEvent::AmrRefinementStep {
+            cells_before: leaves_before,
+            cells_after: leaves_after,
+            cells_refined: 0,
+            max_level: actual_max_level,
+        });
+        ctx.emitter.emit(SimEvent::AmrGridHierarchy {
+            num_leaves: leaves_after,
+            max_level: actual_max_level,
+            memory_bytes: 0,
+        });
     }
 
     /// Kick sub-step: shift leaf cell centers in velocity coordinates by a(x) * dt.
     /// The acceleration is interpolated from the AccelerationField at the leaf's
     /// spatial position.
     fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext) {
+        let t0 = std::time::Instant::now();
+        let mass_before = self.total_mass();
+        let leaves_before = self.leaf_count() as u64;
+
         let dt = ctx.dt;
         let lx = self.lx();
         let dx = self.domain.dx();
@@ -536,6 +573,34 @@ impl PhaseSpaceRepr for AmrGrid {
             leaf.center[3] += gx[flat] * dt;
             leaf.center[4] += gy[flat] * dt;
             leaf.center[5] += gz[flat] * dt;
+        });
+
+        let mass_after = self.total_mass();
+        let leaves_after = self.leaf_count() as u64;
+        let actual_max_level = self
+            .root
+            .collect_leaves()
+            .iter()
+            .map(|l| l.level as u32)
+            .max()
+            .unwrap_or(0);
+
+        ctx.emitter.emit(SimEvent::AdvectionComplete {
+            direction: AdvectDirection::Velocity,
+            mass_before,
+            mass_after,
+            wall_us: t0.elapsed().as_micros() as u64,
+        });
+        ctx.emitter.emit(SimEvent::AmrRefinementStep {
+            cells_before: leaves_before,
+            cells_after: leaves_after,
+            cells_refined: 0,
+            max_level: actual_max_level,
+        });
+        ctx.emitter.emit(SimEvent::AmrGridHierarchy {
+            num_leaves: leaves_after,
+            max_level: actual_max_level,
+            memory_bytes: 0,
         });
     }
 

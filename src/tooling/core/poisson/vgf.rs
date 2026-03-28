@@ -7,7 +7,7 @@
 //! Reference: Vico, Greengard & Ferrando, "Fast convolution with free-space
 //! Green's functions", J. Comput. Phys. 323 (2016), 191–203.
 
-use super::super::{context::SimContext, init::domain::Domain, solver::PoissonSolver, types::*};
+use super::super::{context::SimContext, events::{SimEvent, SolverKind}, init::domain::Domain, solver::PoissonSolver, types::*};
 use rayon::prelude::*;
 use rustfft::{FftPlanner, num_complex::Complex};
 use std::sync::{Arc, Mutex};
@@ -128,6 +128,7 @@ impl PoissonSolver for VgfPoisson {
     /// Zero-pads rho into (2N)^3, convolves with the VGF kernel in Fourier space,
     /// and extracts the N^3 potential sub-grid.
     fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
+        let t0 = std::time::Instant::now();
         let g = ctx.g;
         use std::f64::consts::PI;
         let [nx, ny, nz] = self.shape;
@@ -195,10 +196,15 @@ impl PoissonSolver for VgfPoisson {
             }
         });
 
-        PotentialField {
+        let result = PotentialField {
             data: phi,
             shape: density.shape,
-        }
+        };
+        ctx.emitter.emit(SimEvent::PoissonSolveComplete {
+            solver: SolverKind::Vgf,
+            wall_us: t0.elapsed().as_micros() as u64,
+        });
+        result
     }
 
     /// Compute the gravitational acceleration via second-order finite differences.

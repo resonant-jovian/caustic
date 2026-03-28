@@ -91,7 +91,7 @@ impl TimeIntegrator for StrangSplitting {
         );
 
         // Apply hypercollision damping if the representation is SpectralV
-        helpers::apply_hypercollision_if_spectral(repr, dt);
+        helpers::apply_hypercollision_if_spectral(repr, dt, ctx.emitter);
 
         helpers::report_phase!(ctx, StepPhase::DriftHalf2, 3, 5);
         ctx.emitter.emit(SimEvent::PhaseEntered {

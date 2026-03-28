@@ -12,6 +12,7 @@
 
 use super::super::{
     context::SimContext,
+    events::{AdvectDirection, SimEvent},
     init::domain::{Domain, SpatialBoundType, VelocityBoundType},
     phasespace::PhaseSpaceRepr,
     types::*,
@@ -736,6 +737,8 @@ impl PhaseSpaceRepr for TensorTrain {
     }
 
     fn advect_x(&mut self, _displacement: &DisplacementField, ctx: &SimContext) {
+        let t0 = std::time::Instant::now();
+        let mass_before = self.total_mass();
         let dt = ctx.dt;
         // Semi-Lagrangian approach: expand to full, apply shifts, rebuild TT.
         // For small grids this is feasible; for large grids a proper TT-cross
@@ -850,6 +853,7 @@ impl PhaseSpaceRepr for TensorTrain {
         }
 
         // Rebuild TT from the shifted full array
+        let old_ranks: Vec<u32> = self.ranks.iter().map(|&r| r as u32).collect();
         let snap = PhaseSpaceSnapshot {
             data,
             shape: self.shape,
@@ -859,9 +863,23 @@ impl PhaseSpaceRepr for TensorTrain {
             TensorTrain::from_snapshot_owned(snap, self.max_rank, self.tolerance, &self.domain);
         self.cores = new_tt.cores;
         self.ranks = new_tt.ranks;
+        let new_ranks: Vec<u32> = self.ranks.iter().map(|&r| r as u32).collect();
+        ctx.emitter.emit(SimEvent::TtRecompression {
+            old_ranks,
+            new_ranks,
+        });
+        let mass_after = self.total_mass();
+        ctx.emitter.emit(SimEvent::AdvectionComplete {
+            direction: AdvectDirection::Spatial,
+            mass_before,
+            mass_after,
+            wall_us: t0.elapsed().as_micros() as u64,
+        });
     }
 
     fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext) {
+        let t0 = std::time::Instant::now();
+        let mass_before = self.total_mass();
         let dt = ctx.dt;
         // Semi-Lagrangian approach: expand to full, apply velocity shifts, rebuild TT.
         let [n0, n1, n2, n3, n4, n5] = self.shape;
@@ -969,6 +987,7 @@ impl PhaseSpaceRepr for TensorTrain {
         }
 
         // Rebuild TT from shifted data
+        let old_ranks: Vec<u32> = self.ranks.iter().map(|&r| r as u32).collect();
         let snap = PhaseSpaceSnapshot {
             data,
             shape: self.shape,
@@ -978,6 +997,18 @@ impl PhaseSpaceRepr for TensorTrain {
             TensorTrain::from_snapshot_owned(snap, self.max_rank, self.tolerance, &self.domain);
         self.cores = new_tt.cores;
         self.ranks = new_tt.ranks;
+        let new_ranks: Vec<u32> = self.ranks.iter().map(|&r| r as u32).collect();
+        ctx.emitter.emit(SimEvent::TtRecompression {
+            old_ranks,
+            new_ranks,
+        });
+        let mass_after = self.total_mass();
+        ctx.emitter.emit(SimEvent::AdvectionComplete {
+            direction: AdvectDirection::Velocity,
+            mass_before,
+            mass_after,
+            wall_us: t0.elapsed().as_micros() as u64,
+        });
     }
 
     fn moment(&self, position: &[f64; 3], order: usize) -> Tensor {

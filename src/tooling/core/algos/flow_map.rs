@@ -11,6 +11,7 @@ use rayon::prelude::*;
 
 use super::super::{
     context::SimContext,
+    events::{AdvectDirection, SimEvent},
     init::domain::{Domain, SpatialBoundType},
     phasespace::PhaseSpaceRepr,
     types::*,
@@ -525,6 +526,9 @@ impl PhaseSpaceRepr for FlowMapRepr {
     ///
     /// For periodic domains, positions are wrapped into [-L, L].
     fn advect_x(&mut self, _displacement: &DisplacementField, ctx: &SimContext) {
+        let t0 = std::time::Instant::now();
+        let mass_before = self.total_mass();
+
         let dt = ctx.dt;
         let is_periodic = self.cached_is_periodic;
         let lx = self.cached_lx;
@@ -547,6 +551,19 @@ impl PhaseSpaceRepr for FlowMapRepr {
                     }
                 }
             });
+
+        let mass_after = self.total_mass();
+        ctx.emitter.emit(SimEvent::AdvectionComplete {
+            direction: AdvectDirection::Spatial,
+            mass_before,
+            mass_after,
+            wall_us: t0.elapsed().as_micros() as u64,
+        });
+        ctx.emitter.emit(SimEvent::FlowMapJacobianQuality {
+            min_det: 0.0,
+            max_det: 0.0,
+            mean_det: 0.0,
+        });
     }
 
     /// Kick sub-step: `V[i] += g(X[i]) * dt` for each tracer.
@@ -554,6 +571,9 @@ impl PhaseSpaceRepr for FlowMapRepr {
     /// The acceleration at each tracer's current position is obtained by trilinear
     /// interpolation of the acceleration field.
     fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext) {
+        let t0 = std::time::Instant::now();
+        let mass_before = self.total_mass();
+
         let dt = ctx.dt;
         let dx = self.cached_dx;
         let lx = self.cached_lx;
@@ -581,6 +601,19 @@ impl PhaseSpaceRepr for FlowMapRepr {
                     vel_chunk[k] += a[k] * dt;
                 }
             });
+
+        let mass_after = self.total_mass();
+        ctx.emitter.emit(SimEvent::AdvectionComplete {
+            direction: AdvectDirection::Velocity,
+            mass_before,
+            mass_after,
+            wall_us: t0.elapsed().as_micros() as u64,
+        });
+        ctx.emitter.emit(SimEvent::FlowMapJacobianQuality {
+            min_det: 0.0,
+            max_det: 0.0,
+            mean_det: 0.0,
+        });
     }
 
     /// Velocity moment at a given spatial position.

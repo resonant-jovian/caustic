@@ -13,7 +13,11 @@
 //! momentum, and energy is exact by construction since f_M encodes the exact moments.
 
 use super::super::{
-    context::SimContext, init::domain::Domain, phasespace::PhaseSpaceRepr, types::*,
+    context::SimContext,
+    events::{AdvectDirection, SimEvent},
+    init::domain::Domain,
+    phasespace::PhaseSpaceRepr,
+    types::*,
 };
 use rayon::prelude::*;
 use std::any::Any;
@@ -154,13 +158,85 @@ impl PhaseSpaceRepr for MacroMicroRepr {
     /// Delegates spatial advection to the inner representation.
     /// Macro fields are re-synced via `reproject_moments()` after a full step.
     fn advect_x(&mut self, displacement: &DisplacementField, ctx: &SimContext) {
+        let t0 = std::time::Instant::now();
+        let mass_before = self.total_mass();
+
         self.inner.advect_x(displacement, ctx);
+
+        let mass_after = self.total_mass();
+        let macro_norm = self.density.par_iter().map(|&r| r * r).sum::<f64>().sqrt();
+        let micro_norm = {
+            let inner_density = self.inner.compute_density();
+            inner_density
+                .data
+                .par_iter()
+                .zip(self.density.par_iter())
+                .map(|(&id, &md)| {
+                    let diff = id - md;
+                    diff * diff
+                })
+                .sum::<f64>()
+                .sqrt()
+        };
+        let ratio = if macro_norm > 0.0 {
+            micro_norm / macro_norm
+        } else {
+            0.0
+        };
+
+        ctx.emitter.emit(SimEvent::AdvectionComplete {
+            direction: AdvectDirection::Spatial,
+            mass_before,
+            mass_after,
+            wall_us: t0.elapsed().as_micros() as u64,
+        });
+        ctx.emitter.emit(SimEvent::MacroMicroDecomposition {
+            macro_norm,
+            micro_norm,
+            ratio,
+        });
     }
 
     /// Delegates velocity advection to the inner representation.
     /// Macro momentum update is applied via `reproject_moments()` after a full step.
     fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext) {
+        let t0 = std::time::Instant::now();
+        let mass_before = self.total_mass();
+
         self.inner.advect_v(acceleration, ctx);
+
+        let mass_after = self.total_mass();
+        let macro_norm = self.density.par_iter().map(|&r| r * r).sum::<f64>().sqrt();
+        let micro_norm = {
+            let inner_density = self.inner.compute_density();
+            inner_density
+                .data
+                .par_iter()
+                .zip(self.density.par_iter())
+                .map(|(&id, &md)| {
+                    let diff = id - md;
+                    diff * diff
+                })
+                .sum::<f64>()
+                .sqrt()
+        };
+        let ratio = if macro_norm > 0.0 {
+            micro_norm / macro_norm
+        } else {
+            0.0
+        };
+
+        ctx.emitter.emit(SimEvent::AdvectionComplete {
+            direction: AdvectDirection::Velocity,
+            mass_before,
+            mass_after,
+            wall_us: t0.elapsed().as_micros() as u64,
+        });
+        ctx.emitter.emit(SimEvent::MacroMicroDecomposition {
+            macro_norm,
+            micro_norm,
+            ratio,
+        });
     }
 
     /// Computes velocity moments by delegating to the inner kinetic representation.

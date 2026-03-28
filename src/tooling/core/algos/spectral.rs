@@ -9,6 +9,7 @@
 
 use super::super::{
     context::SimContext,
+    events::{AdvectDirection, SimEvent},
     init::domain::{Domain, SpatialBoundType, VelocityBoundType},
     phasespace::PhaseSpaceRepr,
     types::*,
@@ -636,6 +637,8 @@ impl PhaseSpaceRepr for SpectralV {
     /// for uniform advection; for non-uniform v fields, we use the displacement field
     /// values directly.
     fn advect_x(&mut self, _displacement: &DisplacementField, ctx: &SimContext) {
+        let t0 = std::time::Instant::now();
+        let mass_before = self.total_mass();
         let dt = ctx.dt;
         let [nx, ny, nz] = self.spatial_shape;
         let n_modes = self.n_modes;
@@ -801,7 +804,31 @@ impl PhaseSpaceRepr for SpectralV {
         // Apply positivity limiter if enabled
         if self.positivity_limiter {
             self.enforce_positivity();
+            let violations = self.positivity_violations.load(Ordering::Relaxed);
+            ctx.emitter.emit(SimEvent::SpectralPositivityEnforced {
+                violations,
+                cumulative_violations: violations,
+            });
         }
+
+        let (max_coeff, min_coeff) = self
+            .coefficients
+            .iter()
+            .fold((f64::NEG_INFINITY, f64::INFINITY), |(mx, mn), &c| {
+                (mx.max(c), mn.min(c))
+            });
+        ctx.emitter.emit(SimEvent::SpectralBasisStats {
+            n_modes: self.n_modes,
+            max_coefficient: max_coeff,
+            min_coefficient: min_coeff,
+        });
+        let mass_after = self.total_mass();
+        ctx.emitter.emit(SimEvent::AdvectionComplete {
+            direction: AdvectDirection::Spatial,
+            mass_before,
+            mass_after,
+            wall_us: t0.elapsed().as_micros() as u64,
+        });
     }
 
     /// Velocity kick: acceleration couples adjacent Hermite modes.
@@ -813,6 +840,8 @@ impl PhaseSpaceRepr for SpectralV {
     /// tridiagonal in mode space and exact for constant acceleration within a cell.
     /// We use forward Euler time integration of the mode coupling.
     fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext) {
+        let t0 = std::time::Instant::now();
+        let mass_before = self.total_mass();
         let dt = ctx.dt;
         let [nx, ny, nz] = self.spatial_shape;
         let n_modes = self.n_modes;
@@ -886,7 +915,31 @@ impl PhaseSpaceRepr for SpectralV {
         // Apply positivity limiter if enabled
         if self.positivity_limiter {
             self.enforce_positivity();
+            let violations = self.positivity_violations.load(Ordering::Relaxed);
+            ctx.emitter.emit(SimEvent::SpectralPositivityEnforced {
+                violations,
+                cumulative_violations: violations,
+            });
         }
+
+        let (max_coeff, min_coeff) = self
+            .coefficients
+            .iter()
+            .fold((f64::NEG_INFINITY, f64::INFINITY), |(mx, mn), &c| {
+                (mx.max(c), mn.min(c))
+            });
+        ctx.emitter.emit(SimEvent::SpectralBasisStats {
+            n_modes: self.n_modes,
+            max_coefficient: max_coeff,
+            min_coefficient: min_coeff,
+        });
+        let mass_after = self.total_mass();
+        ctx.emitter.emit(SimEvent::AdvectionComplete {
+            direction: AdvectDirection::Velocity,
+            mass_before,
+            mass_after,
+            wall_us: t0.elapsed().as_micros() as u64,
+        });
     }
 
     /// Compute velocity moment at a given spatial position.

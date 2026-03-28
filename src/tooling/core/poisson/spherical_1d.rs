@@ -8,7 +8,7 @@
 //! Designed for use with `SphericalRepr` where the density is purely
 //! radial, avoiding the cost of a full 3D solve.
 
-use super::super::{context::SimContext, solver::PoissonSolver, types::*};
+use super::super::{context::SimContext, events::{SimEvent, SolverKind}, solver::PoissonSolver, types::*};
 
 /// 1D Poisson solver for spherically symmetric density on a uniform radial grid.
 pub struct Spherical1DPoisson {
@@ -36,6 +36,7 @@ impl Spherical1DPoisson {
 impl PoissonSolver for Spherical1DPoisson {
     /// Solve for the radial potential via the Thomas algorithm on the tridiagonal system.
     fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
+        let t0 = std::time::Instant::now();
         let g = ctx.g;
         let nr = density.data.len();
         let four_pi_g = 4.0 * std::f64::consts::PI * g;
@@ -86,10 +87,15 @@ impl PoissonSolver for Spherical1DPoisson {
             };
         }
 
-        PotentialField {
+        let result = PotentialField {
             data: phi,
             shape: [nr, 1, 1],
-        }
+        };
+        ctx.emitter.emit(SimEvent::PoissonSolveComplete {
+            solver: SolverKind::Spherical1D,
+            wall_us: t0.elapsed().as_micros() as u64,
+        });
+        result
     }
 
     /// Compute radial gravitational acceleration via centered finite differences.

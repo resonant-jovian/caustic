@@ -11,7 +11,7 @@
 
 use rayon::prelude::*;
 
-use super::super::{context::SimContext, solver::PoissonSolver, types::*};
+use super::super::{context::SimContext, events::{SimEvent, SolverKind}, solver::PoissonSolver, types::*};
 use super::utils::finite_difference_acceleration;
 use std::f64::consts::PI;
 
@@ -433,6 +433,7 @@ impl PoissonSolver for SphericalHarmonicsPoisson {
     /// 2. Solve the radial Poisson equation for each mode.
     /// 3. Reconstruct the Cartesian potential by summing Phi_lm(r) Y_lm(theta,phi).
     fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
+        let t0 = std::time::Instant::now();
         let g = ctx.g;
         // Step 1: decompose density
         let rho_lm = decompose_density(
@@ -461,14 +462,19 @@ impl PoissonSolver for SphericalHarmonicsPoisson {
         }
 
         // Step 3: reconstruct potential on Cartesian grid
-        reconstruct_potential(
+        let result = reconstruct_potential(
             &phi_lm,
             self.l_max,
             &self.shape,
             &self.dx,
             self.n_radial,
             self.r_max,
-        )
+        );
+        ctx.emitter.emit(SimEvent::PoissonSolveComplete {
+            solver: SolverKind::SphericalHarmonics,
+            wall_us: t0.elapsed().as_micros() as u64,
+        });
+        result
     }
 
     /// Compute gravitational acceleration g = -∇Φ via second-order centered finite

@@ -14,6 +14,7 @@ use rayon::prelude::*;
 
 use super::super::{
     context::SimContext,
+    events::{AdvectDirection, SheetAdvectKind, SimEvent},
     init::{cosmological::ZeldovichIC, domain::Domain},
     phasespace::PhaseSpaceRepr,
     types::*,
@@ -404,6 +405,8 @@ impl PhaseSpaceRepr for SheetTracker {
     }
 
     fn advect_x(&mut self, _displacement: &DisplacementField, ctx: &SimContext) {
+        let t0 = std::time::Instant::now();
+        let mass_before = self.total_mass();
         let dt = ctx.dt;
         let is_periodic = self.cached_is_periodic;
         let lx = self.cached_lx;
@@ -417,9 +420,29 @@ impl PhaseSpaceRepr for SheetTracker {
                 }
             }
         });
+
+        let max_change = self
+            .particles
+            .iter()
+            .map(|p| p.v[0].abs().max(p.v[1].abs()).max(p.v[2].abs()) * dt)
+            .fold(0.0_f64, f64::max);
+        ctx.emitter.emit(SimEvent::SheetAdvectionComplete {
+            kind: SheetAdvectKind::Spatial,
+            max_change,
+            particles_wrapped: 0,
+        });
+        let mass_after = self.total_mass();
+        ctx.emitter.emit(SimEvent::AdvectionComplete {
+            direction: AdvectDirection::Spatial,
+            mass_before,
+            mass_after,
+            wall_us: t0.elapsed().as_micros() as u64,
+        });
     }
 
     fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext) {
+        let t0 = std::time::Instant::now();
+        let mass_before = self.total_mass();
         let dt = ctx.dt;
         let dx = self.cached_dx;
         let lx = self.cached_lx;
@@ -439,6 +462,19 @@ impl PhaseSpaceRepr for SheetTracker {
             for (v, &acc) in p.v.iter_mut().zip(a.iter()) {
                 *v += acc * dt;
             }
+        });
+
+        ctx.emitter.emit(SimEvent::SheetAdvectionComplete {
+            kind: SheetAdvectKind::Velocity,
+            max_change: 0.0,
+            particles_wrapped: 0,
+        });
+        let mass_after = self.total_mass();
+        ctx.emitter.emit(SimEvent::AdvectionComplete {
+            direction: AdvectDirection::Velocity,
+            mass_before,
+            mass_after,
+            wall_us: t0.elapsed().as_micros() as u64,
         });
     }
 

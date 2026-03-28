@@ -30,6 +30,7 @@
 
 use super::super::{
     context::SimContext,
+    events::{AdvectDirection, SimEvent},
     init::domain::{Domain, SpatialBoundType, VelocityBoundType},
     phasespace::PhaseSpaceRepr,
     types::*,
@@ -42,6 +43,7 @@ use rustfft::num_complex::Complex64;
 use rustfft::{Fft, FftPlanner};
 use std::any::Any;
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Velocity-space exponential filter configuration.
@@ -422,6 +424,8 @@ impl PhaseSpaceRepr for UniformGrid6D {
     /// shifts (Catmull-Rom, WPFC, or MP7) along each spatial axis in sequence,
     /// then transposes back. Parallel over velocity cells via rayon.
     fn advect_x(&mut self, _displacement: &DisplacementField, ctx: &SimContext) {
+        let t0 = std::time::Instant::now();
+        let mass_before = self.total_mass();
         let dt = ctx.dt;
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
         let dx = self.cached_dx;
@@ -442,6 +446,9 @@ impl PhaseSpaceRepr for UniformGrid6D {
         std::mem::swap(&mut self.data, &mut self.scratch);
         let src = std::mem::take(&mut self.scratch);
         let mut intermediates = std::mem::take(&mut self.data);
+
+        let violations_count = AtomicU64::new(0);
+        let max_neg_bits = AtomicU64::new(0);
 
         intermediates
             .par_chunks_mut(n_sp)
@@ -538,6 +545,35 @@ impl PhaseSpaceRepr for UniformGrid6D {
                 });
 
                 if positivity {
+                    let mut local_count = 0u64;
+                    let mut local_max_neg = 0.0f64;
+                    for &v in local.iter() {
+                        if v < 0.0 {
+                            local_count += 1;
+                            local_max_neg = local_max_neg.max(v.abs());
+                        }
+                    }
+                    if local_count > 0 {
+                        violations_count.fetch_add(local_count, Ordering::Relaxed);
+                        loop {
+                            let prev = max_neg_bits.load(Ordering::Relaxed);
+                            let prev_f = f64::from_bits(prev);
+                            if local_max_neg <= prev_f {
+                                break;
+                            }
+                            if max_neg_bits
+                                .compare_exchange_weak(
+                                    prev,
+                                    local_max_neg.to_bits(),
+                                    Ordering::Relaxed,
+                                    Ordering::Relaxed,
+                                )
+                                .is_ok()
+                            {
+                                break;
+                            }
+                        }
+                    }
                     zhang_shu_limiter(local, 0.0);
                 }
             });
@@ -555,6 +591,21 @@ impl PhaseSpaceRepr for UniformGrid6D {
             });
         self.data = new_data;
         self.scratch = intermediates;
+
+        let mass_after = self.total_mass();
+        ctx.emitter.emit(SimEvent::AdvectionComplete {
+            direction: AdvectDirection::Spatial,
+            mass_before,
+            mass_after,
+            wall_us: t0.elapsed().as_micros() as u64,
+        });
+        let vc = violations_count.load(Ordering::Relaxed);
+        if vc > 0 {
+            ctx.emitter.emit(SimEvent::PositivityViolations {
+                count: vc,
+                max_magnitude: f64::from_bits(max_neg_bits.load(Ordering::Relaxed)),
+            });
+        }
     }
 
     /// Dimension-split velocity advection: shift f along v1, v2, v3 by a*dt.
@@ -564,6 +615,8 @@ impl PhaseSpaceRepr for UniformGrid6D {
     /// over spatial cells. Applies velocity-space exponential filter afterwards
     /// if configured.
     fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext) {
+        let t0 = std::time::Instant::now();
+        let mass_before = self.total_mass();
         let dt = ctx.dt;
         let [nx1, nx2, nx3, nv1, nv2, nv3] = self.sizes();
         let dv = self.cached_dv;
@@ -580,6 +633,9 @@ impl PhaseSpaceRepr for UniformGrid6D {
         std::mem::swap(&mut self.data, &mut self.scratch);
         let src = std::mem::take(&mut self.scratch);
         let mut result = std::mem::take(&mut self.data);
+
+        let violations_count = AtomicU64::new(0);
+        let max_neg_bits = AtomicU64::new(0);
 
         result
             .par_chunks_mut(n_vel)
@@ -671,6 +727,35 @@ impl PhaseSpaceRepr for UniformGrid6D {
                 });
 
                 if positivity {
+                    let mut local_count = 0u64;
+                    let mut local_max_neg = 0.0f64;
+                    for &v in local.iter() {
+                        if v < 0.0 {
+                            local_count += 1;
+                            local_max_neg = local_max_neg.max(v.abs());
+                        }
+                    }
+                    if local_count > 0 {
+                        violations_count.fetch_add(local_count, Ordering::Relaxed);
+                        loop {
+                            let prev = max_neg_bits.load(Ordering::Relaxed);
+                            let prev_f = f64::from_bits(prev);
+                            if local_max_neg <= prev_f {
+                                break;
+                            }
+                            if max_neg_bits
+                                .compare_exchange_weak(
+                                    prev,
+                                    local_max_neg.to_bits(),
+                                    Ordering::Relaxed,
+                                    Ordering::Relaxed,
+                                )
+                                .is_ok()
+                            {
+                                break;
+                            }
+                        }
+                    }
                     zhang_shu_limiter(local, 0.0);
                 }
             });
@@ -679,6 +764,21 @@ impl PhaseSpaceRepr for UniformGrid6D {
         self.scratch = src;
 
         self.apply_velocity_filter();
+
+        let mass_after = self.total_mass();
+        ctx.emitter.emit(SimEvent::AdvectionComplete {
+            direction: AdvectDirection::Velocity,
+            mass_before,
+            mass_after,
+            wall_us: t0.elapsed().as_micros() as u64,
+        });
+        let vc = violations_count.load(Ordering::Relaxed);
+        if vc > 0 {
+            ctx.emitter.emit(SimEvent::PositivityViolations {
+                count: vc,
+                max_magnitude: f64::from_bits(max_neg_bits.load(Ordering::Relaxed)),
+            });
+        }
     }
 
     /// Compute velocity moments at the nearest grid cell to `position`.

@@ -95,7 +95,7 @@ impl TimeIntegrator for YoshidaSplitting {
         );
 
         // Apply hypercollision damping after kick 1
-        helpers::apply_hypercollision_if_spectral(repr, YOSHIDA_W1 * dt);
+        helpers::apply_hypercollision_if_spectral(repr, YOSHIDA_W1 * dt, ctx.emitter);
 
         // Substep 3: drift (w1+w0)·dt/2
         helpers::report_phase!(ctx, StepPhase::YoshidaDrift2, 2, 7);
@@ -126,7 +126,7 @@ impl TimeIntegrator for YoshidaSplitting {
         );
 
         // Apply hypercollision damping after kick 2
-        helpers::apply_hypercollision_if_spectral(repr, YOSHIDA_W0 * dt);
+        helpers::apply_hypercollision_if_spectral(repr, YOSHIDA_W0 * dt, ctx.emitter);
 
         // Substep 5: drift (w0+w1)·dt/2
         helpers::report_phase!(ctx, StepPhase::YoshidaDrift3, 4, 7);
@@ -157,7 +157,7 @@ impl TimeIntegrator for YoshidaSplitting {
         );
 
         // Apply hypercollision damping after kick 3
-        helpers::apply_hypercollision_if_spectral(repr, YOSHIDA_W1 * dt);
+        helpers::apply_hypercollision_if_spectral(repr, YOSHIDA_W1 * dt, ctx.emitter);
 
         // Substep 7: drift w1·dt/2
         helpers::report_phase!(ctx, StepPhase::YoshidaDrift4, 6, 7);

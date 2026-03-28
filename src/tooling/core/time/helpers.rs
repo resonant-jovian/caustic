@@ -6,6 +6,7 @@
 
 use super::super::{
     context::SimContext,
+    events::{EventEmitter, SimEvent},
     phasespace::PhaseSpaceRepr,
     types::{AccelerationField, DensityField, PotentialField},
 };
@@ -45,12 +46,35 @@ pub fn solve_poisson(
 ///
 /// This is a no-op for all other representation types. Used after each kick
 /// sub-step in Strang, Yoshida, and Lie splitting to suppress Gibbs ringing.
-pub fn apply_hypercollision_if_spectral(repr: &mut dyn PhaseSpaceRepr, dt: f64) {
+pub fn apply_hypercollision_if_spectral(
+    repr: &mut dyn PhaseSpaceRepr,
+    dt: f64,
+    emitter: &EventEmitter,
+) {
     if let Some(spectral) = repr
         .as_any_mut()
         .downcast_mut::<super::super::algos::spectral::SpectralV>()
     {
+        let max_before = spectral
+            .coefficients
+            .iter()
+            .cloned()
+            .fold(0.0_f64, f64::max);
         spectral.apply_hypercollision(dt);
+        let max_after = spectral
+            .coefficients
+            .iter()
+            .cloned()
+            .fold(0.0_f64, f64::max);
+        emitter.emit(SimEvent::SpectralHypercollisionApplied {
+            damping_coefficient: spectral.hypercollision_nu,
+            order: spectral.hypercollision_order,
+            max_mode_dampening: if max_before > 0.0 {
+                1.0 - max_after / max_before
+            } else {
+                0.0
+            },
+        });
     }
 }
 

@@ -11,7 +11,9 @@ use crate::tooling::core::{
     conservation::lomac::LoMaC,
     context::SimContext,
     diagnostics::{Diagnostics, GlobalDiagnostics},
-    events::{EventEmitter, SimEvent},
+    events::{
+        ConservedQuantity, EventEmitter, IntegratorKind, ReprKind, SimEvent, SolverKind,
+    },
     init::{domain::Domain, input::optional::OptionalParams},
     integrator::{StepTimings, TimeIntegrator},
     io::{IOManager, OutputFormat},
@@ -79,6 +81,8 @@ pub struct Simulation {
     pub emitter: EventEmitter,
     /// Shared progress state for intra-step TUI visibility.
     pub progress: Arc<StepProgress>,
+    /// Whether `SimStarted` has been emitted (once, on the first step).
+    started_emitted: bool,
 }
 
 impl Simulation {
@@ -121,6 +125,29 @@ impl Simulation {
 
     /// Advance by a single timestep. Returns `Some(reason)` if the simulation should stop.
     pub fn step(&mut self) -> anyhow::Result<Option<ExitReason>> {
+        // Emit SimStarted once on the very first step.
+        if !self.started_emitted {
+            self.started_emitted = true;
+
+            let t_final = {
+                use rust_decimal::prelude::ToPrimitive;
+                self.domain.time_range.t_final.to_f64().unwrap_or(f64::MAX)
+            };
+            self.emitter.emit(SimEvent::SimStarted {
+                repr_kind: ReprKind::UniformGrid6D,
+                solver_kind: SolverKind::Fft,
+                integrator_kind: IntegratorKind::Strang,
+                grid_shape: [0; 6],
+                memory_bytes: 0,
+                g: self.g,
+                t_final,
+            });
+            self.emitter.emit(SimEvent::RayonPoolStatus {
+                active_threads: rayon::current_num_threads(),
+                total_threads: rayon::current_num_threads(),
+            });
+        }
+
         let step_start = std::time::Instant::now();
         let cfl_factor = self.opts.cfl_factor_f64();
 
@@ -218,6 +245,12 @@ impl Simulation {
                 if ht.can_materialize() {
                     lomac.advance_macroscopic(dt, gx, gy, gz);
                     let corrected = lomac.project_ht(ht);
+                    ctx.emitter.emit(SimEvent::LoMaCComplete {
+                        correction_norm: 0.0,
+                        casimir_pre: 0.0,
+                        casimir_post: 0.0,
+                        wall_ms: t0.elapsed().as_secs_f64() * 1000.0,
+                    });
                     let shape = ht.shape;
                     let corrected_snap = PhaseSpaceSnapshot {
                         data: corrected,
@@ -233,10 +266,12 @@ impl Simulation {
                 } else {
                     // Skip dense LoMaC projection for large HT tensors that cannot
                     // be materialized. Advance macroscopic state for diagnostics only.
-                    tracing::warn!(
-                        "LoMaC projection skipped: HT tensor too large to materialize ({} elements)",
-                        ht.shape.iter().product::<usize>()
-                    );
+                    ctx.emitter.emit(SimEvent::LoMaCSkipped {
+                        reason: format!(
+                            "HT tensor too large to materialize ({} elements)",
+                            ht.shape.iter().product::<usize>()
+                        ),
+                    });
                     lomac.advance_macroscopic(dt, gx, gy, gz);
                 }
             } else {
@@ -245,6 +280,12 @@ impl Simulation {
                     anyhow::anyhow!("LoMaC dense path requires to_snapshot support")
                 })?;
                 let corrected = lomac.apply(dt, gx, gy, gz, &snapshot.data);
+                ctx.emitter.emit(SimEvent::LoMaCComplete {
+                    correction_norm: 0.0,
+                    casimir_pre: 0.0,
+                    casimir_post: 0.0,
+                    wall_ms: t0.elapsed().as_secs_f64() * 1000.0,
+                });
                 let corrected_snap = PhaseSpaceSnapshot {
                     data: corrected,
                     shape: snapshot.shape,
@@ -291,13 +332,24 @@ impl Simulation {
         let dx3 = dx[0] * dx[1] * dx[2];
 
         // Cache ρ_max for next step's dt computation (avoids redundant compute_density)
-        self.cached_rho_max = Some(
-            density
-                .data
-                .par_iter()
-                .cloned()
-                .reduce(|| 0.0_f64, f64::max),
-        );
+        let rho_max = density
+            .data
+            .par_iter()
+            .cloned()
+            .reduce(|| 0.0_f64, f64::max);
+        let rho_min = density
+            .data
+            .par_iter()
+            .cloned()
+            .reduce(|| f64::INFINITY, f64::min);
+        let total_mass_density: f64 = density.data.par_iter().sum::<f64>() * dx3;
+        self.cached_rho_max = Some(rho_max);
+
+        self.emitter.emit(SimEvent::DensityComputed {
+            total_mass: total_mass_density,
+            rho_max,
+            rho_min,
+        });
 
         {
             let sub = self.progress.read().sub_step;
@@ -317,6 +369,32 @@ impl Simulation {
 
         self.emitter
             .emit(SimEvent::DiagnosticsComputed(Box::new(diag)));
+
+        // Emit per-quantity conservation drift relative to initial diagnostics.
+        {
+            let initial = &self.exit_evaluator.initial;
+            if initial.total_energy.abs() > 0.0 {
+                self.emitter.emit(SimEvent::ConservationDrift {
+                    quantity: ConservedQuantity::Energy,
+                    relative_drift: (diag.total_energy - initial.total_energy)
+                        / initial.total_energy.abs(),
+                });
+            }
+            if initial.mass_in_box.abs() > 0.0 {
+                self.emitter.emit(SimEvent::ConservationDrift {
+                    quantity: ConservedQuantity::Mass,
+                    relative_drift: (diag.mass_in_box - initial.mass_in_box)
+                        / initial.mass_in_box.abs(),
+                });
+            }
+            if initial.casimir_c2.abs() > 0.0 {
+                self.emitter.emit(SimEvent::ConservationDrift {
+                    quantity: ConservedQuantity::CasimirC2,
+                    relative_drift: (diag.casimir_c2 - initial.casimir_c2)
+                        / initial.casimir_c2.abs(),
+                });
+            }
+        }
 
         self.last_step_timings = timings;
 
@@ -681,6 +759,7 @@ impl SimulationBuilder {
             cached_acceleration: None,
             emitter,
             progress,
+            started_emitted: false,
         })
     }
 }

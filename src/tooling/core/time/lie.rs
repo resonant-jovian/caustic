@@ -66,7 +66,7 @@ impl TimeIntegrator for LieSplitting {
         ctx.advector.kick(repr, &accel, &ctx.with_dt(dt));
 
         // Apply hypercollision damping if the representation is SpectralV
-        helpers::apply_hypercollision_if_spectral(repr, dt);
+        helpers::apply_hypercollision_if_spectral(repr, dt, ctx.emitter);
 
         // Compute end-of-step products for caller reuse
         let density = repr.compute_density();
