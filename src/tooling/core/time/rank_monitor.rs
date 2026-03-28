@@ -293,6 +293,14 @@ impl TimeIntegrator for InstrumentedStrangSplitting {
                     },
                 ));
             }
+
+            // Emit rank-adaptive tolerance update for observability.
+            let budget_saturated = diag.rank_budget_fraction > 0.99;
+            ctx.emitter.emit(SimEvent::RankAdaptiveUpdate {
+                tolerance_before: 0.0,
+                tolerance_after: 0.0,
+                budget_saturated,
+            });
         }
 
         helpers::report_phase!(ctx, StepPhase::StepComplete, 4, 5);

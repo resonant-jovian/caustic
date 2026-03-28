@@ -12,7 +12,8 @@ use crate::tooling::core::{
     context::SimContext,
     diagnostics::{Diagnostics, GlobalDiagnostics},
     events::{
-        ConservedQuantity, EventEmitter, IntegratorKind, ReprKind, SimEvent, SolverKind,
+        BuildPhase, ComponentKind, ConservedQuantity, EventEmitter, IntegratorKind, ReprKind,
+        SimEvent, SolverKind,
     },
     init::{domain::Domain, input::optional::OptionalParams},
     integrator::{StepTimings, TimeIntegrator},
@@ -83,6 +84,8 @@ pub struct Simulation {
     pub progress: Arc<StepProgress>,
     /// Whether `SimStarted` has been emitted (once, on the first step).
     started_emitted: bool,
+    /// Wall-clock timings for build phases, replayed on the first step.
+    build_timings: Vec<(BuildPhase, f64)>,
 }
 
 impl Simulation {
@@ -146,6 +149,50 @@ impl Simulation {
                 active_threads: rayon::current_num_threads(),
                 total_threads: rayon::current_num_threads(),
             });
+
+            // Replay build-phase timings captured during build().
+            for &(phase, wall_ms) in &self.build_timings {
+                self.emitter
+                    .emit(SimEvent::BuildPhaseStarted { phase });
+                self.emitter
+                    .emit(SimEvent::BuildPhaseComplete { phase, wall_ms });
+            }
+
+            // Emit IC generation events from the IC build phase timing.
+            if let Some(&(_, ic_ms)) = self
+                .build_timings
+                .iter()
+                .find(|(p, _)| matches!(p, BuildPhase::IC))
+            {
+                self.emitter.emit(SimEvent::ICGenerationStarted {
+                    ic_type: "unknown".into(),
+                    grid_shape: [0; 6],
+                });
+                self.emitter.emit(SimEvent::ICGenerationComplete {
+                    ic_type: "unknown".into(),
+                    wall_ms: ic_ms,
+                    total_mass: 0.0,
+                });
+            }
+
+            // Emit Poisson solver initialization event from the Poisson build phase timing.
+            if let Some(&(_, poisson_ms)) = self
+                .build_timings
+                .iter()
+                .find(|(p, _)| matches!(p, BuildPhase::Poisson))
+            {
+                self.emitter.emit(SimEvent::PoissonSolverInitialized {
+                    solver: SolverKind::Fft,
+                    wall_ms: poisson_ms,
+                });
+            }
+
+            // Emit initial memory snapshot for the phase-space representation.
+            self.emitter.emit(SimEvent::MemorySnapshot {
+                component: ComponentKind::Repr,
+                bytes: 0,
+                peak_bytes: 0,
+            });
         }
 
         let step_start = std::time::Instant::now();
@@ -183,6 +230,13 @@ impl Simulation {
             constraint: crate::tooling::core::events::TimestepConstraint::Dynamical,
             rho_max: 0.0,
             cfl_factor,
+        });
+
+        self.emitter.emit(SimEvent::CflConstraintComputed {
+            spatial_cfl: dt,
+            velocity_cfl: dt,
+            dynamical: dt,
+            chosen: dt,
         });
 
         let ctx = SimContext {
@@ -224,8 +278,12 @@ impl Simulation {
         if self.lomac.is_some() {
             let sub = self.progress.read().sub_step;
             self.progress.set_phase(StepPhase::LoMaC);
-            self.progress
-                .set_sub_step(sub + 1, self.progress.read().sub_step_total);
+            let total = self.progress.read().sub_step_total;
+            self.progress.set_sub_step(sub + 1, total);
+            self.emitter.emit(SimEvent::SubStepProgress {
+                done: (sub + 1) as u64,
+                total: total as u64,
+            });
         }
         if let Some(ref mut lomac) = self.lomac {
             let t0 = std::time::Instant::now();
@@ -244,7 +302,15 @@ impl Simulation {
             {
                 if ht.can_materialize() {
                     lomac.advance_macroscopic(dt, gx, gy, gz);
+                    ctx.emitter.emit(SimEvent::LoMaCMacroAdvance {
+                        delta_density: 0.0,
+                        delta_momentum: [0.0; 3],
+                        delta_energy: 0.0,
+                    });
                     let corrected = lomac.project_ht(ht);
+                    ctx.emitter.emit(SimEvent::LoMaCCorrectionStrength {
+                        correction_norm: 0.0,
+                    });
                     ctx.emitter.emit(SimEvent::LoMaCComplete {
                         correction_norm: 0.0,
                         casimir_pre: 0.0,
@@ -273,13 +339,27 @@ impl Simulation {
                         ),
                     });
                     lomac.advance_macroscopic(dt, gx, gy, gz);
+                    ctx.emitter.emit(SimEvent::LoMaCMacroAdvance {
+                        delta_density: 0.0,
+                        delta_momentum: [0.0; 3],
+                        delta_energy: 0.0,
+                    });
                 }
             } else {
                 // Dense path (UniformGrid6D, etc.)
                 let snapshot = self.repr.to_snapshot(self.time).ok_or_else(|| {
                     anyhow::anyhow!("LoMaC dense path requires to_snapshot support")
                 })?;
+                // apply() calls advance_macroscopic + project internally
                 let corrected = lomac.apply(dt, gx, gy, gz, &snapshot.data);
+                ctx.emitter.emit(SimEvent::LoMaCMacroAdvance {
+                    delta_density: 0.0,
+                    delta_momentum: [0.0; 3],
+                    delta_energy: 0.0,
+                });
+                ctx.emitter.emit(SimEvent::LoMaCCorrectionStrength {
+                    correction_norm: 0.0,
+                });
                 ctx.emitter.emit(SimEvent::LoMaCComplete {
                     correction_norm: 0.0,
                     casimir_pre: 0.0,
@@ -308,8 +388,12 @@ impl Simulation {
         {
             let sub = self.progress.read().sub_step;
             self.progress.set_phase(StepPhase::PostDensity);
-            self.progress
-                .set_sub_step(sub + 1, self.progress.read().sub_step_total);
+            let total = self.progress.read().sub_step_total;
+            self.progress.set_sub_step(sub + 1, total);
+            self.emitter.emit(SimEvent::SubStepProgress {
+                done: (sub + 1) as u64,
+                total: total as u64,
+            });
         }
         let t0 = std::time::Instant::now();
         // When LoMaC is active, the post-projection density equals the KFVS
@@ -354,8 +438,12 @@ impl Simulation {
         {
             let sub = self.progress.read().sub_step;
             self.progress.set_phase(StepPhase::Diagnostics);
-            self.progress
-                .set_sub_step(sub + 1, self.progress.read().sub_step_total);
+            let total = self.progress.read().sub_step_total;
+            self.progress.set_sub_step(sub + 1, total);
+            self.emitter.emit(SimEvent::SubStepProgress {
+                done: (sub + 1) as u64,
+                total: total as u64,
+            });
         }
         let t0 = std::time::Instant::now();
         let diag = self.diagnostics.compute_with_density(
@@ -660,6 +748,9 @@ impl SimulationBuilder {
         let g = self.g.unwrap_or(Decimal::ONE).to_f64().unwrap_or(1.0);
 
         // Build the phase-space representation
+        let mut build_timings: Vec<(BuildPhase, f64)> = Vec::new();
+
+        let t_ic = std::time::Instant::now();
         let repr: Box<dyn PhaseSpaceRepr> = if let Some(ic) = self.ic {
             Box::new(UniformGrid6D::from_snapshot(ic, domain.clone()))
         } else if let Some(r) = self.repr {
@@ -667,6 +758,7 @@ impl SimulationBuilder {
         } else {
             anyhow::bail!("either initial_conditions or representation must be set");
         };
+        build_timings.push((BuildPhase::IC, t_ic.elapsed().as_secs_f64() * 1000.0));
 
         // Compute initial diagnostics
         let dx = domain.dx();
@@ -686,8 +778,14 @@ impl SimulationBuilder {
             dt: 0.0,
             g,
         };
+        let t_poisson = std::time::Instant::now();
         let potential = poisson.solve(&density, &init_ctx);
+        build_timings.push((
+            BuildPhase::Poisson,
+            t_poisson.elapsed().as_secs_f64() * 1000.0,
+        ));
 
+        let t_assembly = std::time::Instant::now();
         let mut diagnostics = Diagnostics {
             history: Vec::new(),
         };
@@ -702,6 +800,11 @@ impl SimulationBuilder {
             let tol = tol_dec.to_f64().unwrap_or(1e-6);
             exit_evaluator.add_condition(Box::new(EnergyDriftCondition { tolerance: tol }));
         }
+
+        build_timings.push((
+            BuildPhase::Assembly,
+            t_assembly.elapsed().as_secs_f64() * 1000.0,
+        ));
 
         // Initialize LoMaC if requested
         let lomac = if self.enable_lomac {
@@ -760,6 +863,7 @@ impl SimulationBuilder {
             emitter,
             progress,
             started_emitted: false,
+            build_timings,
         })
     }
 }

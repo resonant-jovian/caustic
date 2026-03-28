@@ -280,6 +280,7 @@ impl PhaseSpaceRepr for HybridRepr {
     fn advect_x(&mut self, displacement: &DisplacementField, ctx: &SimContext) {
         let t0 = std::time::Instant::now();
         let mass_before = self.total_mass();
+        let old_sheet = self.mask.iter().filter(|&&m| !m).count() as u64;
 
         // Advect sheet particles everywhere (cheap, just x += v*dt)
         self.sheet.advect_x(displacement, ctx);
@@ -289,9 +290,16 @@ impl PhaseSpaceRepr for HybridRepr {
         self.update_interface();
 
         let mass_after = self.total_mass();
-        let sheet_cells = self.mask.iter().filter(|&&m| !m).count() as u64;
+        let new_sheet = self.mask.iter().filter(|&&m| !m).count() as u64;
         let grid_cells = self.mask.iter().filter(|&&m| m).count() as u64;
-        let total = (sheet_cells + grid_cells) as f64;
+        let total = (new_sheet + grid_cells) as f64;
+
+        // Interface update: report cell transitions
+        ctx.emitter.emit(SimEvent::HybridInterfaceUpdate {
+            cells_entering_grid: old_sheet.saturating_sub(new_sheet),
+            cells_entering_sheet: new_sheet.saturating_sub(old_sheet),
+            stream_threshold: self.stream_threshold,
+        });
 
         ctx.emitter.emit(SimEvent::AdvectionComplete {
             direction: AdvectDirection::Spatial,
@@ -300,10 +308,10 @@ impl PhaseSpaceRepr for HybridRepr {
             wall_us: t0.elapsed().as_micros() as u64,
         });
         ctx.emitter.emit(SimEvent::HybridRegionStats {
-            sheet_cells,
+            sheet_cells: new_sheet,
             grid_cells,
             sheet_volume_fraction: if total > 0.0 {
-                sheet_cells as f64 / total
+                new_sheet as f64 / total
             } else {
                 0.0
             },
@@ -314,6 +322,7 @@ impl PhaseSpaceRepr for HybridRepr {
     fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext) {
         let t0 = std::time::Instant::now();
         let mass_before = self.total_mass();
+        let old_sheet = self.mask.iter().filter(|&&m| !m).count() as u64;
 
         // Advect sheet particles everywhere (v += a*dt via trilinear interp)
         self.sheet.advect_v(acceleration, ctx);
@@ -323,9 +332,16 @@ impl PhaseSpaceRepr for HybridRepr {
         self.update_interface();
 
         let mass_after = self.total_mass();
-        let sheet_cells = self.mask.iter().filter(|&&m| !m).count() as u64;
+        let new_sheet = self.mask.iter().filter(|&&m| !m).count() as u64;
         let grid_cells = self.mask.iter().filter(|&&m| m).count() as u64;
-        let total = (sheet_cells + grid_cells) as f64;
+        let total = (new_sheet + grid_cells) as f64;
+
+        // Interface update: report cell transitions
+        ctx.emitter.emit(SimEvent::HybridInterfaceUpdate {
+            cells_entering_grid: old_sheet.saturating_sub(new_sheet),
+            cells_entering_sheet: new_sheet.saturating_sub(old_sheet),
+            stream_threshold: self.stream_threshold,
+        });
 
         ctx.emitter.emit(SimEvent::AdvectionComplete {
             direction: AdvectDirection::Velocity,
@@ -334,10 +350,10 @@ impl PhaseSpaceRepr for HybridRepr {
             wall_us: t0.elapsed().as_micros() as u64,
         });
         ctx.emitter.emit(SimEvent::HybridRegionStats {
-            sheet_cells,
+            sheet_cells: new_sheet,
             grid_cells,
             sheet_volume_fraction: if total > 0.0 {
-                sheet_cells as f64 / total
+                new_sheet as f64 / total
             } else {
                 0.0
             },

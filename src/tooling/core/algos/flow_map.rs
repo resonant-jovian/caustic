@@ -11,7 +11,7 @@ use rayon::prelude::*;
 
 use super::super::{
     context::SimContext,
-    events::{AdvectDirection, SimEvent},
+    events::{AdvectDirection, SimEvent, SimWarning},
     init::domain::{Domain, SpatialBoundType},
     phasespace::PhaseSpaceRepr,
     types::*,
@@ -553,6 +553,16 @@ impl PhaseSpaceRepr for FlowMapRepr {
             });
 
         let mass_after = self.total_mass();
+
+        // Mass imbalance warning
+        let mass_change = (mass_after - mass_before).abs() / mass_before.max(1e-30);
+        if mass_change > 1e-10 && mass_change < 0.01 {
+            ctx.emitter.emit(SimEvent::Warning(SimWarning::MassImbalance {
+                relative_change: mass_change,
+                phase: "advect_x".into(),
+            }));
+        }
+
         ctx.emitter.emit(SimEvent::AdvectionComplete {
             direction: AdvectDirection::Spatial,
             mass_before,
@@ -603,6 +613,16 @@ impl PhaseSpaceRepr for FlowMapRepr {
             });
 
         let mass_after = self.total_mass();
+
+        // Mass imbalance warning
+        let mass_change = (mass_after - mass_before).abs() / mass_before.max(1e-30);
+        if mass_change > 1e-10 && mass_change < 0.01 {
+            ctx.emitter.emit(SimEvent::Warning(SimWarning::MassImbalance {
+                relative_change: mass_change,
+                phase: "advect_v".into(),
+            }));
+        }
+
         ctx.emitter.emit(SimEvent::AdvectionComplete {
             direction: AdvectDirection::Velocity,
             mass_before,

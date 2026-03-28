@@ -30,7 +30,7 @@
 
 use super::super::{
     context::SimContext,
-    events::{AdvectDirection, SimEvent},
+    events::{AdvectDirection, SimEvent, SimWarning},
     init::domain::{Domain, SpatialBoundType, VelocityBoundType},
     phasespace::PhaseSpaceRepr,
     types::*,
@@ -593,6 +593,16 @@ impl PhaseSpaceRepr for UniformGrid6D {
         self.scratch = intermediates;
 
         let mass_after = self.total_mass();
+
+        // Mass imbalance warning
+        let mass_change_x = (mass_after - mass_before).abs() / mass_before.max(1e-30);
+        if mass_change_x > 1e-10 && mass_change_x < 0.01 {
+            ctx.emitter.emit(SimEvent::Warning(SimWarning::MassImbalance {
+                relative_change: mass_change_x,
+                phase: "advect_x".into(),
+            }));
+        }
+
         ctx.emitter.emit(SimEvent::AdvectionComplete {
             direction: AdvectDirection::Spatial,
             mass_before,
@@ -605,6 +615,9 @@ impl PhaseSpaceRepr for UniformGrid6D {
                 count: vc,
                 max_magnitude: f64::from_bits(max_neg_bits.load(Ordering::Relaxed)),
             });
+            ctx.emitter.emit(SimEvent::Warning(SimWarning::PositivityLimitActive {
+                cells_limited: vc,
+            }));
         }
     }
 
@@ -766,6 +779,16 @@ impl PhaseSpaceRepr for UniformGrid6D {
         self.apply_velocity_filter();
 
         let mass_after = self.total_mass();
+
+        // Mass imbalance warning
+        let mass_change_v = (mass_after - mass_before).abs() / mass_before.max(1e-30);
+        if mass_change_v > 1e-10 && mass_change_v < 0.01 {
+            ctx.emitter.emit(SimEvent::Warning(SimWarning::MassImbalance {
+                relative_change: mass_change_v,
+                phase: "advect_v".into(),
+            }));
+        }
+
         ctx.emitter.emit(SimEvent::AdvectionComplete {
             direction: AdvectDirection::Velocity,
             mass_before,
@@ -778,6 +801,9 @@ impl PhaseSpaceRepr for UniformGrid6D {
                 count: vc,
                 max_magnitude: f64::from_bits(max_neg_bits.load(Ordering::Relaxed)),
             });
+            ctx.emitter.emit(SimEvent::Warning(SimWarning::PositivityLimitActive {
+                cells_limited: vc,
+            }));
         }
     }
 

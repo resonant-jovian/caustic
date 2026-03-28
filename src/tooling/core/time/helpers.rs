@@ -32,13 +32,27 @@ pub fn dynamical_timestep(repr: &dyn PhaseSpaceRepr, g: f64, cfl_factor: f64) ->
 ///
 /// This is the most common 3-line sequence in time integrators. Returns all
 /// three fields so the caller can use them for diagnostics and conservation.
+/// Emits `OperationTiming` events for `compute_density` and `compute_acceleration`.
 pub fn solve_poisson(
     repr: &dyn PhaseSpaceRepr,
     ctx: &SimContext,
 ) -> (DensityField, PotentialField, AccelerationField) {
+    let t0 = std::time::Instant::now();
     let density = repr.compute_density();
+    ctx.emitter.emit(SimEvent::OperationTiming {
+        operation: "compute_density".into(),
+        wall_us: t0.elapsed().as_micros() as u64,
+    });
+
     let potential = ctx.solver.solve(&density, ctx);
+
+    let t0 = std::time::Instant::now();
     let acceleration = ctx.solver.compute_acceleration(&potential);
+    ctx.emitter.emit(SimEvent::OperationTiming {
+        operation: "compute_acceleration".into(),
+        wall_us: t0.elapsed().as_micros() as u64,
+    });
+
     (density, potential, acceleration)
 }
 

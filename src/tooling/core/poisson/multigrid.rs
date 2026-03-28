@@ -11,7 +11,7 @@ use rayon::prelude::*;
 
 use super::super::{
     context::SimContext,
-    events::{SimEvent, SolverKind},
+    events::{SimEvent, SimWarning, SolverKind},
     init::domain::{Domain, SpatialBoundType},
     solver::PoissonSolver,
     types::*,
@@ -562,6 +562,11 @@ impl PoissonSolver for Multigrid {
                 iterations: final_iter,
                 residual: final_residual,
             });
+            ctx.emitter.emit(SimEvent::Warning(SimWarning::ConvergenceStalled {
+                solver: "multigrid".into(),
+                iterations: final_iter,
+                residual: final_residual,
+            }));
         }
 
         // For periodic BC, subtract the mean (solution is unique only up to a constant)

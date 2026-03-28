@@ -102,6 +102,9 @@ pub struct HtTensor {
     pub velocity_filter: Option<VelocityFilterConfig>,
     /// Count of negative values clamped by the positivity limiter.
     positivity_violations: AtomicU64,
+    /// Count of NaN recoveries during `from_function_aca` (QR on near-zero matrices).
+    /// Reset to zero after warning emission in advect_x/advect_v.
+    nan_recovery_count: AtomicU64,
 }
 
 impl Clone for HtTensor {
@@ -116,6 +119,7 @@ impl Clone for HtTensor {
             positivity_limiter: self.positivity_limiter,
             velocity_filter: self.velocity_filter,
             positivity_violations: AtomicU64::new(0),
+            nan_recovery_count: AtomicU64::new(0),
         }
     }
 }
@@ -211,6 +215,7 @@ impl HtTensor {
             positivity_limiter: false,
             velocity_filter: None,
             positivity_violations: AtomicU64::new(0),
+            nan_recovery_count: AtomicU64::new(0),
         }
     }
 
@@ -328,6 +333,7 @@ impl HtTensor {
             positivity_limiter: false,
             velocity_filter: None,
             positivity_violations: AtomicU64::new(0),
+            nan_recovery_count: AtomicU64::new(0),
         }
     }
 
@@ -594,6 +600,7 @@ impl HtTensor {
         let mut leaf_ranks: Vec<usize> = Vec::with_capacity(6);
         // Store the complementary indices used for each leaf (for later reuse)
         let mut leaf_comp_indices: Vec<Vec<[usize; 6]>> = Vec::with_capacity(6);
+        let mut nan_recovery_count: u64 = 0;
 
         for mu in 0..6 {
             let n_mu = shape[mu];
@@ -697,6 +704,7 @@ impl HtTensor {
                     leaf = mu,
                     "from_function_aca: QR produced NaN frame, using unit frame"
                 );
+                nan_recovery_count += 1;
                 let mut unit = Mat::zeros(n_mu, 1);
                 unit[(n_mu / 2, 0)] = 1.0;
                 leaf_frames.push(unit);
@@ -1100,6 +1108,7 @@ impl HtTensor {
             positivity_limiter: false,
             velocity_filter: None,
             positivity_violations: AtomicU64::new(0),
+            nan_recovery_count: AtomicU64::new(nan_recovery_count),
         };
 
         // Post-construction HSVD truncation (SLAR §3.2): re-compress the assembled
@@ -1753,6 +1762,7 @@ impl HtTensor {
             positivity_limiter: self.positivity_limiter,
             velocity_filter: self.velocity_filter,
             positivity_violations: AtomicU64::new(0),
+            nan_recovery_count: AtomicU64::new(0),
         }
     }
 
@@ -2339,7 +2349,43 @@ impl PhaseSpaceRepr for HtTensor {
             wall_us: slar_us,
         });
 
+        // HT ACA evaluation: report achieved rank after reconstruction
+        let aca_new_ranks = new_ht.node_ranks();
+        ctx.emitter.emit(SimEvent::HtAcaEvaluation {
+            node: 0,
+            achieved_rank: aca_new_ranks.iter().max().copied().unwrap_or(0),
+            function_evaluations: 0,
+            relative_error: 0.0,
+        });
+
+        // HT frame quality after reconstruction
+        ctx.emitter.emit(SimEvent::HtFrameQuality {
+            node: 0,
+            nan_recovery_used: new_ht.nan_recovery_count.load(Ordering::Relaxed) > 0,
+            condition_number: 0.0,
+        });
+
+        // HT materialization status
+        let total_elements: usize = self.shape.iter().product();
+        let mat_bytes = total_elements * 8;
+        let fits = mat_bytes < 8 * 1024 * 1024 * 1024;
+        ctx.emitter.emit(SimEvent::HtMaterializationStatus {
+            element_count: total_elements as u64,
+            memory_bytes: mat_bytes,
+            fits_in_memory: fits,
+            materialized: false,
+        });
+
+        // Transfer NaN recovery count from reconstructed tensor
+        let nan_count = new_ht.nan_recovery_count.load(Ordering::Relaxed);
         *self = new_ht;
+
+        // Emit NaN warning if recoveries occurred during reconstruction
+        if nan_count > 0 {
+            ctx.emitter.emit(SimEvent::Warning(SimWarning::NaNDetected {
+                component: format!("HT frame ({nan_count} recoveries)"),
+            }));
+        }
 
         if self.positivity_limiter {
             let (negatives, total) = self.enforce_positivity();
@@ -2397,7 +2443,16 @@ impl PhaseSpaceRepr for HtTensor {
             });
         }
 
-        // Mass warning
+        // Mass imbalance warning (non-collapsed range: >1e-10 but <1%)
+        let mass_change = (post_mass - pre_mass).abs() / pre_mass.max(1e-30);
+        if mass_change > 1e-10 && mass_change < 0.01 {
+            ctx.emitter.emit(SimEvent::Warning(SimWarning::MassImbalance {
+                relative_change: mass_change,
+                phase: "advect_x".into(),
+            }));
+        }
+
+        // Mass collapsed warning
         let mass_ratio = post_mass / pre_mass.max(1e-30);
         if mass_ratio < 0.01 || !post_mass.is_finite() {
             ctx.emitter.emit(SimEvent::Warning(SimWarning::MassCollapsed {
@@ -2528,11 +2583,47 @@ impl PhaseSpaceRepr for HtTensor {
             wall_us: slar_us,
         });
 
+        // HT ACA evaluation: report achieved rank after reconstruction
+        let aca_new_ranks = new_ht.node_ranks();
+        ctx.emitter.emit(SimEvent::HtAcaEvaluation {
+            node: 0,
+            achieved_rank: aca_new_ranks.iter().max().copied().unwrap_or(0),
+            function_evaluations: 0,
+            relative_error: 0.0,
+        });
+
+        // HT frame quality after reconstruction
+        ctx.emitter.emit(SimEvent::HtFrameQuality {
+            node: 0,
+            nan_recovery_used: new_ht.nan_recovery_count.load(Ordering::Relaxed) > 0,
+            condition_number: 0.0,
+        });
+
+        // HT materialization status
+        let total_elements: usize = self.shape.iter().product();
+        let mat_bytes = total_elements * 8;
+        let fits = mat_bytes < 8 * 1024 * 1024 * 1024;
+        ctx.emitter.emit(SimEvent::HtMaterializationStatus {
+            element_count: total_elements as u64,
+            memory_bytes: mat_bytes,
+            fits_in_memory: fits,
+            materialized: false,
+        });
+
+        // Transfer NaN recovery count from reconstructed tensor
+        let nan_count = new_ht.nan_recovery_count.load(Ordering::Relaxed);
         let saved_filter = self.velocity_filter;
         let saved_positivity = self.positivity_limiter;
         *self = new_ht;
         self.velocity_filter = saved_filter;
         self.positivity_limiter = saved_positivity;
+
+        // Emit NaN warning if recoveries occurred during reconstruction
+        if nan_count > 0 {
+            ctx.emitter.emit(SimEvent::Warning(SimWarning::NaNDetected {
+                component: format!("HT frame ({nan_count} recoveries)"),
+            }));
+        }
 
         if self.positivity_limiter {
             let (negatives, total) = self.enforce_positivity();
@@ -2592,7 +2683,16 @@ impl PhaseSpaceRepr for HtTensor {
             });
         }
 
-        // Mass warning
+        // Mass imbalance warning (non-collapsed range: >1e-10 but <1%)
+        let mass_change = (post_mass - pre_mass).abs() / pre_mass.max(1e-30);
+        if mass_change > 1e-10 && mass_change < 0.01 {
+            ctx.emitter.emit(SimEvent::Warning(SimWarning::MassImbalance {
+                relative_change: mass_change,
+                phase: "advect_v".into(),
+            }));
+        }
+
+        // Mass collapsed warning
         let mass_ratio = post_mass / pre_mass.max(1e-30);
         if mass_ratio < 0.01 || !post_mass.is_finite() {
             ctx.emitter.emit(SimEvent::Warning(SimWarning::MassCollapsed {

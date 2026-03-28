@@ -13,7 +13,7 @@
 
 use super::super::{
     context::SimContext,
-    events::{SimEvent, SolverKind},
+    events::{FftDirection, SimEvent, SolverKind},
     init::domain::Domain,
     solver::PoissonSolver,
     types::*,
@@ -65,6 +65,12 @@ pub struct FftPoisson {
     /// Cached scratch buffer for FFT transposes. Avoids per-call allocation.
     /// Protected by Mutex for interior mutability (PoissonSolver::solve takes &self).
     scratch_cache: std::sync::Mutex<Vec<Complex<f64>>>,
+    /// Wall-clock time spent creating FFT plans (microseconds). Since the
+    /// constructor runs before an event emitter is attached, we store the
+    /// timing and emit it on the first `solve()` call.
+    plan_creation_us: u64,
+    /// Guard ensuring FftPlanStatus and ScratchBufferAllocated are emitted only once.
+    plan_emitted: std::sync::atomic::AtomicBool,
 }
 
 impl FftPoisson {
@@ -77,6 +83,8 @@ impl FftPoisson {
         ];
         let dx = domain.dx();
         let [nx, ny, nz] = shape;
+
+        let t0 = std::time::Instant::now();
 
         let mut real_planner = RealFftPlanner::<f64>::new();
         let r2c_z = real_planner.plan_fft_forward(nz);
@@ -94,6 +102,8 @@ impl FftPoisson {
             planner.plan_fft_inverse(nz),
         ];
 
+        let plan_creation_us = t0.elapsed().as_micros() as u64;
+
         Self {
             shape,
             dx,
@@ -102,6 +112,8 @@ impl FftPoisson {
             fwd,
             inv,
             scratch_cache: std::sync::Mutex::new(Vec::new()),
+            plan_creation_us,
+            plan_emitted: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -291,6 +303,23 @@ impl PoissonSolver for FftPoisson {
     /// Forward-transforms rho (R2C), divides by -k^2 in Fourier space (zeroing the DC
     /// mode to remove the mean), and inverse-transforms (C2R) to obtain the potential.
     fn solve(&self, density: &DensityField, ctx: &SimContext) -> PotentialField {
+        // Emit plan creation timing and scratch buffer allocation on the first solve.
+        if !self.plan_emitted.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            ctx.emitter.emit(SimEvent::FftPlanStatus {
+                direction: FftDirection::Forward,
+                shape: self.shape,
+                reused: false,
+                plan_wall_us: self.plan_creation_us,
+            });
+            let [nx, ny, nz] = self.shape;
+            let nz_c = nz / 2 + 1;
+            let scratch_elements = nx * ny * nz_c;
+            ctx.emitter.emit(SimEvent::ScratchBufferAllocated {
+                purpose: "fft_scratch".into(),
+                bytes: scratch_elements * std::mem::size_of::<Complex<f64>>(),
+            });
+        }
+
         let t0 = std::time::Instant::now();
         use std::f64::consts::PI;
         let [nx, ny, nz] = self.shape;

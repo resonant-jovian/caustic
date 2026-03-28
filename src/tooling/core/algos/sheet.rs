@@ -14,7 +14,7 @@ use rayon::prelude::*;
 
 use super::super::{
     context::SimContext,
-    events::{AdvectDirection, SheetAdvectKind, SimEvent},
+    events::{AdvectDirection, SheetAdvectKind, SimEvent, SimWarning},
     init::{cosmological::ZeldovichIC, domain::Domain},
     phasespace::PhaseSpaceRepr,
     types::*,
@@ -431,7 +431,36 @@ impl PhaseSpaceRepr for SheetTracker {
             max_change,
             particles_wrapped: 0,
         });
+
+        // Caustic detection after spatial advection
+        let stream_field = self.detect_caustics();
+        let max_stream = stream_field.data.iter().max().copied().unwrap_or(0);
+        let cells_with_caustics = stream_field.data.iter().filter(|&&s| s > 1).count() as u64;
+        if max_stream > 1 {
+            ctx.emitter.emit(SimEvent::SheetCausticDetected {
+                max_stream_count: max_stream,
+                cells_with_caustics,
+            });
+        }
+
+        // Sheet density deposit stats
+        ctx.emitter.emit(SimEvent::SheetDensityDeposited {
+            num_particles: self.particles.len() as u64,
+            total_mass: self.total_mass(),
+            cell_coverage: 0.0,
+        });
+
         let mass_after = self.total_mass();
+
+        // Mass imbalance warning
+        let mass_change = (mass_after - mass_before).abs() / mass_before.max(1e-30);
+        if mass_change > 1e-10 && mass_change < 0.01 {
+            ctx.emitter.emit(SimEvent::Warning(SimWarning::MassImbalance {
+                relative_change: mass_change,
+                phase: "advect_x".into(),
+            }));
+        }
+
         ctx.emitter.emit(SimEvent::AdvectionComplete {
             direction: AdvectDirection::Spatial,
             mass_before,
@@ -469,7 +498,25 @@ impl PhaseSpaceRepr for SheetTracker {
             max_change: 0.0,
             particles_wrapped: 0,
         });
+
+        // Sheet density deposit stats after velocity advection
+        ctx.emitter.emit(SimEvent::SheetDensityDeposited {
+            num_particles: self.particles.len() as u64,
+            total_mass: self.total_mass(),
+            cell_coverage: 0.0,
+        });
+
         let mass_after = self.total_mass();
+
+        // Mass imbalance warning
+        let mass_change = (mass_after - mass_before).abs() / mass_before.max(1e-30);
+        if mass_change > 1e-10 && mass_change < 0.01 {
+            ctx.emitter.emit(SimEvent::Warning(SimWarning::MassImbalance {
+                relative_change: mass_change,
+                phase: "advect_v".into(),
+            }));
+        }
+
         ctx.emitter.emit(SimEvent::AdvectionComplete {
             direction: AdvectDirection::Velocity,
             mass_before,

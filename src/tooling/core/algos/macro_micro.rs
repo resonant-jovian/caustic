@@ -14,7 +14,7 @@
 
 use super::super::{
     context::SimContext,
-    events::{AdvectDirection, SimEvent},
+    events::{AdvectDirection, SimEvent, SimWarning},
     init::domain::Domain,
     phasespace::PhaseSpaceRepr,
     types::*,
@@ -160,8 +160,34 @@ impl PhaseSpaceRepr for MacroMicroRepr {
     fn advect_x(&mut self, displacement: &DisplacementField, ctx: &SimContext) {
         let t0 = std::time::Instant::now();
         let mass_before = self.total_mass();
+        let density_before = self.density.clone();
 
         self.inner.advect_x(displacement, ctx);
+
+        // Reproject macro fields after inner advection
+        let old_velocity = self.mean_velocity.clone();
+        self.reproject_moments();
+
+        // Compute reprojection changes
+        let density_change = self
+            .density
+            .iter()
+            .zip(density_before.iter())
+            .map(|(&a, &b)| (a - b).abs())
+            .sum::<f64>();
+        let velocity_change = self
+            .mean_velocity
+            .iter()
+            .zip(old_velocity.iter())
+            .map(|(&a, &b)| (a - b).abs())
+            .sum::<f64>();
+        let neg_temp_count = self.temperature.iter().filter(|&&t| t < 0.0).count() as u32;
+
+        ctx.emitter.emit(SimEvent::MacroMicroReprojected {
+            density_change,
+            velocity_change,
+            neg_temp_count,
+        });
 
         let mass_after = self.total_mass();
         let macro_norm = self.density.par_iter().map(|&r| r * r).sum::<f64>().sqrt();
@@ -183,6 +209,15 @@ impl PhaseSpaceRepr for MacroMicroRepr {
         } else {
             0.0
         };
+
+        // Mass imbalance warning
+        let mass_change = (mass_after - mass_before).abs() / mass_before.max(1e-30);
+        if mass_change > 1e-10 && mass_change < 0.01 {
+            ctx.emitter.emit(SimEvent::Warning(SimWarning::MassImbalance {
+                relative_change: mass_change,
+                phase: "advect_x".into(),
+            }));
+        }
 
         ctx.emitter.emit(SimEvent::AdvectionComplete {
             direction: AdvectDirection::Spatial,
@@ -202,8 +237,34 @@ impl PhaseSpaceRepr for MacroMicroRepr {
     fn advect_v(&mut self, acceleration: &AccelerationField, ctx: &SimContext) {
         let t0 = std::time::Instant::now();
         let mass_before = self.total_mass();
+        let density_before = self.density.clone();
 
         self.inner.advect_v(acceleration, ctx);
+
+        // Reproject macro fields after inner advection
+        let old_velocity = self.mean_velocity.clone();
+        self.reproject_moments();
+
+        // Compute reprojection changes
+        let density_change = self
+            .density
+            .iter()
+            .zip(density_before.iter())
+            .map(|(&a, &b)| (a - b).abs())
+            .sum::<f64>();
+        let velocity_change = self
+            .mean_velocity
+            .iter()
+            .zip(old_velocity.iter())
+            .map(|(&a, &b)| (a - b).abs())
+            .sum::<f64>();
+        let neg_temp_count = self.temperature.iter().filter(|&&t| t < 0.0).count() as u32;
+
+        ctx.emitter.emit(SimEvent::MacroMicroReprojected {
+            density_change,
+            velocity_change,
+            neg_temp_count,
+        });
 
         let mass_after = self.total_mass();
         let macro_norm = self.density.par_iter().map(|&r| r * r).sum::<f64>().sqrt();
@@ -225,6 +286,15 @@ impl PhaseSpaceRepr for MacroMicroRepr {
         } else {
             0.0
         };
+
+        // Mass imbalance warning
+        let mass_change = (mass_after - mass_before).abs() / mass_before.max(1e-30);
+        if mass_change > 1e-10 && mass_change < 0.01 {
+            ctx.emitter.emit(SimEvent::Warning(SimWarning::MassImbalance {
+                relative_change: mass_change,
+                phase: "advect_v".into(),
+            }));
+        }
 
         ctx.emitter.emit(SimEvent::AdvectionComplete {
             direction: AdvectDirection::Velocity,
